@@ -1,0 +1,17 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  post: one
+  filename: MyString
+  content_type: MyString
+  file_size: 1
+  data_encrypted: MyText
+  checksum: MyString
+
+two:
+  post: two
+  filename: MyString
+  content_type: MyString
+  file_size: 1
+  data_encrypted: MyText
+  checksum: MyString

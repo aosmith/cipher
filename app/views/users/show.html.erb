@@ -1,0 +1,222 @@
+<div class="container">
+  <div class="user-profile">
+    <div class="user-header">
+      <div class="user-avatar">
+        <%= @user.username.first.upcase %>
+      </div>
+      <div class="user-details">
+        <h2><%= @user.display_name || @user.username %></h2>
+        <div class="username">@<%= @user.username %></div>
+        <div class="user-stats">
+          <div class="stat">
+            <div class="stat-number"><%= @posts.count %></div>
+            <div class="stat-label">Posts</div>
+          </div>
+          <div class="stat">
+            <div class="stat-number"><%= @peer_count %></div>
+            <div class="stat-label">Peers</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="profile-actions">
+      <%= link_to "💬 New Post", new_post_path, class: "btn btn-primary" %>
+    </div>
+
+    <div class="key-info">
+      <h3>🔐 Cryptographic Identity</h3>
+      <div class="key-display">
+        <div class="key-item">
+          <label>Public Key:</label>
+          <div class="key-value">
+            <code><%= @user.public_key %></code>
+            <button onclick="copyToClipboard('<%= @user.public_key %>')" class="btn-copy">📋</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="posts-section">
+      <h3>📝 Recent Posts</h3>
+      <% if @posts.any? %>
+        <div class="posts-list">
+          <% @posts.each do |post| %>
+            <div class="post-item">
+              <div class="post-header">
+                <span class="timestamp"><%= post.timestamp&.strftime("%b %d, %Y at %I:%M %p") %></span>
+              </div>
+              <div class="post-content">
+                <%= simple_format(post.content) if post.content %>
+                <% if post.attachments.any? %>
+                  <div class="attachments">
+                    <% post.attachments.each do |attachment| %>
+                      <div class="attachment <%= attachment.media_type %>">
+                        📎 <%= attachment.filename %> (<%= attachment.human_file_size %>)
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% else %>
+        <div class="no-posts">
+          <p>No posts yet. <%= link_to "Create your first post!", new_post_path %></p>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>
+
+<style>
+.profile-actions {
+  display: flex;
+  gap: 15px;
+  margin: 20px 0;
+  justify-content: center;
+}
+
+.key-info {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  margin: 20px 0;
+}
+
+.key-info h3 {
+  margin-top: 0;
+  color: #2d3748;
+  font-weight: 600;
+}
+
+.key-display {
+  background: rgba(248, 249, 250, 0.8);
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid rgba(222, 226, 230, 0.6);
+}
+
+.key-item {
+  margin-bottom: 15px;
+}
+
+.key-item label {
+  display: block;
+  font-weight: 600;
+  color: #4a5568;
+  margin-bottom: 5px;
+}
+
+.key-value {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.key-value code {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.85em;
+  word-break: break-all;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.btn-copy {
+  background: rgba(102, 126, 234, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  color: #667eea;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-copy:hover {
+  background: rgba(102, 126, 234, 0.2);
+}
+
+.posts-section {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  margin: 20px 0;
+}
+
+.posts-section h3 {
+  margin-top: 0;
+  color: #2d3748;
+  font-weight: 600;
+}
+
+.posts-list {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.post-item {
+  padding: 15px;
+  border: 1px solid rgba(222, 226, 230, 0.6);
+  border-radius: 8px;
+  margin-bottom: 15px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.post-item:last-child {
+  margin-bottom: 0;
+}
+
+.post-header {
+  margin-bottom: 10px;
+}
+
+.post-header .timestamp {
+  color: #6c757d;
+  font-size: 0.9em;
+}
+
+.post-content {
+  color: #2d3748;
+  line-height: 1.5;
+}
+
+.no-posts {
+  text-align: center;
+  padding: 40px;
+  color: #6c757d;
+  font-style: italic;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 2px solid #667eea;
+  color: #667eea;
+}
+
+.btn-outline:hover {
+  background: #667eea;
+  color: white;
+}
+</style>
+
+<script>
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(function() {
+    // Show temporary feedback
+    const button = event.target;
+    const original = button.textContent;
+    button.textContent = '✓';
+    setTimeout(() => {
+      button.textContent = original;
+    }, 1000);
+  });
+}
+</script>

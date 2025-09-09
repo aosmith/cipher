@@ -1,0 +1,13 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  user: one
+  content_encrypted: MyText
+  signature: MyText
+  timestamp: 2025-09-09 20:11:02
+
+two:
+  user: two
+  content_encrypted: MyText
+  signature: MyText
+  timestamp: 2025-09-09 20:11:02

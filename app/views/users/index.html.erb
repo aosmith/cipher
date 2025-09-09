@@ -1,0 +1,288 @@
+<div class="container">
+  <% if @current_user %>
+    <div class="dashboard-welcome">
+      <h2>Your Cipher Dashboard</h2>
+      <p>Manage your encrypted communications and network connections.</p>
+    </div>
+    <section class="status-section">
+      <h2>🌐 Network Status</h2>
+      <div id="connection-status" class="status-offline">
+        <span class="status-indicator">●</span> Connecting to P2P network...
+      </div>
+      <div id="peer-list" class="peer-list">
+        <h3>Connected Peers</h3>
+        <div id="connected-peers">No peers connected</div>
+      </div>
+    </section>
+
+    <section class="status-section">
+      <h2>💬 Messages</h2>
+      <button id="compose-btn" class="btn btn-secondary">📝 Compose Message</button>
+      
+      <div id="message-list" class="message-list">
+        <% if @current_user.posts.any? %>
+          <% @current_user.posts.recent.limit(10).each do |post| %>
+            <div class="message-item">
+              <div class="message-header">
+                <span class="author"><%= post.user.username %></span>
+                <span class="timestamp"><%= post.timestamp&.strftime("%b %d, %Y at %I:%M %p") %></span>
+              </div>
+              <div class="message-content">
+                <%= simple_format(post.content) if post.content %>
+                <% if post.attachments.any? %>
+                  <div class="attachments">
+                    <% post.attachments.each do |attachment| %>
+                      <div class="attachment <%= attachment.media_type %>">
+                        📎 <%= attachment.filename %> (<%= attachment.human_file_size %>)
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        <% else %>
+          <div style="text-align: center; padding: 40px; color: #6c757d; font-style: italic;">
+            <p>🌟 Welcome to your encrypted social network!</p>
+            <p>Create your first message to get started.</p>
+          </div>
+        <% end %>
+      </div>
+    </section>
+  <% else %>
+    <div class="welcome-hero">
+      <h2>Welcome to Cipher</h2>
+      <p>A decentralized, encrypted peer-to-peer social network built with Rails and WebRTC.</p>
+      
+      <div class="getting-started">
+        <%= link_to "Create Your Identity", new_user_path, class: "btn btn-primary btn-large" %>
+      </div>
+    </div>
+
+    <div class="features">
+      <div class="feature">
+        <h3>🔐 End-to-End Encryption</h3>
+        <p>All messages and media are encrypted using NaCl cryptography before transmission.</p>
+      </div>
+      
+      <div class="feature">
+        <h3>🌐 Peer-to-Peer</h3>
+        <p>Direct browser-to-browser connections using WebRTC with STUN/TURN servers.</p>
+      </div>
+      
+      <div class="feature">
+        <h3>🔑 Self-Sovereign Identity</h3>
+        <p>Each user generates their own cryptographic identity with public/private key pairs.</p>
+      </div>
+      
+      <div class="feature">
+        <h3>📱 Decentralized</h3>
+        <p>No central authority - messages sync directly between peers in the network.</p>
+      </div>
+    </div>
+
+    <!-- Token Economy Section -->
+    <section class="token-economy">
+      <div class="token-content">
+        <!-- CPH Token Hero Well -->
+        <div class="cph-hero-well">
+          <h2>💰 Cipher Token (CPH)</h2>
+          <div class="token-intro">
+            <p class="token-lead">
+              A decentralized economy that rewards privacy-respecting behavior. 
+              Earn tokens by helping secure the network, spend them to access content.
+            </p>
+          </div>
+        </div>
+        
+        <div class="token-mechanics">
+          <div class="token-section">
+            <div class="token-icon">🏠</div>
+            <div class="token-info">
+              <h3>Earn by Hosting</h3>
+              <p>Provide secure storage for encrypted files and earn CPH tokens. Your device becomes part of a distributed network that keeps data safe and accessible.</p>
+              <ul class="token-benefits">
+                <li>Earn 80% of storage fees</li>
+                <li>Passive income from your unused storage</li>
+                <li>Help strengthen network decentralization</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div class="token-section">
+            <div class="token-icon">👀</div>
+            <div class="token-info">
+              <h3>Spend for Content</h3>
+              <p>Access files and media using CPH tokens at a fair rate of 1 CPH per KB. Only pay for what you actually download—no subscriptions or hidden fees.</p>
+              <ul class="token-benefits">
+                <li>1 CPH = 1 KB of data</li>
+                <li>Pay-per-use, no monthly fees</li>
+                <li>Direct payments to content creators</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        
+        <div class="token-privacy-guarantee">
+          <div class="privacy-badge">
+            <div class="privacy-icon">🛡️</div>
+            <div class="privacy-text">
+              <h4>Privacy-First Economy</h4>
+              <p>
+                <strong>Your financial privacy is protected.</strong> Token transactions are recorded on-chain for transparency, 
+                but your file contents, viewing habits, and personal data remain completely private and encrypted.
+              </p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="token-getting-started">
+          <h3>Ready to Join the Network?</h3>
+          <p>Start earning CPH tokens by contributing to the decentralized storage network, or begin exploring content with our fair pay-per-use model.</p>
+          <div class="token-actions">
+            <%= link_to "Start Local Hosting", local_hosting_users_path, class: "btn btn-primary-token" %>
+            <%= link_to "Become a Network Host", host_dashboard_users_path, class: "btn btn-secondary-token" %>
+            <%= link_to "Connect Wallet", "#", class: "btn btn-outline-token", id: "connect-wallet-cta" %>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Mission Statement Section -->
+    <section class="mission-statement">
+      <div class="mission-content">
+        <h2>🛡️ Our Mission</h2>
+        <div class="mission-text">
+          <p class="mission-lead">
+            In a world where your digital conversations are monitored, stored, and monetized, 
+            Cipher offers a different path forward.
+          </p>
+          
+          <div class="mission-principles">
+            <div class="principle">
+              <div class="principle-icon">🚫</div>
+              <div class="principle-content">
+                <h3>No Servers, No Surveillance</h3>
+                <p>Your messages travel directly between you and your friends. No corporate servers storing your private conversations.</p>
+              </div>
+            </div>
+            
+            <div class="principle">
+              <div class="principle-icon">🔒</div>
+              <div class="principle-content">
+                <h3>No Data Harvesting</h3>
+                <p>We can't read your messages, track your behavior, or build profiles about you. Your data stays yours.</p>
+              </div>
+            </div>
+            
+            <div class="principle">
+              <div class="principle-icon">📖</div>
+              <div class="principle-content">
+                <h3>Open Source Transparency</h3>
+                <p>Every line of code is public. Audit it, fork it, improve it. Trust through transparency, not promises.</p>
+              </div>
+            </div>
+            
+            <div class="principle">
+              <div class="principle-icon">❤️</div>
+              <div class="principle-content">
+                <h3>Connect with Loved Ones</h3>
+                <p>Share moments, memories, and files with the people who matter most, knowing your privacy is protected.</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="mission-call-to-action">
+            <p class="mission-cta-text">
+              <strong>Take back control of your digital life.</strong> 
+              Join a community that believes privacy isn't a luxury—it's a fundamental right.
+            </p>
+            <div class="mission-links">
+              <a href="https://github.com/anthropics/cipher" target="_blank" class="btn btn-outline">
+                📖 View Source Code
+              </a>
+              <a href="#" class="btn btn-secondary">
+                📚 Learn More
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  <% end %>
+</div>
+
+<% if @current_user %>
+  <script type="module">
+    import CipherSignaling from '/javascripts/channels/signaling_channel.js';
+    
+    // Initialize P2P connection
+    const signaling = new CipherSignaling(<%= @current_user.id %>);
+    
+    // Update UI based on connection status
+    signaling.onConnected = function() {
+      document.getElementById('connection-status').className = 'status-online';
+      document.getElementById('connection-status').innerHTML = 
+        '<span class="status-indicator">●</span> Connected to P2P network';
+    };
+    
+    signaling.onDisconnected = function() {
+      document.getElementById('connection-status').className = 'status-offline';
+      document.getElementById('connection-status').innerHTML = 
+        '<span class="status-indicator">●</span> Disconnected from P2P network';
+    };
+  </script>
+<% else %>
+  <script type="module">
+    // Handle wallet connection from token section
+    document.addEventListener('DOMContentLoaded', () => {
+      const connectWalletBtn = document.getElementById('connect-wallet-cta');
+      
+      if (connectWalletBtn) {
+        connectWalletBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          
+          if (typeof window.cipherWallet !== 'undefined') {
+            window.cipherWallet.connectWallet().then(() => {
+              // Show success notification
+              showTokenNotification('Wallet connected successfully! You can now earn and spend CPH tokens.', 'success');
+            }).catch((error) => {
+              showTokenNotification('Failed to connect wallet: ' + error.message, 'error');
+            });
+          } else {
+            showTokenNotification('Please create an account first to connect your wallet.', 'info');
+            setTimeout(() => {
+              window.location.href = '<%= new_user_path %>';
+            }, 2000);
+          }
+        });
+      }
+    });
+    
+    function showTokenNotification(message, type = 'info') {
+      const notification = document.createElement('div');
+      notification.className = `token-notification token-notification-${type}`;
+      notification.textContent = message;
+      notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+        color: white;
+        padding: 16px 20px;
+        border-radius: 12px;
+        z-index: 10000;
+        max-width: 350px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+        font-weight: 500;
+        backdrop-filter: blur(10px);
+      `;
+      
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.remove();
+      }, 5000);
+    }
+  </script>
+<% end %>

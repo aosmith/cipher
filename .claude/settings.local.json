@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bundle exec rake:*)",
+      "Bash(bin/rails generate model:*)",
+      "Bash(bundle install:*)",
+      "Bash(bin/rails generate:*)",
+      "Bash(bin/rails:*)",
+      "Bash(pkill:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

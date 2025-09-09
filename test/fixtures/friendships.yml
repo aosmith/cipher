@@ -1,0 +1,11 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  requester: one
+  addressee: one
+  status: MyString
+
+two:
+  requester: two
+  addressee: two
+  status: MyString

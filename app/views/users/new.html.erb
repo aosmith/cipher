@@ -1,0 +1,268 @@
+<div class="container">
+  <div class="page-header">
+    <h1>🔐 Create Your Cipher Identity</h1>
+    <p>Generate your zero-knowledge cryptographic identity</p>
+  </div>
+
+  <div class="form-container">
+    <div class="form-section">
+      <%= form_with model: @user, class: "user-form" do |form| %>
+        <% if @user.errors.any? %>
+          <div class="error-messages">
+            <h3><%= pluralize(@user.errors.count, "error") %> prohibited this user from being saved:</h3>
+            <ul>
+              <% @user.errors.full_messages.each do |message| %>
+                <li><%= message %></li>
+              <% end %>
+            </ul>
+          </div>
+        <% end %>
+
+        <div class="form-group">
+          <%= form.label :username, class: "form-label" %>
+          <%= form.text_field :username, class: "form-control", 
+                               placeholder: "Enter a unique username",
+                               required: true,
+                               pattern: "[a-zA-Z0-9_]{3,20}",
+                               title: "3-20 characters, letters, numbers, and underscores only" %>
+          <small class="form-help">This will be your unique identifier on the network</small>
+        </div>
+
+        <div class="form-group">
+          <%= form.label :display_name, class: "form-label" %>
+          <%= form.text_field :display_name, class: "form-control", 
+                               placeholder: "Enter your display name (optional)" %>
+          <small class="form-help">This is how others will see your name</small>
+        </div>
+
+        <div class="form-group">
+          <%= label_tag :password, "Master Password", class: "form-label" %>
+          <%= password_field_tag :password, "", class: "form-control", 
+                                 placeholder: "Enter a strong master password",
+                                 required: true,
+                                 minlength: 8,
+                                 id: "master-password" %>
+          <small class="form-help">Your identity will be derived from this password - make it strong!</small>
+        </div>
+
+        <div class="form-group">
+          <%= label_tag :confirm_password, "Confirm Password", class: "form-label" %>
+          <%= password_field_tag :confirm_password, "", class: "form-control", 
+                                 placeholder: "Confirm your master password",
+                                 required: true,
+                                 minlength: 8,
+                                 id: "confirm-password" %>
+        </div>
+
+        <%= hidden_field_tag :public_key, "", id: "public-key-field" %>
+
+        <div class="crypto-info">
+          <h3>🔑 Zero-Knowledge Identity</h3>
+          <p>Cipher uses deterministic key derivation from your password:</p>
+          <ul>
+            <li><strong>Private Key:</strong> Derived from your username + password (never stored on server)</li>
+            <li><strong>Public Key:</strong> Generated from private key, shared for encryption</li>
+            <li><strong>Zero-Knowledge:</strong> Server never sees your private key or password</li>
+          </ul>
+          <div class="warning">
+            <strong>⚠️ Critical:</strong> Remember your password! It's the only way to access your identity. 
+            There is no password recovery - losing it means losing your Cipher identity forever.
+          </div>
+        </div>
+
+        <div id="key-generation" style="display: none;">
+          <div class="key-gen-progress">
+            <p><strong>🔐 Generating Keys...</strong></p>
+            <div class="progress-bar">
+              <div id="key-progress" class="progress-fill"></div>
+            </div>
+            <p id="key-status">Deriving private key from password...</p>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <%= form.submit "🚀 Create Zero-Knowledge Identity", class: "btn btn-primary btn-large", id: "create-identity-btn" %>
+        </div>
+      <% end %>
+    </div>
+
+    <div class="info-section">
+      <h3>What happens next?</h3>
+      <ol>
+        <li>Your cryptographic key pair is generated using NaCl</li>
+        <li>Your public key becomes your network identity</li>
+        <li>You can immediately start connecting to other peers</li>
+        <li>All your messages will be end-to-end encrypted</li>
+      </ol>
+
+      <div class="features-mini">
+        <div class="feature-mini">
+          <strong>🔐 Zero Knowledge</strong><br>
+          Even the server can't read your messages
+        </div>
+        <div class="feature-mini">
+          <strong>🌐 Decentralized</strong><br>
+          Direct peer-to-peer connections
+        </div>
+        <div class="feature-mini">
+          <strong>🚀 No Registration</strong><br>
+          No email, phone, or personal info required
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import CipherCrypto from 'crypto_utils';
+
+document.addEventListener('DOMContentLoaded', function() {
+  const form = document.querySelector('.user-form');
+  const submitButton = document.getElementById('create-identity-btn');
+  const keyGenSection = document.getElementById('key-generation');
+  const keyProgress = document.getElementById('key-progress');
+  const keyStatus = document.getElementById('key-status');
+  const publicKeyField = document.getElementById('public-key-field');
+  const usernameField = document.getElementById('user_username');
+  const passwordField = document.getElementById('master-password');
+  const confirmPasswordField = document.getElementById('confirm-password');
+  
+  const crypto = new CipherCrypto();
+  let keysGenerated = false;
+  
+  // Validate password match in real-time
+  function validatePasswords() {
+    const password = passwordField.value;
+    const confirmPassword = confirmPasswordField.value;
+    
+    if (password !== confirmPassword && confirmPassword.length > 0) {
+      confirmPasswordField.setCustomValidity('Passwords do not match');
+    } else {
+      confirmPasswordField.setCustomValidity('');
+    }
+  }
+  
+  passwordField.addEventListener('input', validatePasswords);
+  confirmPasswordField.addEventListener('input', validatePasswords);
+  
+  async function generateKeys(username, password) {
+    try {
+      keyGenSection.style.display = 'block';
+      submitButton.disabled = true;
+      
+      // Step 1: Derive private key
+      keyStatus.textContent = 'Deriving private key from password...';
+      keyProgress.style.width = '25%';
+      
+      await new Promise(resolve => setTimeout(resolve, 500)); // Visual delay
+      
+      const keyPair = await crypto.createKeyPair(username, password);
+      
+      // Step 2: Generate public key
+      keyStatus.textContent = 'Generating public key...';
+      keyProgress.style.width = '50%';
+      
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Step 3: Store keys locally
+      keyStatus.textContent = 'Storing keys securely in browser...';
+      keyProgress.style.width = '75%';
+      
+      await crypto.storePrivateKey(username, keyPair.privateKey, password);
+      
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Step 4: Complete
+      keyStatus.textContent = 'Keys generated successfully!';
+      keyProgress.style.width = '100%';
+      
+      // Set the public key in the hidden field
+      publicKeyField.value = keyPair.publicKeyBase64;
+      keysGenerated = true;
+      
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Hide key generation and submit form
+      keyGenSection.style.display = 'none';
+      form.submit();
+      
+    } catch (error) {
+      console.error('Key generation failed:', error);
+      keyStatus.textContent = 'Key generation failed. Please try again.';
+      submitButton.disabled = false;
+      
+      setTimeout(() => {
+        keyGenSection.style.display = 'none';
+      }, 3000);
+    }
+  }
+  
+  // Intercept form submission for client-side key generation
+  form.addEventListener('submit', function(event) {
+    event.preventDefault();
+    
+    if (keysGenerated) {
+      // Keys already generated, allow form to submit normally
+      event.target.submit();
+      return;
+    }
+    
+    const username = usernameField.value.trim();
+    const password = passwordField.value;
+    const confirmPassword = confirmPasswordField.value;
+    
+    // Validation
+    if (!username || !password || !confirmPassword) {
+      alert('Please fill in all required fields');
+      return;
+    }
+    
+    if (password !== confirmPassword) {
+      alert('Passwords do not match');
+      return;
+    }
+    
+    if (password.length < 8) {
+      alert('Password must be at least 8 characters long');
+      return;
+    }
+    
+    // Generate keys and submit form
+    generateKeys(username, password);
+  });
+});
+</script>
+
+<style>
+.key-gen-progress {
+  text-align: center;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  margin-top: 15px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 24px;
+  background: #e0e0e0;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 15px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  border-radius: 12px;
+  transition: width 0.5s ease;
+  width: 0%;
+}
+
+#key-status {
+  color: #2d3748;
+  font-weight: 500;
+  margin: 10px 0 0 0;
+}
+</style>
+
