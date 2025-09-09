@@ -44,14 +44,55 @@ class Web3Utils {
 
   // Check if MetaMask is available
   isMetaMaskAvailable() {
-    return typeof window.ethereum !== 'undefined';
+    return typeof window.ethereum !== 'undefined' && window.ethereum.isMetaMask;
+  }
+
+  // Wait for MetaMask to be available
+  async waitForMetaMask(timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      if (this.isMetaMaskAvailable()) {
+        resolve(true);
+        return;
+      }
+
+      // Listen for the ethereum#initialized event
+      const handleEthereumInitialized = () => {
+        if (this.isMetaMaskAvailable()) {
+          window.removeEventListener('ethereum#initialized', handleEthereumInitialized);
+          resolve(true);
+        }
+      };
+
+      if (window.ethereum) {
+        window.addEventListener('ethereum#initialized', handleEthereumInitialized, {
+          once: true,
+        });
+      }
+
+      const checkInterval = 100;
+      let elapsed = 0;
+      
+      const interval = setInterval(() => {
+        if (this.isMetaMaskAvailable()) {
+          clearInterval(interval);
+          window.removeEventListener('ethereum#initialized', handleEthereumInitialized);
+          resolve(true);
+        } else {
+          elapsed += checkInterval;
+          if (elapsed >= timeout) {
+            clearInterval(interval);
+            window.removeEventListener('ethereum#initialized', handleEthereumInitialized);
+            reject(new Error('MetaMask not found. Please install MetaMask to use Cipher tokens.'));
+          }
+        }
+      }, checkInterval);
+    });
   }
 
   // Connect to wallet
   async connectWallet() {
-    if (!this.isMetaMaskAvailable()) {
-      throw new Error('MetaMask not found. Please install MetaMask to use Cipher tokens.');
-    }
+    // Wait for MetaMask to be available
+    await this.waitForMetaMask();
 
     try {
       // Request account access
