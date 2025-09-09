@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cipher - End-to-End Encrypted P2P Social Network</title>
+    <meta name="description" content="A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails. Share posts, images, and media with complete privacy.">
+    <meta name="keywords" content="encryption, p2p, social network, privacy, zero-knowledge, rails">
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://your-username.github.io/cipher/">
+    <meta property="og:title" content="Cipher - End-to-End Encrypted P2P Social Network">
+    <meta property="og:description" content="A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails.">
+    
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://your-username.github.io/cipher/">
+    <meta property="twitter:title" content="Cipher - End-to-End Encrypted P2P Social Network">
+    <meta property="twitter:description" content="A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails.">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="nav-brand">
+                <h2>🔐 Cipher</h2>
+            </div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#demo">Demo</a>
+                <a href="#setup">Setup</a>
+                <a href="#github" class="btn-secondary">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h1 class="hero-title">
+                    End-to-End Encrypted<br>
+                    <span class="gradient-text">P2P Social Network</span>
+                </h1>
+                <p class="hero-description">
+                    A zero-knowledge social platform where your data stays private. 
+                    Share posts, images, and media with complete end-to-end encryption 
+                    and peer-to-peer networking.
+                </p>
+                <div class="hero-buttons">
+                    <a href="#setup" class="btn-primary">Get Started</a>
+                    <a href="#demo" class="btn-outline">View Demo</a>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="encryption-visual">
+                    <div class="node node-1">🔐</div>
+                    <div class="node node-2">👤</div>
+                    <div class="node node-3">🔒</div>
+                    <div class="node node-4">📱</div>
+                    <div class="connection"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="features">
+        <div class="container">
+            <h2 class="section-title">🛡️ Privacy-First Features</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🔐</div>
+                    <h3>End-to-End Encryption</h3>
+                    <p>All posts, images, and media are encrypted client-side using ChaCha20-Poly1305. Your private keys never leave your device.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🌐</div>
+                    <h3>Peer-to-Peer Network</h3>
+                    <p>Direct connections between users via WebRTC. No central server can access your content or metadata.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🖼️</div>
+                    <h3>Encrypted Media Sharing</h3>
+                    <p>Share images, videos, and files with automatic client-side encryption and decryption.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Zero-Knowledge Architecture</h3>
+                    <p>The server never sees your plaintext data. Everything is encrypted before leaving your browser.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔑</div>
+                    <h3>Public Key Cryptography</h3>
+                    <p>Uses NaCl (TweetNaCl) for secure key generation, message encryption, and digital signatures.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🚀</div>
+                    <h3>Modern Rails Stack</h3>
+                    <p>Built with Rails 8, Hotwire (Turbo + Stimulus), and modern JavaScript for a responsive experience.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Technology Stack -->
+    <section class="tech-stack">
+        <div class="container">
+            <h2 class="section-title">⚙️ Technology Stack</h2>
+            <div class="tech-grid">
+                <div class="tech-category">
+                    <h4>Backend</h4>
+                    <div class="tech-items">
+                        <span class="tech-item">Ruby on Rails 8</span>
+                        <span class="tech-item">SQLite</span>
+                        <span class="tech-item">RbNaCl</span>
+                        <span class="tech-item">Solid Queue</span>
+                    </div>
+                </div>
+                <div class="tech-category">
+                    <h4>Frontend</h4>
+                    <div class="tech-items">
+                        <span class="tech-item">Hotwire (Turbo + Stimulus)</span>
+                        <span class="tech-item">TweetNaCl</span>
+                        <span class="tech-item">WebRTC</span>
+                        <span class="tech-item">Modern CSS</span>
+                    </div>
+                </div>
+                <div class="tech-category">
+                    <h4>Cryptography</h4>
+                    <div class="tech-items">
+                        <span class="tech-item">ChaCha20-Poly1305</span>
+                        <span class="tech-item">Ed25519 Signatures</span>
+                        <span class="tech-item">X25519 Key Exchange</span>
+                        <span class="tech-item">Client-side Encryption</span>
+                    </div>
+                </div>
+                <div class="tech-category">
+                    <h4>Deployment</h4>
+                    <div class="tech-items">
+                        <span class="tech-item">Kamal</span>
+                        <span class="tech-item">Docker</span>
+                        <span class="tech-item">Puma + Thruster</span>
+                        <span class="tech-item">SSL/TLS</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section id="demo" class="demo">
+        <div class="container">
+            <h2 class="section-title">📱 See It In Action</h2>
+            <div class="demo-content">
+                <div class="demo-description">
+                    <h3>Key Features Demonstrated</h3>
+                    <ul class="demo-features">
+                        <li>✅ User registration with key generation</li>
+                        <li>✅ Encrypted post creation and sharing</li>
+                        <li>✅ Client-side image encryption/decryption</li>
+                        <li>✅ P2P connection establishment</li>
+                        <li>✅ Zero-knowledge data handling</li>
+                    </ul>
+                    <p>The demo shows how users can create encrypted posts and share media without the server ever seeing the plaintext content.</p>
+                </div>
+                <div class="demo-placeholder">
+                    <div class="demo-screen">
+                        <div class="demo-header">🔐 Cipher Demo</div>
+                        <div class="demo-body">
+                            <div class="demo-post">
+                                <div class="demo-user">👤 Alice</div>
+                                <div class="demo-content">🔓 Decrypting post...</div>
+                                <div class="demo-image">🖼️ [Encrypted Image]</div>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="demo-note">
+                        <em>Screenshots and live demo coming soon!</em><br>
+                        <a href="#setup">Try it yourself</a> with the setup instructions below.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Setup Section -->
+    <section id="setup" class="setup">
+        <div class="container">
+            <h2 class="section-title">🚀 Quick Setup</h2>
+            <div class="setup-grid">
+                <div class="setup-card">
+                    <h3>1. Clone Repository</h3>
+                    <div class="code-block">
+                        <code>git clone https://github.com/your-username/cipher.git<br>cd cipher</code>
+                        <button class="copy-btn" onclick="copyToClipboard('git clone https://github.com/your-username/cipher.git\ncd cipher')">📋</button>
+                    </div>
+                </div>
+                <div class="setup-card">
+                    <h3>2. Install Dependencies</h3>
+                    <div class="code-block">
+                        <code>bundle install</code>
+                        <button class="copy-btn" onclick="copyToClipboard('bundle install')">📋</button>
+                    </div>
+                </div>
+                <div class="setup-card">
+                    <h3>3. Setup Database</h3>
+                    <div class="code-block">
+                        <code>bin/rails db:prepare</code>
+                        <button class="copy-btn" onclick="copyToClipboard('bin/rails db:prepare')">📋</button>
+                    </div>
+                </div>
+                <div class="setup-card">
+                    <h3>4. Start Server</h3>
+                    <div class="code-block">
+                        <code>bin/rails server</code>
+                        <button class="copy-btn" onclick="copyToClipboard('bin/rails server')">📋</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="requirements">
+                <h3>Requirements</h3>
+                <div class="requirements-grid">
+                    <div class="requirement">
+                        <strong>Ruby:</strong> 3.3+
+                    </div>
+                    <div class="requirement">
+                        <strong>Rails:</strong> 8.0+
+                    </div>
+                    <div class="requirement">
+                        <strong>Node.js:</strong> 18+ (for asset compilation)
+                    </div>
+                    <div class="requirement">
+                        <strong>Browser:</strong> Modern browser with WebRTC support
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3>🔐 Cipher</h3>
+                    <p>Privacy-first social networking</p>
+                </div>
+                <div class="footer-links">
+                    <a href="https://github.com/your-username/cipher" target="_blank">GitHub</a>
+                    <a href="https://github.com/your-username/cipher/issues" target="_blank">Issues</a>
+                    <a href="https://github.com/your-username/cipher/blob/main/LICENSE" target="_blank">License</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Cipher. Open source project built with ❤️ and 🔐</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

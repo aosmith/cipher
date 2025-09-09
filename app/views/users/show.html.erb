@@ -44,16 +44,59 @@
           <% @posts.each do |post| %>
             <div class="post-item">
               <div class="post-header">
-                <span class="timestamp"><%= post.timestamp&.strftime("%b %d, %Y at %I:%M %p") %></span>
+                <div class="post-meta">
+                  <span class="timestamp"><%= post.timestamp&.strftime("%b %d, %Y at %I:%M %p") %></span>
+                </div>
+                <div class="post-actions">
+                  <%= link_to "🗑️", post_path(post), method: :delete, 
+                      class: "btn-delete", 
+                      title: "Delete post",
+                      data: { 
+                        confirm: "Are you sure you want to delete this post? This action cannot be undone.",
+                        turbo_method: :delete
+                      } %>
+                </div>
               </div>
               <div class="post-content">
                 <%= simple_format(post.content) if post.content %>
                 <% if post.attachments.any? %>
                   <div class="attachments">
                     <% post.attachments.each do |attachment| %>
-                      <div class="attachment <%= attachment.media_type %>">
-                        📎 <%= attachment.filename %> (<%= attachment.human_file_size %>)
-                      </div>
+                      <% if attachment.is_image? %>
+                        <div class="attachment-preview image-preview">
+                          <div class="encrypted-image" 
+                               data-attachment-url="<%= post_attachment_path(post, attachment) %>"
+                               data-filename="<%= attachment.filename %>"
+                               data-filesize="<%= attachment.human_file_size %>">
+                            <div class="loading-placeholder">
+                              <span class="loading-icon">🔓</span>
+                              <span class="loading-text">Decrypting image...</span>
+                            </div>
+                            <div class="image-overlay" style="display: none;">
+                              <span class="filename"><%= attachment.filename %></span>
+                              <span class="filesize"><%= attachment.human_file_size %></span>
+                            </div>
+                          </div>
+                        </div>
+                      <% elsif attachment.is_video? %>
+                        <div class="attachment-preview video-preview">
+                          <%= link_to post_attachment_path(post, attachment), target: '_blank', class: 'video-link' do %>
+                            <div class="video-thumbnail">
+                              🎥
+                              <div class="video-info">
+                                <span class="filename"><%= attachment.filename %></span>
+                                <span class="filesize"><%= attachment.human_file_size %></span>
+                              </div>
+                            </div>
+                          <% end %>
+                        </div>
+                      <% else %>
+                        <div class="attachment file-attachment">
+                          <%= link_to post_attachment_path(post, attachment), target: '_blank', class: 'file-link' do %>
+                            📎 <%= attachment.filename %> (<%= attachment.human_file_size %>)
+                          <% end %>
+                        </div>
+                      <% end %>
                     <% end %>
                   </div>
                 <% end %>
@@ -204,6 +247,42 @@
 .btn-outline:hover {
   background: #667eea;
   color: white;
+}
+
+/* Post header layout */
+.post-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.post-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.post-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-delete {
+  background: transparent;
+  border: none;
+  color: #dc3545;
+  text-decoration: none;
+  font-size: 1.1em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-delete:hover {
+  background-color: rgba(220, 53, 69, 0.1);
+  text-decoration: none;
 }
 </style>
 

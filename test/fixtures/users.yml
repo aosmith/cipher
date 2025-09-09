@@ -1,13 +1,11 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
 one:
-  public_key: MyText
-  private_key_encrypted: MyText
-  username: MyString
-  display_name: MyString
+  public_key: test_public_key_one
+  username: user_one
+  display_name: User One
 
 two:
-  public_key: MyText
-  private_key_encrypted: MyText
-  username: MyString
-  display_name: MyString
+  public_key: test_public_key_two
+  username: user_two
+  display_name: User Two

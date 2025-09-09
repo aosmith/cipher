@@ -161,6 +161,38 @@
   font-size: 0.9em;
 }
 
+/* Key Generation Progress */
+.key-gen-progress {
+  text-align: center;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  margin-top: 15px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 24px;
+  background: #e0e0e0;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 15px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  border-radius: 12px;
+  transition: width 0.5s ease;
+  width: 0%;
+}
+
+#key-status {
+  color: #2d3748;
+  font-weight: 500;
+  margin: 10px 0 0 0;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .form-container {

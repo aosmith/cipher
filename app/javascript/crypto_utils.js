@@ -278,8 +278,27 @@ class CipherCrypto {
   }
 }
 
+// Create a global instance for convenience
+const cipherCrypto = new CipherCrypto();
+
 // Export for ES6 modules
 export default CipherCrypto;
+
+// Named exports for individual functions (used by other modules)
+export const encryptMessage = (message, senderPrivateKey, recipientPublicKey) => 
+  cipherCrypto.encryptMessage(message, senderPrivateKey, recipientPublicKey);
+
+export const decryptMessage = (encryptedMessage, recipientPrivateKey, senderPublicKey) => 
+  cipherCrypto.decryptMessage(encryptedMessage, recipientPrivateKey, senderPublicKey);
+
+export const generateKeyPair = (username, password) => 
+  cipherCrypto.createKeyPair(username, password);
+
+export const signMessage = (message, privateKey) => 
+  cipherCrypto.signMessage(message, privateKey);
+
+export const verifySignature = (message, signature, publicKey) => 
+  cipherCrypto.verifySignature(message, signature, publicKey);
 
 // Also make available globally for inline scripts
 window.CipherCrypto = CipherCrypto;

@@ -6,7 +6,15 @@
       "Bash(bundle install:*)",
       "Bash(bin/rails generate:*)",
       "Bash(bin/rails:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(sqlite3:*)",
+      "Bash(killall:*)",
+      "Bash(chmod:*)",
+      "Bash(bin/reload:*)",
+      "Bash(kill:*)",
+      "Bash(bin/rubocop:*)",
+      "Bash(curl:*)",
+      "Bash(open http://localhost:3000)"
     ],
     "deny": [],
     "ask": []

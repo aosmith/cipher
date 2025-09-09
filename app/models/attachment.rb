@@ -13,21 +13,25 @@ class Attachment < ApplicationRecord
   validates :data_encrypted, presence: true
   validates :checksum, presence: true
 
-  before_save :generate_checksum
+  before_validation :generate_checksum
   after_create :create_attachment_shares
   
   # Blockchain-related attributes
   attr_accessor :blockchain_file_hash, :blockchain_upload_cost, :blockchain_transaction_hash
 
   def encrypt_data(binary_data, shared_user_public_keys = [])
-    # Use ChaCha20-Poly1305 for large file encryption (stream cipher)
+    # Use ChaCha20-Poly1305 for large file encryption with SimpleBox
     key = RbNaCl::Random.random_bytes(RbNaCl::SecretBox.key_bytes)
-    box = RbNaCl::SecretBox.new(key)
     
-    encrypted_data = box.encrypt(binary_data)
+    # Use the simple_box interface which handles nonce automatically
+    encrypted_data = RbNaCl::SimpleBox.from_secret_key(key).encrypt(binary_data)
     
-    # Store only the encrypted data, not the keys
+    # Store the encrypted data (nonce is included in the output)
     self.data_encrypted = Base64.encode64(encrypted_data)
+    
+    # For development: store the key in base64 for the owner
+    # In production, this key would be encrypted with the user's public key
+    self.dev_owner_key = Base64.encode64(key)
     
     # Always include the owner
     all_public_keys = [post.user.public_key] + shared_user_public_keys
@@ -47,6 +51,7 @@ class Attachment < ApplicationRecord
     
     # This needs to be handled client-side since server doesn't have private keys
     # Return the encrypted key so client can decrypt it
+    # Note: data_encrypted contains nonce + encrypted_data concatenated
     {
       encrypted_key: encrypted_key,
       encrypted_data: data_encrypted

@@ -1,5 +1,5 @@
 import consumer from "channels/consumer"
-import WebRTCManager from "../webrtc_manager"
+import WebRTCManager from "webrtc_manager"
 
 class CipherSignaling {
   constructor(userId) {

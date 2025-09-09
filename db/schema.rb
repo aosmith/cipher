@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2025_09_09_143233) do
+ActiveRecord::Schema[8.0].define(version: 2025_09_09_180240) do
   create_table "attachment_shares", force: :cascade do |t|
     t.integer "attachment_id", null: false
     t.integer "user_id", null: false
@@ -31,6 +31,7 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_09_143233) do
     t.string "checksum"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.text "dev_owner_key"
     t.index ["post_id"], name: "index_attachments_on_post_id"
   end
 

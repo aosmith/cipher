@@ -17,7 +17,10 @@ This is a Rails 8.0.2 application called "Cipher" with minimal features currentl
 - `bin/dev` - Start development server (equivalent to `bin/rails server`)
 - `bin/rails server` - Start Rails server directly
 
-**Server Restart**: When making changes to configuration files, routes, or other files that require a server restart to show changes, you need to stop the current server (Ctrl+C) and start it again with `bin/rails server`.
+**Server Reloading**: 
+- Rails automatically reloads most code changes in development mode
+- For configuration, routes, or initializer changes that require restart: `bin/reload`
+- The reload command triggers a graceful restart without stopping the server process
 
 ### Testing
 - `bin/rails test` - Run all tests

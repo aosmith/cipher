@@ -10,7 +10,7 @@ Rails.application.routes.draw do
       get :friends
     end
   end
-  resources :posts, only: [:index, :show, :create, :new] do
+  resources :posts do
     resources :attachments, only: [:show, :create]
   end
   

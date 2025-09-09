@@ -89,15 +89,6 @@
             </div>
             
             <div class="footer-section">
-              <h4>Technology</h4>
-              <div class="footer-links">
-                <a href="https://nacl.cr.yp.to/" target="_blank">NaCl Cryptography</a>
-                <a href="https://webrtc.org/" target="_blank">WebRTC</a>
-                <a href="https://rubyonrails.org/" target="_blank">Ruby on Rails</a>
-              </div>
-            </div>
-            
-            <div class="footer-section">
               <h4>Community</h4>
               <div class="footer-links">
                 <%= link_to "GitHub", "#" %>
@@ -121,18 +112,16 @@
     </div>
 
     <script type="module">
-      import CipherToken from 'cipher_token';
-      import Web3Utils from 'web3_utils';
-      import BlockchainFileManager from 'blockchain_integration';
-      import GroupEncryption from 'group_encryption';
-      import FriendSelector from 'friend_selector';
+      // Note: Temporarily removing imports to fix 404 errors
+      // These modules will be imported when actually needed
 
       // Global wallet and token management
       class CipherWalletManager {
         constructor() {
-          this.web3 = new Web3Utils();
-          this.token = new CipherToken();
+          this.web3 = null; // Will be initialized when Web3Utils is loaded
+          this.token = null; // Will be initialized when CipherToken is loaded
           this.isInitialized = false;
+          this.modulesLoaded = false;
           
           // Contract addresses for Polygon Mumbai testnet
           this.contractAddresses = {
@@ -141,11 +130,39 @@
           };
           
           this.setupEventListeners();
-          this.checkExistingConnection();
+          this.loadModules().then(() => {
+            this.checkExistingConnection();
+          });
+        }
+
+        async loadModules() {
+          try {
+            // Dynamically import the required modules
+            const [Web3UtilsModule, CipherTokenModule] = await Promise.all([
+              import('web3_utils'),
+              import('cipher_token')
+            ]);
+            
+            // Initialize Web3Utils first
+            this.web3 = new Web3UtilsModule.default();
+            
+            // Initialize CipherToken and pass the Web3Utils instance to avoid conflicts
+            this.token = new CipherTokenModule.default();
+            // If CipherToken needs the web3 instance, we'll inject it
+            if (this.token.setWeb3Utils) {
+              this.token.setWeb3Utils(this.web3);
+            }
+            
+            this.modulesLoaded = true;
+            console.log('Wallet modules loaded successfully');
+          } catch (error) {
+            console.error('Failed to load wallet modules:', error);
+            this.showNotification('Failed to load wallet modules. Some features may not work.', 'warning');
+          }
         }
 
         async checkExistingConnection() {
-          if (this.web3.isMetaMaskAvailable() && window.ethereum.selectedAddress) {
+          if (this.web3 && this.web3.isMetaMaskAvailable && this.web3.isMetaMaskAvailable() && window.ethereum?.selectedAddress) {
             try {
               await this.web3.connectWallet();
               this.updateWalletUI(true);
@@ -171,6 +188,19 @@
             const connectBtn = document.getElementById('connect-wallet-btn');
             connectBtn.disabled = true;
             connectBtn.textContent = 'Connecting...';
+
+            // Wait for modules to load if they haven't already
+            if (!this.modulesLoaded) {
+              this.showNotification('Loading wallet modules...', 'info');
+              await this.loadModules();
+            }
+
+            if (!this.web3) {
+              this.showNotification('Wallet functionality not available', 'error');
+              connectBtn.disabled = false;
+              connectBtn.textContent = 'Connect Wallet';
+              return;
+            }
 
             await this.web3.connectWallet();
             this.updateWalletUI(true);
@@ -209,16 +239,18 @@
           const walletConnected = document.getElementById('wallet-connected');
           const connectBtn = document.getElementById('connect-wallet-btn');
 
-          if (connected && this.web3.isConnected) {
+          if (connected && this.web3 && this.web3.isConnected) {
             walletStatus.style.display = 'none';
             walletConnected.style.display = 'block';
 
             // Update address display
-            const address = this.web3.getAccount();
-            const addressElement = document.getElementById('wallet-address');
-            if (addressElement && address) {
-              addressElement.textContent = address.slice(0, 6) + '...' + address.slice(-4);
-              addressElement.title = address;
+            if (this.web3 && this.web3.getAccount) {
+              const address = this.web3.getAccount();
+              const addressElement = document.getElementById('wallet-address');
+              if (addressElement && address) {
+                addressElement.textContent = address.slice(0, 6) + '...' + address.slice(-4);
+                addressElement.title = address;
+              }
             }
           } else {
             walletStatus.style.display = 'block';
@@ -277,7 +309,7 @@
             position: fixed;
             top: 20px;
             right: 20px;
-            background: ${type === 'success' ? '#48bb78' : type === 'error' ? '#f56565' : '#4299e1'};
+            background: ${type === 'success' ? '#48bb78' : type === 'error' ? '#f56565' : type === 'warning' ? '#ed8936' : '#4299e1'};
             color: white;
             padding: 12px 16px;
             border-radius: 8px;

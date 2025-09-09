@@ -423,13 +423,13 @@
 }
 
 .token-privacy-guarantee {
-  background: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(15px);
   border-radius: 16px;
-  padding: 25px;
+  padding: 30px;
   margin-bottom: 40px;
-  border: 2px solid rgba(16, 185, 129, 0.2);
-  box-shadow: 0 8px 32px rgba(16, 185, 129, 0.1);
+  border: 2px solid rgba(59, 130, 246, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
 }
 
 .privacy-badge {
@@ -446,22 +446,22 @@
 }
 
 .privacy-text h4 {
-  color: #0f172a;
-  font-size: 1.2em;
-  margin: 0 0 10px 0;
+  color: #1e293b;
+  font-size: 1.3em;
+  margin: 0 0 12px 0;
   font-weight: 600;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .privacy-text p {
-  color: #334155;
-  line-height: 1.6;
+  color: #475569;
+  line-height: 1.7;
   margin: 0;
-  font-size: 0.95em;
+  font-size: 1em;
 }
 
 .privacy-text strong {
-  color: #10b981;
+  color: #1e293b;
   font-weight: 600;
 }
 
