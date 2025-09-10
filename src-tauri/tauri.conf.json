@@ -1,12 +1,12 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cipher",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "identifier": "com.cipher.social",
   "build": {
     "beforeDevCommand": "rails server -p 3001",
     "beforeBuildCommand": "rails assets:precompile",
-    "frontendDist": "http://localhost:3001",
+    "frontendDist": "../public",
     "devUrl": "http://localhost:3001"
   },
   "app": {
