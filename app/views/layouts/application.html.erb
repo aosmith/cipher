@@ -676,12 +676,20 @@
         if (platform === 'android' || platform === 'ios') {
           // Mobile platform detected
           appWrapper.classList.remove('desktop-app');
+          appWrapper.classList.remove('web-app');
           appWrapper.classList.add('mobile-app');
           setupMobileMenu();
-        } else {
-          // Desktop platform (windows, macos, linux)
+        } else if (platform === 'desktop-native') {
+          // Native desktop app (Tauri)
           appWrapper.classList.add('desktop-app');
           appWrapper.classList.remove('mobile-app');
+          appWrapper.classList.remove('web-app');
+        } else {
+          // Web browser
+          appWrapper.classList.add('web-app');
+          appWrapper.classList.remove('desktop-app');
+          appWrapper.classList.remove('mobile-app');
+          setupMobileMenu(); // Still need mobile menu for responsive behavior
         }
       }
 
@@ -692,9 +700,10 @@
           setupPlatformUI(platform);
         });
       } else {
-        // Web browser - use mobile layout on mobile devices
-        const isMobile = window.innerWidth <= 768 || /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-        setupPlatformUI(isMobile ? 'mobile' : 'desktop');
+        // Web browser - always use web layout, CSS handles responsive behavior
+        // Don't force mobile layout based on window size - let CSS media queries handle it
+        const isMobileDevice = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        setupPlatformUI('web'); // Web browser layout
       }
 
       // Initialize mobile menu regardless (will be hidden on desktop)

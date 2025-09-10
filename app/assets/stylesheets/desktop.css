@@ -74,6 +74,35 @@
   display: none;
 }
 
+/* Show web header by default (for web browsers) */
+.app-header {
+  display: block;
+}
+
+/* Web app specific styles */
+.web-app .app-header {
+  display: block !important; /* Override desktop hiding */
+}
+
+.web-app .mobile-header-container {
+  display: none;
+}
+
+.web-app .web-only {
+  display: block;
+}
+
+/* Mobile responsive behavior for web apps */
+@media (max-width: 768px) {
+  .web-app .mobile-header-container {
+    display: flex;
+  }
+  
+  .web-app .web-only {
+    display: none;
+  }
+}
+
 /* Remove padding since no header */
 .desktop-app .app-main {
   padding-top: 20px;
