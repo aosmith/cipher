@@ -161,21 +161,18 @@
   display: none;
 }
 
-/* macOS specific styles */
-.desktop-app.platform-macos .titlebar-button {
-  border-radius: 50%;
+/* macOS specific styles - no custom titlebar */
+.desktop-app.platform-macos .app-wrapper {
+  margin-top: 0;
 }
 
-.desktop-app.platform-macos .titlebar-button:nth-child(1) {
-  background: #ff5f57;
+.desktop-app.platform-macos .app-header {
+  position: sticky;
+  top: 0;
 }
 
-.desktop-app.platform-macos .titlebar-button:nth-child(2) {
-  background: #ffbd2e;
-}
-
-.desktop-app.platform-macos .titlebar-button:nth-child(3) {
-  background: #28ca42;
+.desktop-app.platform-macos .app-main {
+  padding-top: 80px; /* Reduced padding since no custom titlebar */
 }
 
 /* Dark mode adjustments */

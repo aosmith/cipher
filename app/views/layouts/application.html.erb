@@ -29,9 +29,9 @@
   </head>
 
   <body>
-    <!-- Desktop app specific elements -->
+    <!-- Desktop app specific elements - only show custom titlebar on Windows/Linux -->
     <% if Rails.env.desktop? %>
-      <div class="desktop-titlebar" data-tauri-drag-region>
+      <div id="desktop-titlebar" class="desktop-titlebar" data-tauri-drag-region style="display: none;">
         <div class="desktop-titlebar-title">Cipher</div>
         <div class="desktop-titlebar-buttons">
           <button id="titlebar-minimize" class="titlebar-button">−</button>
@@ -383,17 +383,22 @@
         const platform = await invoke('get_platform');
         document.body.classList.add(`platform-${platform}`);
         
-        // Platform-specific titlebar button symbols
-        const buttonSymbols = {
-          windows: ['−', '□', '×'],
-          macos: ['', '', ''],  // macOS uses colored circles
-          linux: ['−', '□', '×']
-        };
-        
-        const symbols = buttonSymbols[platform] || buttonSymbols.windows;
-        document.getElementById('titlebar-minimize').textContent = symbols[0];
-        document.getElementById('titlebar-maximize').textContent = symbols[1];
-        document.getElementById('titlebar-close').textContent = symbols[2];
+        // Show custom titlebar only on Windows and Linux, not macOS
+        const titlebarElement = document.getElementById('desktop-titlebar');
+        if (platform !== 'macos' && titlebarElement) {
+          titlebarElement.style.display = 'flex';
+          
+          // Platform-specific titlebar button symbols
+          const buttonSymbols = {
+            windows: ['−', '□', '×'],
+            linux: ['−', '□', '×']
+          };
+          
+          const symbols = buttonSymbols[platform] || buttonSymbols.windows;
+          document.getElementById('titlebar-minimize').textContent = symbols[0];
+          document.getElementById('titlebar-maximize').textContent = symbols[1];
+          document.getElementById('titlebar-close').textContent = symbols[2];
+        }
         
         // Titlebar controls
         document.getElementById('titlebar-minimize')?.addEventListener('click', () => appWindow.minimize());

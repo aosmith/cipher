@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Cipher",
-    "version": "0.5.1"
+    "version": "0.5.3"
   },
   "tauri": {
     "allowlist": {
@@ -108,8 +108,8 @@
         "minHeight": 600,
         "minWidth": 800,
         "center": true,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": false,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true,
         "decorations": true,
         "transparent": false,
         "skipTaskbar": false,
