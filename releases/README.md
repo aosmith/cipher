@@ -2,7 +2,7 @@
 
 Pre-compiled desktop applications for Windows, macOS, and Linux.
 
-> ⚠️ **Build Status Notice**: Desktop application builds are currently affected by a Rust toolchain compatibility issue. The files listed below are placeholders. See [BUILD-ISSUES.md](../BUILD-ISSUES.md) for technical details and current status.
+> ✅ **Build Status Update**: macOS ARM64 build is now working! Windows and Linux builds still affected by Rust toolchain compatibility issue. See [BUILD-ISSUES.md](../BUILD-ISSUES.md) for technical details.
 
 ## Quick Download
 
@@ -10,10 +10,10 @@ Pre-compiled desktop applications for Windows, macOS, and Linux.
 
 | Platform | Download | Size | SHA256 |
 |----------|----------|------|---------|
-| **Windows** | [Cipher_0.5.0_x64.msi](windows/latest/Cipher_0.5.0_x64.msi) | ~12MB | `a1b2c3d4e5f6...` |
-| **macOS (Universal)** | [Cipher_0.5.0_universal.dmg](macos/latest/Cipher_0.5.0_universal.dmg) | ~15MB | `b2c3d4e5f678...` |
-| **Linux (DEB)** | [cipher_0.5.0_amd64.deb](linux/latest/cipher_0.5.0_amd64.deb) | ~15MB | `c3d4e5f67890...` |
-| **Linux (AppImage)** | [Cipher_0.5.0_x86_64.AppImage](linux/latest/Cipher_0.5.0_x86_64.AppImage) | ~18MB | `d4e5f6789012...` |
+| **Windows** | [Cipher_0.5.0_x64.msi](windows/latest/Cipher_0.5.0_x64.msi) | ~12MB | `placeholder` |
+| **macOS (ARM64)** | [Cipher_0.5.0_aarch64.dmg](macos/latest/Cipher_0.5.0_aarch64.dmg) | 2.7MB | `55ae616b236c...` |
+| **Linux (DEB)** | [cipher_0.5.0_amd64.deb](linux/latest/cipher_0.5.0_amd64.deb) | ~15MB | `placeholder` |
+| **Linux (AppImage)** | [Cipher_0.5.0_x86_64.AppImage](linux/latest/Cipher_0.5.0_x86_64.AppImage) | ~18MB | `placeholder` |
 
 ## Installation Instructions
 
@@ -24,12 +24,14 @@ Pre-compiled desktop applications for Windows, macOS, and Linux.
 4. Launch from Start Menu or Desktop
 
 ### macOS
-1. Download the `.dmg` file
+1. Download the `.dmg` file for your architecture (currently ARM64/Apple Silicon only)
 2. Double-click to mount the disk image
 3. Drag Cipher.app to your Applications folder
 4. Launch from Applications or Spotlight
 
 **Note**: macOS may show a security warning for unsigned apps. Right-click the app and select "Open" to bypass Gatekeeper.
+
+**Current Release**: ARM64 (Apple Silicon) only. Intel x64 support requires cross-compilation setup.
 
 ### Linux
 
@@ -99,7 +101,7 @@ chmod +x Cipher_0.5.0_x86_64.AppImage
 - P2P encrypted messaging capability (foundation)
 - Cross-platform window management
 
-**Note**: Binaries are currently placeholders due to build issues. See [BUILD-ISSUES.md](../BUILD-ISSUES.md) for details.
+**Note**: macOS ARM64 binary is functional. Windows/Linux binaries are placeholders due to build issues. See [BUILD-ISSUES.md](../BUILD-ISSUES.md) for details.
 
 ## Troubleshooting
 

@@ -22,7 +22,11 @@
       "Bash(git checkout:*)",
       "Bash(./scripts/prepare-release.sh:*)",
       "Bash(npx tauri:*)",
-      "Bash(RAILS_ENV=production rails assets:precompile)"
+      "Bash(RAILS_ENV=production rails assets:precompile)",
+      "Bash(git commit:*)",
+      "Bash(rustup install:*)",
+      "Bash(rustup override:*)",
+      "Bash(shasum:*)"
     ],
     "deny": [],
     "ask": []
