@@ -1,3 +1,3 @@
-# SHA256 Checksums - Cipher v0.5.0 macOS
+# SHA256 Checksums - Cipher v0.5.1 macOS
 
-55ae616b236c92524658f90b8ee5051441a94ea4878152c817ae8340d1342146  Cipher_0.5.0_aarch64.dmg
+18ee121be34c1218a1396af4395412cb5b3025615479cf112f0f92d1ee0bd785  Cipher_0.5.1_aarch64.dmg

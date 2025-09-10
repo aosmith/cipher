@@ -69,29 +69,21 @@
   top: 30px;
 }
 
+/* Add padding to main content to prevent overlap with sticky header */
+.desktop-app .app-main {
+  padding-top: 120px; /* Increased padding to ensure full clearance */
+}
+
 /* Desktop app specific adjustments */
 .desktop-app {
   min-height: calc(100vh - 30px);
 }
 
-/* Custom scrollbars for desktop */
+/* Hide scrollbars for desktop */
 .desktop-app ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.desktop-app ::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
-}
-
-.desktop-app ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  border-radius: 4px;
-}
-
-.desktop-app ::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  width: 0px;
+  height: 0px;
+  display: none;
 }
 
 /* Desktop notification styles */
@@ -158,19 +150,15 @@
   top: 32px;
 }
 
-/* Windows scrollbars */
+.desktop-app.platform-windows .app-main {
+  padding-top: 125px; /* Increased padding for Windows taller titlebar */
+}
+
+/* Hide scrollbars for Windows desktop */
 .desktop-app.platform-windows ::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-
-.desktop-app.platform-windows ::-webkit-scrollbar-track {
-  background: #f1f1f1;
-}
-
-.desktop-app.platform-windows ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  border-radius: 0;
+  width: 0px;
+  height: 0px;
+  display: none;
 }
 
 /* macOS specific styles */
@@ -201,25 +189,7 @@
     color: #ffffff;
   }
   
-  .desktop-app ::-webkit-scrollbar-track {
-    background: #2d3748;
-  }
-  
-  .desktop-app ::-webkit-scrollbar-thumb {
-    background: #4a5568;
-  }
-  
-  .desktop-app ::-webkit-scrollbar-thumb:hover {
-    background: #718096;
-  }
-  
-  .desktop-app.platform-windows ::-webkit-scrollbar-track {
-    background: #2d2d2d;
-  }
-  
-  .desktop-app.platform-windows ::-webkit-scrollbar-thumb {
-    background: #555555;
-  }
+  /* Scrollbars remain hidden in dark mode too */
 }
 
 /* Desktop app animations */

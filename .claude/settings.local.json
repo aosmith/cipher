@@ -34,7 +34,8 @@
       "Bash(lsof:*)",
       "Bash(RAILS_ENV=desktop rails db:create)",
       "Bash(RAILS_ENV=desktop rails db:migrate)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(open:*)"
     ],
     "deny": [],
     "ask": []
