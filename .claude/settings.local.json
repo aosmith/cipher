@@ -56,7 +56,20 @@
       "Bash(sed:*)",
       "Bash(./scripts/run-ios-static.sh:*)",
       "Read(//Users/alex/Library/Developer/Xcode/DerivedData/**)",
-      "Bash(xcrun simctl install:*)"
+      "Bash(xcrun simctl install:*)",
+      "Bash(/opt/homebrew/bin/adb devices)",
+      "Bash(echo $ANDROID_HOME)",
+      "Bash(~/Library/Android/sdk/emulator/emulator -list-avds)",
+      "Bash(~/Library/Android/sdk/emulator/emulator -avd Pixel_9)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk ./scripts/dev-mobile.sh android)",
+      "Bash(export ANDROID_HOME=~/Library/Android/sdk)",
+      "Bash(export NDK_HOME=$ANDROID_HOME/ndk)",
+      "Bash($ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager:*)",
+      "Read(//Users/alex/Library/Android/sdk/**)",
+      "Bash(sudo ln:*)",
+      "Bash(export:*)",
+      "Bash(java:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []
