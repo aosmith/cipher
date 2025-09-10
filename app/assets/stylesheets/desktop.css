@@ -88,8 +88,19 @@
   display: none;
 }
 
+/* Show web-only content by default for web browsers */
+.web-only {
+  display: block !important;
+}
+
 .web-app .web-only {
-  display: block;
+  display: block !important;
+}
+
+/* Hide web-only content in mobile apps and desktop apps */
+.mobile-app .web-only,
+.desktop-app .web-only {
+  display: none !important;
 }
 
 /* Mobile responsive behavior for web apps */
@@ -98,8 +109,9 @@
     display: flex;
   }
   
-  .web-app .web-only {
-    display: none;
+  .web-app .web-only,
+  .web-only {
+    display: none !important;
   }
 }
 
