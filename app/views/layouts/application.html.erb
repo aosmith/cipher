@@ -132,17 +132,9 @@
         </div>
       <% end %>
       
-      <!-- Mobile header (hidden by default, shown via JavaScript on mobile) -->
+      <!-- Unified header for all platforms -->
       <header class="app-header">
-        <div class="mobile-header-container">
-          <%= link_to root_path, class: "mobile-logo" do %>
-            🔐 Cipher
-          <% end %>
-          <button id="mobile-menu-button" class="mobile-menu-button">☰</button>
-        </div>
-        
-        <!-- Original web header content (hidden on mobile) -->
-        <div class="header-container web-only">
+        <div class="header-container">
           <div class="header-left">
             <%= link_to root_path, class: "logo-link" do %>
               <span class="logo">🔐 Cipher</span>
@@ -174,88 +166,6 @@
         </div>
       </header>
 
-      <!-- Mobile menu overlay -->
-      <div id="mobile-menu" class="mobile-menu">
-        <div class="mobile-menu-header">
-          <%= link_to root_path, class: "mobile-logo" do %>
-            🔐 Cipher
-          <% end %>
-          <button id="mobile-menu-close" class="mobile-menu-close">×</button>
-        </div>
-        
-        <% if current_user_session %>
-          <div class="mobile-user-section">
-            <div class="mobile-username">Hi, <%= current_user_session.username %></div>
-            <div class="mobile-peer-count"><%= current_user_session.peers.active.count %> peers online</div>
-            
-            <div class="mobile-wallet-section">
-              <div id="mobile-wallet-status" class="mobile-wallet-status">
-                <button id="mobile-connect-wallet-btn" class="mobile-btn primary">Connect Wallet</button>
-              </div>
-              <div id="mobile-wallet-connected" style="display: none;" class="mobile-wallet-connected">
-                <div class="mobile-wallet-info">
-                  <div class="mobile-balance" id="mobile-wallet-balance">0 CPH</div>
-                  <div class="mobile-address" id="mobile-wallet-address"></div>
-                </div>
-                <div class="mobile-wallet-actions">
-                  <button id="mobile-deposit-btn" class="mobile-btn">Deposit</button>
-                  <button id="mobile-withdraw-btn" class="mobile-btn">Withdraw</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        <% end %>
-        
-        <div class="mobile-nav-section">
-          <div class="mobile-nav-title">Navigation</div>
-          <%= link_to root_path, class: "mobile-nav-link" do %>
-            🏠 Home
-          <% end %>
-          <% if current_user_session %>
-            <%= link_to dashboard_users_path, class: "mobile-nav-link" do %>
-              📊 Dashboard
-            <% end %>
-            <%= link_to user_path(current_user_session), class: "mobile-nav-link" do %>
-              👤 Profile
-            <% end %>
-            <%= link_to posts_path, class: "mobile-nav-link" do %>
-              📝 Posts
-            <% end %>
-            <%= link_to friends_users_path, class: "mobile-nav-link" do %>
-              👥 Friends
-            <% end %>
-          <% end %>
-        </div>
-        
-        <% if current_user_session %>
-          <div class="mobile-nav-section">
-            <div class="mobile-nav-title">Hosting</div>
-            <%= link_to local_hosting_users_path, class: "mobile-nav-link" do %>
-              🌐 Local Hosting
-            <% end %>
-            <%= link_to host_dashboard_users_path, class: "mobile-nav-link" do %>
-              📊 Host Dashboard
-            <% end %>
-          </div>
-          
-          <div class="mobile-nav-section">
-            <div class="mobile-nav-title">Settings</div>
-            <%= link_to export_keys_users_path, class: "mobile-nav-link" do %>
-              💾 Backup Keys
-            <% end %>
-          </div>
-        <% else %>
-          <div class="mobile-nav-section">
-            <div class="mobile-nav-title">Get Started</div>
-            <%= link_to import_keys_users_path, class: "mobile-nav-link" do %>
-              🔑 Sign In
-            <% end %>
-            <%= link_to new_user_path, class: "mobile-nav-link" do %>
-              ✨ Create Account
-            <% end %>
-          </div>
-        <% end %>
-      </div>
 
       <main class="app-main">
         <%= yield %>
@@ -628,30 +538,6 @@
       // Make it available globally for other scripts
       window.CipherWalletManager = CipherWalletManager;
 
-      // Mobile menu functionality
-      function setupMobileMenu() {
-        const mobileMenuButton = document.getElementById('mobile-menu-button');
-        const mobileMenu = document.getElementById('mobile-menu');
-        const mobileMenuClose = document.getElementById('mobile-menu-close');
-        
-        if (mobileMenuButton && mobileMenu && mobileMenuClose) {
-          mobileMenuButton.addEventListener('click', () => {
-            mobileMenu.classList.add('active');
-          });
-          
-          mobileMenuClose.addEventListener('click', () => {
-            mobileMenu.classList.remove('active');
-          });
-          
-          // Close menu when clicking nav links
-          const mobileNavLinks = document.querySelectorAll('.mobile-nav-link');
-          mobileNavLinks.forEach(link => {
-            link.addEventListener('click', () => {
-              mobileMenu.classList.remove('active');
-            });
-          });
-        }
-      }
 
       // Platform-specific setup function
       function setupPlatformUI(platform) {
@@ -662,7 +548,6 @@
           appWrapper.classList.remove('desktop-app');
           appWrapper.classList.remove('web-app');
           appWrapper.classList.add('mobile-app');
-          setupMobileMenu();
         } else if (platform === 'desktop-native') {
           // Native desktop app (Tauri)
           appWrapper.classList.add('desktop-app');
@@ -673,7 +558,6 @@
           appWrapper.classList.add('web-app');
           appWrapper.classList.remove('desktop-app');
           appWrapper.classList.remove('mobile-app');
-          setupMobileMenu(); // Still need mobile menu for responsive behavior
         }
       }
 
@@ -685,13 +569,8 @@
         });
       } else {
         // Web browser - always use web layout, CSS handles responsive behavior
-        // Don't force mobile layout based on window size - let CSS media queries handle it
-        const isMobileDevice = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
         setupPlatformUI('web'); // Web browser layout
       }
-
-      // Initialize mobile menu regardless (will be hidden on desktop)
-      setupMobileMenu();
     </script>
     
     <!-- Desktop app specific JavaScript -->

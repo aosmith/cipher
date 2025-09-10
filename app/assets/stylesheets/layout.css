@@ -64,11 +64,14 @@
   justify-content: space-between;
   align-items: center;
   height: 70px;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .header-left {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .logo-link {
@@ -90,17 +93,22 @@
   display: flex;
   align-items: center;
   gap: 20px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .user-nav {
   display: flex;
   align-items: center;
   gap: 15px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .user-greeting {
   color: #4a5568;
   font-size: 0.95rem;
+  white-space: nowrap;
 }
 
 .user-greeting strong {
@@ -133,6 +141,7 @@
   transition: all 0.2s ease;
   white-space: nowrap;
   font-size: 0.9rem;
+  flex-shrink: 0;
 }
 
 
@@ -144,6 +153,14 @@
 .auth-nav {
   display: flex;
   gap: 12px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.auth-nav .btn {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Wallet Section */

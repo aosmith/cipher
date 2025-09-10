@@ -141,3 +141,4 @@ ALWAYS prefer editing an existing file to creating a new one.
 NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
 - memorize fill in the sha 256 on the realeases readme after you compile them.
 - memorize if you start a server also stop it
+- use `bin/reload` to restart the server after CSS/layout changes

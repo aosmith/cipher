@@ -1,6 +1,6 @@
 [package]
 name = "cipher-desktop"
-version = "0.5.4"
+version = "0.5.5"
 description = "Cipher - End-to-End Encrypted P2P Social Network"
 authors = ["Cipher Team"]
 license = "MIT"

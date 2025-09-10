@@ -175,6 +175,89 @@
   }
 }
 
+/* Entropy Collection Styles */
+.entropy-section {
+  background: rgba(102, 126, 234, 0.05);
+  border: 2px solid rgba(102, 126, 234, 0.2);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 20px 0;
+  text-align: center;
+}
+
+.entropy-section h3 {
+  margin: 0 0 15px 0;
+  color: #2d3748;
+  font-size: 1.2em;
+}
+
+.entropy-progress {
+  width: 100%;
+  height: 20px;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 15px 0;
+  border: 1px solid rgba(102, 126, 234, 0.2);
+}
+
+.entropy-progress-fill {
+  height: 100%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  width: 0%;
+  transition: width 0.3s ease;
+  border-radius: 10px;
+}
+
+.entropy-status {
+  font-weight: 500;
+  margin: 10px 0;
+  padding: 8px 16px;
+  border-radius: 8px;
+  display: inline-block;
+}
+
+.entropy-collecting {
+  background: rgba(251, 191, 36, 0.1);
+  color: #92400e;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.entropy-ready {
+  background: rgba(16, 185, 129, 0.1);
+  color: #065f46;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.entropy-help {
+  margin-top: 15px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 8px;
+  border: 1px solid rgba(102, 126, 234, 0.1);
+}
+
+.entropy-help small {
+  color: #4a5568;
+  line-height: 1.4;
+}
+
+/* Responsive entropy section */
+@media (max-width: 768px) {
+  .entropy-section {
+    padding: 15px;
+    margin: 15px 0;
+  }
+  
+  .entropy-section h3 {
+    font-size: 1.1em;
+  }
+  
+  .entropy-progress {
+    height: 16px;
+  }
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   margin: 0;
