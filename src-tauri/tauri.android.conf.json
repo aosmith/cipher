@@ -1,0 +1,88 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "productName": "Cipher",
+  "version": "0.7.1",
+  "identifier": "com.cipher.social",
+  "build": {
+    "beforeDevCommand": null,
+    "beforeBuildCommand": "RAILS_ENV=android rails assets:precompile",
+    "frontendDist": "http://localhost:3001",
+    "devUrl": "http://localhost:3001"
+  },
+  "app": {
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 900,
+        "resizable": true,
+        "title": "Cipher",
+        "width": 1200,
+        "minHeight": 600,
+        "minWidth": 800,
+        "center": true,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true,
+        "decorations": true,
+        "transparent": false,
+        "skipTaskbar": false,
+        "theme": null
+      }
+    ],
+    "security": {
+      "csp": null,
+      "devCsp": null,
+      "freezePrototype": false,
+      "dangerousDisableAssetCspModification": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "SocialNetworking",
+    "copyright": "Copyright © 2025 Cipher Team",
+    "shortDescription": "End-to-End Encrypted P2P Social Network", 
+    "longDescription": "A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails. Share posts, images, and media with complete privacy.",
+    "resources": [
+      "../app",
+      "../config", 
+      "../db",
+      "../lib",
+      "../Gemfile",
+      "../Gemfile.lock",
+      "../config.ru",
+      "../bin/rails"
+    ],
+    "icon": [],
+    "targets": "all",
+    "android": {
+      "minSdkVersion": 24
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "window": {
+      "close": true,
+      "hide": true,
+      "show": true,
+      "maximize": true,
+      "minimize": true,
+      "unmaximize": true,
+      "unminimize": true,
+      "startDragging": true
+    },
+    "notification": {},
+    "dialog": {
+      "ask": true,
+      "confirm": true,
+      "message": true,
+      "open": true,
+      "save": true
+    },
+    "clipboardManager": {
+      "readText": true,
+      "writeText": true
+    },
+    "globalShortcut": {}
+  }
+}

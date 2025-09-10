@@ -5,9 +5,9 @@
   "identifier": "com.cipher.social",
   "build": {
     "beforeDevCommand": null,
-    "beforeBuildCommand": "RAILS_ENV=ios rails assets:precompile",
-    "frontendDist": "../public",
-    "devUrl": null
+    "beforeBuildCommand": "RAILS_ENV=android rails assets:precompile",
+    "frontendDist": "http://localhost:3001",
+    "devUrl": "http://localhost:3001"
   },
   "app": {
     "windows": [

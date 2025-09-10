@@ -1,0 +1,270 @@
+/*
+ * This is a manifest file that'll be compiled into application.css.
+ *
+ * With Propshaft, assets are served efficiently without preprocessing steps. You can still include
+ * application-wide styles in this file, but keep in mind that CSS precedence will follow the standard
+ * cascading order, meaning styles declared later in the document or manifest will override earlier ones,
+ * depending on specificity.
+ *
+ * Consider organizing styles into separate files for maintainability.
+ */
+
+/* Global Styles */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+  color: #212529;
+  line-height: 1.6;
+}
+
+.app-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-main {
+  flex: 1;
+}
+
+/* Container */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.header h1 {
+  margin: 0;
+  color: #0056b3;
+}
+
+/* User Info */
+.user-info, .auth-actions {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+}
+
+.peer-count {
+  color: #666;
+  font-size: 0.9em;
+}
+
+/* Buttons */
+.btn {
+  padding: 10px 20px;
+  text-decoration: none;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  display: inline-block;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+  color: white;
+}
+
+.btn-secondary {
+  background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
+  color: white;
+}
+
+.btn-large {
+  padding: 16px 32px;
+  font-size: 1.2em;
+  border-radius: 12px;
+}
+
+/* Status Indicators */
+.status-online .status-indicator {
+  color: #28a745;
+}
+
+.status-offline .status-indicator {
+  color: #dc3545;
+}
+
+/* Sections */
+.p2p-status, .message-center, .welcome {
+  margin-bottom: 30px;
+}
+
+.p2p-status h2, .message-center h2, .welcome h2 {
+  margin-top: 0;
+  color: #495057;
+}
+
+/* Message Items */
+.message-item {
+  padding: 20px;
+  border: none;
+  border-radius: 16px;
+  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.message-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.message-header .author {
+  font-weight: 600;
+  color: #667eea;
+  font-size: 0.95em;
+}
+
+.message-header .timestamp {
+  color: #8e8e93;
+  font-size: 0.85em;
+}
+
+.message-content {
+  color: #2d3748;
+  line-height: 1.6;
+}
+
+.message-list {
+  max-height: 600px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.message-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.message-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+
+.message-list::-webkit-scrollbar-thumb {
+  background: rgba(102, 126, 234, 0.3);
+  border-radius: 3px;
+}
+
+.message-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(102, 126, 234, 0.5);
+}
+
+/* Forms */
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: bold;
+  color: #495057;
+}
+
+.form-control {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 16px;
+  transition: border-color 0.15s ease-in-out;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+.form-help {
+  color: #666;
+  font-size: 0.9em;
+  margin-top: 5px;
+}
+
+.form-actions {
+  margin-top: 30px;
+}
+
+/* Error Messages */
+.error-messages {
+  background: #f8d7da;
+  padding: 15px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+.error-messages h3 {
+  margin-top: 0;
+}
+
+.error-messages ul {
+  margin-bottom: 0;
+}
+
+/* Alerts & Warnings */
+.warning {
+  background: #fff3cd;
+  padding: 15px;
+  border-radius: 4px;
+  margin-top: 15px;
+  border-left: 4px solid #ffc107;
+  color: #856404;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .container {
+    padding: 10px;
+  }
+  
+  .header {
+    flex-direction: column;
+    gap: 15px;
+  }
+  
+  .user-info, .auth-actions {
+    flex-direction: column;
+  }
+}

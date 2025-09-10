@@ -28,9 +28,9 @@ echo "📱 Selected device: $DEVICE_NAME"
 echo "📦 Compiling iOS assets..."
 RAILS_ENV=ios rails assets:precompile
 
-echo "🏗️ Building iOS app in static mode..."
-# Use build mode for completely static app
-cargo tauri ios build --config src-tauri/tauri.mobile.conf.json --debug
+echo "🏗️ Building iOS app..."
+# Use build mode with iOS configuration
+cargo tauri ios build --config src-tauri/tauri.ios.conf.json --debug
 
 echo "📱 Installing and running app on simulator..."
 # Install the built app
@@ -40,5 +40,5 @@ xcrun simctl install "$DEVICE_NAME" "$(find ./src-tauri/gen/apple/target/debug -
 BUNDLE_ID="com.cipher.social"
 xcrun simctl launch "$DEVICE_NAME" "$BUNDLE_ID"
 
-echo "✅ Cipher iOS app launched successfully (Static Mode - No Network Connections)"
+echo "✅ Cipher iOS app launched successfully"
 echo "📱 App is running on device: $DEVICE_NAME"

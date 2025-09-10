@@ -21,7 +21,7 @@ build_platform() {
             fi
             
             echo "📱 Building APK for Android emulator..."
-            cargo tauri android build --apk
+            cargo tauri android build --apk --config src-tauri/tauri.android.conf.json
             
             echo "📦 APK built for:"
             echo "   • Android emulator testing"  
@@ -46,10 +46,10 @@ build_platform() {
             # Use aarch64-sim for Apple Silicon Macs, x86_64 for Intel Macs
             if [[ $(uname -m) == "arm64" ]]; then
                 echo "🍎 Building for Apple Silicon iOS Simulator..."
-                cargo tauri ios build --target aarch64-sim
+                cargo tauri ios build --target aarch64-sim --config src-tauri/tauri.ios.conf.json
             else
                 echo "💻 Building for Intel iOS Simulator..."
-                cargo tauri ios build --target x86_64
+                cargo tauri ios build --target x86_64 --config src-tauri/tauri.ios.conf.json
             fi
             
             echo "📦 iOS app built for:"
@@ -64,9 +64,8 @@ build_platform() {
     esac
 }
 
-# Compile Rails assets first
-echo "🎨 Compiling Rails assets..."
-RAILS_ENV=production rails assets:precompile
+# Rails assets will be compiled by each platform's beforeBuildCommand
+echo "🎨 Rails assets will be compiled per platform..."
 
 # Build requested platforms
 if [ $# -eq 0 ]; then

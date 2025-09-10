@@ -1,0 +1,120 @@
+<div class="container">
+  <div class="page-header">
+    <h1>🔐 Create Your Cipher Identity</h1>
+    <p>Generate your zero-knowledge cryptographic identity</p>
+  </div>
+
+  <div class="form-container">
+    <div class="form-section">
+      <%= form_with model: @user, class: "user-form" do |form| %>
+        <% if @user.errors.any? %>
+          <div class="error-messages">
+            <h3><%= pluralize(@user.errors.count, "error") %> prohibited this user from being saved:</h3>
+            <ul>
+              <% @user.errors.full_messages.each do |message| %>
+                <li><%= message %></li>
+              <% end %>
+            </ul>
+          </div>
+        <% end %>
+
+        <div class="form-group">
+          <%= form.label :username, class: "form-label" %>
+          <%= form.text_field :username, class: "form-control", 
+                               placeholder: "Enter a unique username",
+                               required: true,
+                               pattern: "[a-zA-Z0-9_]{3,20}",
+                               title: "3-20 characters, letters, numbers, and underscores only" %>
+          <small class="form-help">This will be your unique identifier on the network</small>
+        </div>
+
+        <div class="form-group">
+          <%= form.label :display_name, class: "form-label" %>
+          <%= form.text_field :display_name, class: "form-control", 
+                               placeholder: "Enter your display name (optional)" %>
+          <small class="form-help">This is how others will see your name</small>
+        </div>
+
+        <div class="form-group">
+          <%= label_tag :password, "Master Password", class: "form-label" %>
+          <%= password_field_tag :password, "", class: "form-control", 
+                                 placeholder: "Enter a strong master password",
+                                 required: true,
+                                 minlength: 8,
+                                 id: "master-password" %>
+          <small class="form-help">Your identity will be derived from this password - make it strong!</small>
+        </div>
+
+        <div class="form-group">
+          <%= label_tag :confirm_password, "Confirm Password", class: "form-label" %>
+          <%= password_field_tag :confirm_password, "", class: "form-control", 
+                                 placeholder: "Confirm your master password",
+                                 required: true,
+                                 minlength: 8,
+                                 id: "confirm-password" %>
+        </div>
+
+        <%= hidden_field_tag :public_key, "", id: "public-key-field" %>
+
+        <div class="crypto-info">
+          <h3>🔑 Zero-Knowledge Identity</h3>
+          <p>Cipher uses deterministic key derivation from your password:</p>
+          <ul>
+            <li><strong>Private Key:</strong> Derived from your username + password (never stored on server)</li>
+            <li><strong>Public Key:</strong> Generated from private key, shared for encryption</li>
+            <li><strong>Zero-Knowledge:</strong> Server never sees your private key or password</li>
+          </ul>
+          <div class="warning">
+            <strong>⚠️ Critical:</strong> Remember your password! It's the only way to access your identity. 
+            There is no password recovery - losing it means losing your Cipher identity forever.
+          </div>
+        </div>
+
+        <div id="key-generation" style="display: none;">
+          <div class="key-gen-progress">
+            <p><strong>🔐 Generating Keys...</strong></p>
+            <div class="progress-bar">
+              <div id="key-progress" class="progress-fill"></div>
+            </div>
+            <p id="key-status">Deriving private key from password...</p>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <%= form.submit "🚀 Create Zero-Knowledge Identity", class: "btn btn-primary btn-large", id: "create-identity-btn" %>
+        </div>
+      <% end %>
+    </div>
+
+    <div class="info-section">
+      <h3>What happens next?</h3>
+      <ol>
+        <li>Your cryptographic key pair is generated using NaCl</li>
+        <li>Your public key becomes your network identity</li>
+        <li>You can immediately start connecting to other peers</li>
+        <li>All your messages will be end-to-end encrypted</li>
+      </ol>
+
+      <div class="features-mini">
+        <div class="feature-mini">
+          <strong>🔐 Zero Knowledge</strong><br>
+          Even the server can't read your messages
+        </div>
+        <div class="feature-mini">
+          <strong>🌐 Decentralized</strong><br>
+          Direct peer-to-peer connections
+        </div>
+        <div class="feature-mini">
+          <strong>🚀 No Registration</strong><br>
+          No email, phone, or personal info required
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import 'user_registration';
+</script>
+
+

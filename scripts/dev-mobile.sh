@@ -33,20 +33,12 @@ dev_platform() {
                 read -p "Press Enter when emulator is running..."
             fi
             
-            # Start Rails server in background for mobile development
-            echo "🚂 Starting Rails server for mobile development..."
-            rails server -p 3001 -e development &
-            RAILS_PID=$!
+            # Android app runs Rails internally - no external server needed
+            echo "🚂 Mobile app will run Rails internally..."
             
-            # Wait a moment for Rails to start
-            sleep 3
-            
-            # Start Tauri Android dev (will install and run on emulator)
+            # Start Tauri Android dev with Android config (will install and run on emulator)
             echo "📱 Starting Android app on emulator..."
-            cargo tauri android dev
-            
-            # Clean up Rails server when done
-            kill $RAILS_PID 2>/dev/null || true
+            cargo tauri android dev --config src-tauri/tauri.android.conf.json
             ;;
         "ios")
             echo "🍎 Starting iOS Simulator development..."
@@ -65,10 +57,10 @@ dev_platform() {
                 xcrun simctl list devices available | grep "iPhone" | head -5
             fi
             
-            # Mobile app should run Rails internally - no external server needed
+            # iOS app runs Rails internally - no external server needed
             echo "🚂 Mobile app will run Rails internally..."
             
-            # Start Tauri iOS dev without external Rails server
+            # Start Tauri iOS dev with mobile config
             echo "📱 Starting iOS app in Simulator..."
             # Auto-select first available iPhone simulator to avoid interactive prompt
             DEVICE_NAME=$(xcrun simctl list devices | grep "iPhone.*Pro.*iOS" | head -1 | sed 's/^[[:space:]]*\([^(]*\).*/\1/' | xargs)
@@ -77,8 +69,8 @@ dev_platform() {
                 DEVICE_NAME=$(xcrun simctl list devices | grep "iPhone.*iOS" | head -1 | sed 's/^[[:space:]]*\([^(]*\).*/\1/' | xargs)
             fi
             echo "📱 Selected device: $DEVICE_NAME"
-            # Use mobile-specific config that disables external server dependencies
-            cargo tauri ios dev "$DEVICE_NAME" --config src-tauri/tauri.mobile.conf.json
+            # Use iOS-specific config with internal Rails server
+            cargo tauri ios dev "$DEVICE_NAME" --config src-tauri/tauri.ios.conf.json
             ;;
         *)
             echo "❌ Unknown platform: $platform"
