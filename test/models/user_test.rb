@@ -23,21 +23,21 @@ class UserTest < ActiveSupport::TestCase
     User.create!(@valid_attributes)
     duplicate_user = User.new(@valid_attributes)
     assert_not duplicate_user.valid?
-    assert_includes duplicate_user.errors[:username], "has already been taken"
+    assert_includes duplicate_user.errors[:username], "is already taken. Please choose a different username."
   end
 
   test "should require public key" do
     user = User.new(@valid_attributes.except(:public_key))
     assert_not user.valid?
     # The validation message comes from the base error, not public_key field
-    assert_includes user.errors[:base], "Public key must be generated client-side"
+    assert_includes user.errors[:base], "⚠️ Key generation failed. Please ensure JavaScript is enabled and try refreshing the page."
   end
 
   test "should require unique public key" do
     User.create!(@valid_attributes)
     duplicate_user = User.new(@valid_attributes.merge(username: "different_user"))
     assert_not duplicate_user.valid?
-    assert_includes duplicate_user.errors[:public_key], "has already been taken"
+    assert_includes duplicate_user.errors[:public_key], "is already registered to another account. Please regenerate your keys."
   end
 
   test "should have many posts" do
@@ -76,6 +76,6 @@ class UserTest < ActiveSupport::TestCase
 
     # Should not be valid without public key
     assert_not user.valid?
-    assert_includes user.errors[:base], "Public key must be generated client-side"
+    assert_includes user.errors[:base], "⚠️ Key generation failed. Please ensure JavaScript is enabled and try refreshing the page."
   end
 end

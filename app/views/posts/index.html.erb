@@ -40,10 +40,11 @@
                 <div class="attachment-item <%= attachment.media_type %>">
                   <% if attachment.is_image? %>
                     <div class="image-attachment">
-                      <div class="encrypted-image" 
-                           data-attachment-url="<%= post_attachment_path(post, attachment) %>"
-                           data-filename="<%= attachment.filename %>"
-                           data-filesize="<%= attachment.human_file_size %>">
+                      <div data-controller="image-decryption"
+                           data-image-decryption-attachment-url-value="<%= post_attachment_path(post, attachment) %>"
+                           data-image-decryption-filename-value="<%= attachment.filename %>"
+                           data-image-decryption-filesize-value="<%= attachment.human_file_size %>"
+                           data-image-decryption-content-type-value="<%= attachment.content_type %>">
                         <div class="loading-placeholder">
                           <span class="loading-icon">🔓</span>
                           <span class="loading-text">Decrypting image...</span>

@@ -6,7 +6,11 @@
 
   <div class="form-container">
     <div class="form-section">
-      <%= form_with model: @user, class: "user-form" do |form| %>
+      <%= form_with model: @user, class: "user-form", 
+                    data: { 
+                      controller: "user-registration",
+                      user_registration_entropy_required_value: 100
+                    } do |form| %>
         <% if @user.errors.any? %>
           <div class="error-messages">
             <h3><%= pluralize(@user.errors.count, "error") %> prohibited this user from being saved:</h3>
@@ -24,7 +28,11 @@
                                placeholder: "Enter a unique username",
                                required: true,
                                pattern: "[a-zA-Z0-9_]{3,20}",
-                               title: "3-20 characters, letters, numbers, and underscores only" %>
+                               title: "3-20 characters, letters, numbers, and underscores only",
+                               data: { 
+                                 user_registration_target: "username",
+                                 action: "input->user-registration#validateInput"
+                               } %>
           <small class="form-help">This will be your unique identifier on the network</small>
         </div>
 
@@ -41,7 +49,10 @@
                                  placeholder: "Enter a strong master password",
                                  required: true,
                                  minlength: 8,
-                                 id: "master-password" %>
+                                 data: { 
+                                   user_registration_target: "password",
+                                   action: "input->user-registration#validateInput"
+                                 } %>
           <small class="form-help">Your identity will be derived from this password - make it strong!</small>
         </div>
 
@@ -51,10 +62,31 @@
                                  placeholder: "Confirm your master password",
                                  required: true,
                                  minlength: 8,
-                                 id: "confirm-password" %>
+                                 data: { 
+                                   user_registration_target: "confirmPassword",
+                                   action: "input->user-registration#validateInput"
+                                 } %>
         </div>
 
-        <%= hidden_field_tag :public_key, "", id: "public-key-field" %>
+        <%= hidden_field_tag :public_key, "", data: { user_registration_target: "publicKey" } %>
+
+        <!-- Entropy Collection Section (Added by Stimulus controller) -->
+        <div data-user-registration-target="entropyProgress" class="entropy-section" style="display: none;">
+          <h3>🎲 Entropy Collection</h3>
+          <p>For maximum security, we need to collect random data from your interactions:</p>
+          <div class="entropy-progress">
+            <div class="entropy-progress-fill" data-user-registration-target="entropyProgressBar"></div>
+          </div>
+          <p data-user-registration-target="entropyStatus" class="entropy-status entropy-collecting">
+            🎲 Collecting randomness... 0% (move mouse or type)
+          </p>
+          <div class="entropy-help">
+            <small>
+              <strong>Why?</strong> Your mouse movements and keypresses provide additional randomness 
+              for generating cryptographically secure keys that can't be predicted.
+            </small>
+          </div>
+        </div>
 
         <div class="crypto-info">
           <h3>🔑 Zero-Knowledge Identity</h3>
@@ -81,7 +113,11 @@
         </div>
 
         <div class="form-actions">
-          <%= form.submit "🚀 Create Zero-Knowledge Identity", class: "btn btn-primary btn-large", id: "create-identity-btn" %>
+          <%= form.submit "🚀 Create Zero-Knowledge Identity", class: "btn btn-primary btn-large", 
+                          data: { 
+                            user_registration_target: "submitButton",
+                            action: "click->user-registration#generateKeys"
+                          } %>
         </div>
       <% end %>
     </div>
@@ -113,8 +149,5 @@
   </div>
 </div>
 
-<script type="module">
-  import 'user_registration';
-</script>
 
 

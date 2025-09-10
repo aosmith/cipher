@@ -20,10 +20,13 @@ class User < ApplicationRecord
   has_many :attachment_shares, dependent: :destroy
   has_many :accessible_attachments, through: :attachment_shares, source: :attachment
 
-  validates :username, presence: true, uniqueness: true
-  validates :public_key, presence: true, uniqueness: true, allow_blank: false
+  validates :username, presence: true, 
+                      uniqueness: { message: "is already taken. Please choose a different username." }
+  validates :public_key, presence: true, 
+                        uniqueness: { message: "is already registered to another account. Please regenerate your keys." },
+                        allow_blank: false
 
-  before_validation :generate_keypair, on: :create
+  before_validation :check_public_key_presence, on: :create
 
   # Note: These methods are now handled client-side in JavaScript
   # The server never sees or handles private keys
@@ -91,14 +94,17 @@ class User < ApplicationRecord
 
   private
 
-  # Keys are now generated client-side from user passwords
-  # The server only validates that the provided public key is not already taken
-  def generate_keypair
-    # This method is kept for Rails compatibility but keys are generated client-side
-    # The public key is set by the client before user creation
-    unless public_key.present?
-      errors.add(:base, "Public key must be generated client-side")
-      throw :abort
+  # Validate that public key was generated client-side and provided
+  def check_public_key_presence
+    return if public_key.present?
+    
+    # Check if this is likely a JavaScript failure vs missing form data
+    if username.present?
+      errors.add(:base, "⚠️ Key generation failed. Please ensure JavaScript is enabled and try refreshing the page.")
+    else
+      errors.add(:base, "🔐 Cryptographic keys must be generated on your device for security. Please use the account creation form.")
     end
+    
+    throw :abort
   end
 end
