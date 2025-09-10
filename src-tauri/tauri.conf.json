@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cipher",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "identifier": "com.cipher.social",
   "build": {
     "beforeDevCommand": "rails server -p 3001",
@@ -55,7 +55,9 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ],
     "targets": "all",
     "macOS": {
