@@ -150,22 +150,6 @@
           </div>
           
           <div class="header-right">
-            <div class="wallet-section">
-              <div id="wallet-status" class="wallet-disconnected">
-                <button id="connect-wallet-btn" class="btn btn-outline">Connect Wallet</button>
-              </div>
-              <div id="wallet-connected" style="display: none;">
-                <div class="wallet-info">
-                  <span id="wallet-balance" class="balance-display">0 CPH</span>
-                  <span id="wallet-address" class="wallet-address"></span>
-                </div>
-                <div class="wallet-actions">
-                  <button id="deposit-btn" class="btn btn-sm btn-secondary">Deposit</button>
-                  <button id="withdraw-btn" class="btn btn-sm btn-outline">Withdraw</button>
-                </div>
-              </div>
-            </div>
-            
             <% if current_user_session %>
               <div class="user-nav">
                 <span class="user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
@@ -175,14 +159,8 @@
                   <%= link_to "Profile", user_path(current_user_session), class: "nav-link" %>
                   <%= link_to "Posts", posts_path, class: "nav-link" %>
                   <%= link_to "Friends", friends_users_path, class: "nav-link" %>
-                  <%= link_to local_hosting_users_path, class: "nav-link" do %>
-                    <span class="nav-text-full">Local Hosting</span>
-                    <span class="nav-text-short">Hosting</span>
-                  <% end %>
-                  <%= link_to host_dashboard_users_path, class: "nav-link" do %>
-                    <span class="nav-text-full">Host Dashboard</span>
-                    <span class="nav-text-short">Dashboard</span>
-                  <% end %>
+                  <%= link_to "Hosting", local_hosting_users_path, class: "nav-link" %>
+                  <%= link_to "Host Panel", host_dashboard_users_path, class: "nav-link" %>
                   <%= link_to "Backup", export_keys_users_path, class: "nav-link" %>
                 </div>
               </div>

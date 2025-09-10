@@ -95,7 +95,7 @@
 .user-nav {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 15px;
 }
 
 .user-greeting {
@@ -120,28 +120,21 @@
 
 .nav-links {
   display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .nav-link {
   color: #4a5568;
   text-decoration: none;
   font-weight: 500;
-  padding: 8px 16px;
+  padding: 6px 12px;
   border-radius: 8px;
   transition: all 0.2s ease;
   white-space: nowrap;
+  font-size: 0.9rem;
 }
 
-/* Navigation text responsive behavior */
-.nav-text-short {
-  display: none;
-}
-
-.nav-text-full {
-  display: inline;
-}
 
 .nav-link:hover {
   background: rgba(102, 126, 234, 0.1);
@@ -320,14 +313,6 @@
     font-size: 0.85rem;
   }
   
-  /* Switch to short navigation text on smaller screens */
-  .nav-text-full {
-    display: none;
-  }
-  
-  .nav-text-short {
-    display: inline;
-  }
   
   .footer-content {
     grid-template-columns: 1fr;
