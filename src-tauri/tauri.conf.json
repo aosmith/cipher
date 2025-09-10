@@ -3,7 +3,7 @@
     "beforeDevCommand": "rails server -p 3001",
     "beforeBuildCommand": "rails assets:precompile",
     "devPath": "http://localhost:3001",
-    "distDir": "../public",
+    "distDir": "http://localhost:3001",
     "withGlobalTauri": false
   },
   "package": {
@@ -70,7 +70,16 @@
         "signingIdentity": null,
         "minimumSystemVersion": "10.13"
       },
-      "resources": [],
+      "resources": [
+        "../app",
+        "../config", 
+        "../db",
+        "../lib",
+        "../Gemfile",
+        "../Gemfile.lock",
+        "../config.ru",
+        "../bin/rails"
+      ],
       "shortDescription": "End-to-End Encrypted P2P Social Network",
       "targets": "all",
       "windows": {

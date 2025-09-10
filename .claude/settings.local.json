@@ -27,7 +27,14 @@
       "Bash(rustup install:*)",
       "Bash(rustup override:*)",
       "Bash(shasum:*)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Bash(git branch:*)",
+      "Bash(open releases/macos/latest/Cipher_0.5.0_aarch64.dmg)",
+      "Bash(open src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Cipher.app)",
+      "Bash(lsof:*)",
+      "Bash(RAILS_ENV=desktop rails db:create)",
+      "Bash(RAILS_ENV=desktop rails db:migrate)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

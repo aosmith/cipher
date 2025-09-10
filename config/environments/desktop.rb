@@ -2,13 +2,11 @@
 Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb.
 
-  # In the desktop environment your application's code is reloaded any time
-  # it changes. This slows down response time but is perfect for desktop development
-  # since you don't have to restart the web server when you make code changes.
-  config.enable_reloading = true
+  # In the desktop environment we want faster startup and no reloading
+  config.enable_reloading = false
 
-  # Do not eager load code on boot.
-  config.eager_load = false
+  # Eager load for faster startup
+  config.eager_load = true
 
   # Show full error reports.
   config.consider_all_requests_local = true
@@ -45,8 +43,8 @@ Rails.application.configure do
   config.log_level = :info
   config.log_tags = [ :request_id ]
 
-  # Use an evented file watcher to check for changes
-  config.file_watcher = ActiveSupport::EventedFileUpdateChecker
+  # Use a simple file watcher instead of evented (listen gem not available)
+  config.file_watcher = ActiveSupport::FileUpdateChecker
 
   # Uncomment if you wish to allow Action Cable access from any origin.
   config.action_cable.disable_request_forgery_protection = true
@@ -63,11 +61,9 @@ Rails.application.configure do
   config.force_ssl = false
   config.ssl_options = { redirect: false }
   
-  # CSP for desktop app
-  config.content_security_policy = false
-  config.content_security_policy_nonce_generator = nil
-  config.content_security_policy_nonce_directives = []
+  # CSP for desktop app - disable CSP completely
+  config.content_security_policy_report_only = false
 
-  # Disable CSRF for desktop requests (will be handled by Tauri)
-  config.action_controller.default_protect_from_forgery = false
+  # Keep CSRF enabled but configure for desktop app
+  config.action_controller.default_protect_from_forgery = true
 end
