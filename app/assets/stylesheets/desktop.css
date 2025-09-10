@@ -69,14 +69,14 @@
   top: 30px;
 }
 
-/* Hide web navigation bar in desktop app */
-.desktop-app .app-header {
-  display: none;
-}
-
 /* Show web header by default (for web browsers) */
 .app-header {
-  display: block;
+  display: block !important;
+}
+
+/* Hide web navigation bar in desktop app */
+.desktop-app .app-header {
+  display: none !important;
 }
 
 /* Web app specific styles */
