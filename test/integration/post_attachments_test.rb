@@ -118,7 +118,8 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
     end
     
     created_post = Post.last
-    assert_nil created_post.content || created_post.content == ""
+    # Content can be nil or empty string
+    assert(created_post.content.nil? || created_post.content == "", "Content should be nil or empty")
     assert_equal 1, created_post.attachments.count
     assert created_post.valid?
   end

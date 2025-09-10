@@ -23,16 +23,16 @@ fn main() {
             
             println!("{} app resource directory: {:?}", platform, resource_dir);
             
-            // Start Rails server in bundled directory
+            // Start Rails server in bundled directory (localhost-only for security)
             std::thread::spawn(move || {
                 let rails_command = if cfg!(target_os = "windows") {
                     std::process::Command::new("cmd")
-                        .args(&["/C", "ruby", "bin/rails", "server", "-p", "3001", "-e", platform])
+                        .args(&["/C", "ruby", "bin/rails", "server", "-p", "3001", "-b", "127.0.0.1", "-e", platform])
                         .current_dir(&resource_dir)
                         .spawn()
                 } else {
                     std::process::Command::new("ruby")
-                        .args(&["bin/rails", "server", "-p", "3001", "-e", platform])
+                        .args(&["bin/rails", "server", "-p", "3001", "-b", "127.0.0.1", "-e", platform])
                         .current_dir(&resource_dir)
                         .spawn()
                 };

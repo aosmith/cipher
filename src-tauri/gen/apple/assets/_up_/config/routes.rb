@@ -8,6 +8,7 @@ Rails.application.routes.draw do
       get :host_dashboard
       get :local_hosting
       get :friends
+      get :dashboard
     end
   end
   resources :posts do
@@ -26,7 +27,7 @@ Rails.application.routes.draw do
       post 'login', to: 'auth#login'
       
       # Friends management
-      resources :friends, only: [:index, :create, :update, :destroy] do
+      resources :friends, only: [:index, :show, :create, :update, :destroy] do
         collection do
           post :send_request
           post :respond_to_request

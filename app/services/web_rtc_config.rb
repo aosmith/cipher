@@ -1,4 +1,4 @@
-class WebRTCConfig
+class WebRtcConfig
   # Free public STUN servers
   STUN_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },

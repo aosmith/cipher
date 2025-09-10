@@ -32,10 +32,10 @@ pub fn main() {
             println!("Resource directory: {:?}", resource_dir);
             println!("Starting embedded Rails server...");
             
-            // Start embedded Rails server for mobile
+            // Start embedded Rails server for mobile (localhost-only for security)
             std::thread::spawn(move || {
                 let rails_command = std::process::Command::new("ruby")
-                    .args(&["bin/rails", "server", "-p", "3001", "-e", platform])
+                    .args(&["bin/rails", "server", "-p", "3001", "-b", "127.0.0.1", "-e", platform])
                     .current_dir(&resource_dir)
                     .spawn();
                 

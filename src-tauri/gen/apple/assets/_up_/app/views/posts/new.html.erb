@@ -6,7 +6,8 @@
 
   <div class="form-container">
     <div class="form-section">
-      <%= form_with model: @post, multipart: true, class: "post-form", id: "post-form" do |form| %>
+      <%= form_with model: @post, multipart: true, class: "post-form", 
+                    data: { controller: "post-creation" } do |form| %>
         <% if @post.errors.any? %>
           <div class="error-messages">
             <h3><%= pluralize(@post.errors.count, "error") %> prohibited this post from being saved:</h3>
@@ -27,20 +28,23 @@
 
         <div class="form-group">
           <label class="form-label">Media Attachments</label>
-          <div class="file-upload-area" id="file-upload-area">
+          <div class="file-upload-area" 
+               data-post-creation-target="uploadArea"
+               data-action="drop->post-creation#handleDrop">
             <div class="file-upload-prompt">
               <div class="upload-icon">📎</div>
               <p><strong>Drag & drop files here</strong> or click to browse</p>
               <p class="upload-hint">Supports images, videos, and other files</p>
               <input type="file" 
                      name="attachments[]" 
-                     id="file-input" 
+                     data-post-creation-target="fileInput"
+                     data-action="change->post-creation#handleFileSelect"
                      class="file-input" 
                      multiple 
                      accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt">
             </div>
             
-            <div class="file-previews" id="file-previews"></div>
+            <div class="file-previews" data-post-creation-target="previews"></div>
           </div>
         </div>
 
@@ -247,6 +251,3 @@
 }
 </style>
 
-<script type="module">
-  import 'post_creation';
-</script>
