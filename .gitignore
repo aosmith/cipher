@@ -32,3 +32,36 @@
 
 # Ignore master key for decrypting credentials and more.
 /config/master.key
+
+# Node modules
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Tauri build artifacts (but keep source)
+/src-tauri/target/
+/src-tauri/Cargo.lock
+
+# Release binaries (keep directory structure but ignore actual binaries)
+/releases/*/latest/*.msi
+/releases/*/latest/*.exe  
+/releases/*/latest/*.dmg
+/releases/*/latest/*.zip
+/releases/*/latest/*.deb
+/releases/*/latest/*.AppImage
+/releases/*/latest/checksums.txt
+
+/releases/*/archive/**/*.msi
+/releases/*/archive/**/*.exe
+/releases/*/archive/**/*.dmg
+/releases/*/archive/**/*.zip
+/releases/*/archive/**/*.deb
+/releases/*/archive/**/*.AppImage
+/releases/*/archive/**/checksums.txt
+
+# But keep README files and structure
+!/releases/**/README.md
+!/releases/**/CHANGELOG.md
+
+# macOS
+.DS_Store

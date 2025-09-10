@@ -14,7 +14,12 @@
       "Bash(kill:*)",
       "Bash(bin/rubocop:*)",
       "Bash(curl:*)",
-      "Bash(open http://localhost:3000)"
+      "Bash(open http://localhost:3000)",
+      "Bash(npm install)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(./scripts/update-release-links.sh:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []
