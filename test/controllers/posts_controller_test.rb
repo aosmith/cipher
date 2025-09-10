@@ -106,7 +106,7 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
       post posts_path, params: { post: { content: "" } }
     end
     
-    assert_response :unprocessable_entity
+    assert_response :unprocessable_content
     assert_select ".error", /Post must have either content or attachments/
   end
 
@@ -176,7 +176,7 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
     
     patch post_path(@post), params: { post: { content: "" } }
     
-    assert_response :unprocessable_entity
+    assert_response :unprocessable_content
     
     @post.reload
     assert_not_equal "", @post.content

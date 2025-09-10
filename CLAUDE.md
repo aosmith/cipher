@@ -57,8 +57,14 @@ This is a Rails 8.0.2 application called "Cipher" with minimal features currentl
 - `./scripts/prepare-release.sh [version]` - Build all platforms and prepare release files
 - `./scripts/update-release-links.sh [version]` - Update all version numbers and download links
 - **Releases Directory**: `releases/` contains pre-compiled desktop apps for Windows, macOS, and Linux
-- **Current Version**: v0.5.0
+- **Current Version**: v0.5.8
 - See `releases/README.md` for installation instructions and download links
+
+#### Version Management
+- **Version numbers must be sequential** - Always increment from the last tagged version
+- **Keep Rails and Tauri versions in sync** - Both should use the same version number
+- **Update all version references**: CLAUDE.md, src-tauri/Cargo.toml, and git tags
+- Check existing tags with: `git tag | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -5`
 
 ## Architecture
 
@@ -142,3 +148,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize fill in the sha 256 on the realeases readme after you compile them.
 - memorize if you start a server also stop it
 - use `bin/reload` to restart the server after CSS/layout changes
+- memorize clear the cache after changes.

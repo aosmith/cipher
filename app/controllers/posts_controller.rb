@@ -28,7 +28,7 @@ class PostsController < ApplicationController
       redirect_to root_path, notice: 'Post created successfully!'
     else
       @posts = current_user_session.posts.includes(:attachments).order(created_at: :desc)
-      render :index, status: :unprocessable_entity
+      render :index, status: :unprocessable_content
     end
   end
 
@@ -39,7 +39,7 @@ class PostsController < ApplicationController
     if @post.update(post_params)
       redirect_to @post, notice: 'Post updated successfully!'
     else
-      render :edit, status: :unprocessable_entity
+      render :edit, status: :unprocessable_content
     end
   end
 
