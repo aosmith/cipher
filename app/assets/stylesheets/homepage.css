@@ -11,6 +11,27 @@
   max-width: 1200px;
   justify-items: center;
   padding: 0 20px;
+  text-align: center;
+}
+
+.features * {
+  text-align: center !important;
+}
+
+.features .feature h3,
+.features .feature p,
+.feature h3,
+.feature p {
+  text-align: center !important;
+}
+
+/* Force center all feature content */
+.features > .feature > p {
+  text-align: center !important;
+}
+
+.features > .feature > h3 {
+  text-align: center !important;
 }
 
 /* Handle 4th item centering */
@@ -29,6 +50,11 @@
   overflow: hidden;
   width: 100%;
   max-width: 320px;
+  text-align: center;
+}
+
+.feature * {
+  text-align: center !important;
 }
 
 .feature:hover {
@@ -52,12 +78,14 @@
   color: #2d3748;
   font-size: 1.3em;
   font-weight: 600;
+  text-align: center !important;
 }
 
 .feature p {
   color: #4a5568;
   line-height: 1.6;
   margin: 0;
+  text-align: center !important;
 }
 
 /* Modern Welcome Hero Section */
@@ -67,7 +95,7 @@
   border-radius: 24px;
   padding: 60px 40px;
   border: 1px solid rgba(255, 255, 255, 0.25);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
   text-align: center;
   margin-bottom: 48px;
   position: relative;
@@ -146,7 +174,7 @@
   padding: 30px;
   margin-bottom: 30px;
   border: 1px solid rgba(255, 255, 255, 0.3);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
 .status-section h2 {
@@ -307,7 +335,7 @@
   padding: 40px;
   margin-bottom: 40px;
   border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
   position: relative;
   overflow: hidden;
 }
@@ -355,7 +383,7 @@
   grid-template-columns: repeat(2, 1fr);
   gap: 30px;
   margin-bottom: 40px;
-  text-align: left;
+  text-align: center;
 }
 
 .token-section {
@@ -364,13 +392,13 @@
   border-radius: 16px;
   padding: 30px;
   border: 1px solid rgba(255, 255, 255, 0.3);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
   transition: all 0.3s ease;
 }
 
 .token-section:hover {
   transform: translateY(-5px);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
   background: rgba(255, 255, 255, 0.9);
 }
 
@@ -404,20 +432,18 @@
   list-style: none;
   padding: 0;
   margin: 0;
+  text-align: center;
 }
 
 .token-benefits li {
   color: #374151;
   padding: 8px 0;
   position: relative;
-  padding-left: 25px;
   font-size: 0.95em;
 }
 
 .token-benefits li::before {
-  content: '✓';
-  position: absolute;
-  left: 0;
+  content: '✓ ';
   color: #10b981;
   font-weight: bold;
 }
@@ -436,7 +462,7 @@
   display: flex;
   align-items: center;
   gap: 20px;
-  text-align: left;
+  text-align: center;
 }
 
 .privacy-icon {
@@ -556,7 +582,7 @@
   padding: 60px 40px;
   margin: 60px 0 40px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
   position: relative;
   overflow: hidden;
 }
@@ -602,7 +628,7 @@
   grid-template-columns: repeat(2, 1fr);
   gap: 30px;
   margin-bottom: 50px;
-  text-align: left;
+  text-align: center;
 }
 
 .principle {
@@ -817,7 +843,7 @@
   
   .privacy-badge {
     flex-direction: row;
-    text-align: left;
+    text-align: center;
   }
   
   .mission-principles {
@@ -829,7 +855,16 @@
   }
   
   .principle {
-    text-align: left;
+    text-align: center;
     flex-direction: row;
   }
+}
+
+/* FINAL OVERRIDE: Force center all feature text */
+div.features div.feature p,
+div.features div.feature h3,
+.features .feature p,
+.features .feature h3 {
+  text-align: center !important;
+  display: block !important;
 }
