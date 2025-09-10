@@ -8,6 +8,7 @@ Rails.application.routes.draw do
       get :host_dashboard
       get :local_hosting
       get :friends
+      get :dashboard
     end
   end
   resources :posts do

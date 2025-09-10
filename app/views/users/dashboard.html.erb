@@ -1,0 +1,428 @@
+<% content_for :title, "Dashboard - Cipher" %>
+
+<div class="dashboard">
+  <div class="dashboard-header">
+    <h1>🎉 Welcome to Cipher, <%= @current_user.display_name || @current_user.username %>!</h1>
+    <p class="dashboard-subtitle">Your secure, zero-knowledge identity has been created</p>
+  </div>
+
+  <!-- Key Information Section -->
+  <div class="dashboard-section">
+    <div class="key-info-card">
+      <h2>🔐 Your Cryptographic Identity</h2>
+      <p>Your identity is secured by cryptographic keys. Keep this information safe!</p>
+      
+      <div class="key-display">
+        <div class="key-item">
+          <label>Public Key:</label>
+          <div class="key-value">
+            <code><%= @current_user.public_key %></code>
+            <button onclick="copyToClipboard('<%= @current_user.public_key %>')" class="btn-copy">📋</button>
+          </div>
+          <small>Share this with others so they can send you encrypted messages</small>
+        </div>
+        
+        <div class="private-key-info">
+          <div class="warning-box">
+            <h3>⚠️ Important: Your Private Key</h3>
+            <p>Your private key was shown during account creation and is stored securely in your browser. 
+            If you didn't save it, you can export it from the backup section.</p>
+            <div class="key-actions">
+              <%= link_to "💾 Backup Your Keys", export_keys_users_path, class: "btn btn-secondary" %>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Getting Started Section -->
+  <div class="dashboard-section">
+    <div class="getting-started-card">
+      <h2>🚀 Getting Started</h2>
+      <p>Here's what you can do with your Cipher account:</p>
+      
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-icon">📝</div>
+          <h3>Create Your First Post</h3>
+          <p>Share encrypted content with the network</p>
+          <%= link_to "Create Post", new_post_path, class: "btn btn-primary" %>
+        </div>
+        
+        <div class="step-card">
+          <div class="step-icon">👥</div>
+          <h3>Connect with Friends</h3>
+          <p>Find and add other Cipher users</p>
+          <%= link_to "Manage Friends", friends_users_path, class: "btn btn-secondary" %>
+        </div>
+        
+        <div class="step-card">
+          <div class="step-icon">🌐</div>
+          <h3>Local Hosting</h3>
+          <p>Host content locally or connect to peers</p>
+          <%= link_to "Local Hosting", local_hosting_users_path, class: "btn btn-secondary" %>
+        </div>
+        
+        <div class="step-card">
+          <div class="step-icon">💰</div>
+          <h3>Earn CPH Tokens</h3>
+          <p>Become a storage host and earn rewards</p>
+          <%= link_to "Host Dashboard", host_dashboard_users_path, class: "btn btn-secondary" %>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Stats -->
+  <div class="dashboard-section">
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">0</div>
+        <div class="stat-label">Posts Created</div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-number">0</div>
+        <div class="stat-label">Friends Connected</div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-number">0</div>
+        <div class="stat-label">Files Encrypted</div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-number">Active</div>
+        <div class="stat-label">Identity Status</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Security Tips -->
+  <div class="dashboard-section">
+    <div class="security-tips-card">
+      <h2>🛡️ Security Best Practices</h2>
+      <div class="tips-list">
+        <div class="tip">
+          <span class="tip-icon">🔐</span>
+          <div class="tip-content">
+            <strong>Backup Your Keys:</strong> Export and securely store your private key - we cannot recover it if lost
+          </div>
+        </div>
+        
+        <div class="tip">
+          <span class="tip-icon">🔒</span>
+          <div class="tip-content">
+            <strong>Keep Keys Private:</strong> Never share your private key with anyone
+          </div>
+        </div>
+        
+        <div class="tip">
+          <span class="tip-icon">📱</span>
+          <div class="tip-content">
+            <strong>Multiple Devices:</strong> Import your keys on other devices to access your account
+          </div>
+        </div>
+        
+        <div class="tip">
+          <span class="tip-icon">🌐</span>
+          <div class="tip-content">
+            <strong>Zero-Knowledge:</strong> Your data is encrypted end-to-end - even we can't read it
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.dashboard {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.dashboard-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.dashboard-header h1 {
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+  color: var(--primary-color, #3b82f6);
+}
+
+.dashboard-subtitle {
+  font-size: 1.2rem;
+  color: var(--text-secondary, #6b7280);
+  margin-bottom: 0;
+}
+
+.dashboard-section {
+  margin-bottom: 40px;
+}
+
+.key-info-card,
+.getting-started-card,
+.security-tips-card {
+  background: white;
+  border-radius: 16px;
+  padding: 30px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.key-info-card h2,
+.getting-started-card h2,
+.security-tips-card h2 {
+  margin-top: 0;
+  color: #2d3748;
+  font-weight: 600;
+  margin-bottom: 15px;
+}
+
+.key-display {
+  background: rgba(248, 249, 250, 0.8);
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(222, 226, 230, 0.6);
+}
+
+.key-item {
+  margin-bottom: 20px;
+}
+
+.key-item label {
+  display: block;
+  font-weight: 600;
+  color: #4a5568;
+  margin-bottom: 8px;
+}
+
+.key-value {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+
+.key-value code {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 12px;
+  border-radius: 8px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.85em;
+  word-break: break-all;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.btn-copy {
+  background: rgba(102, 126, 234, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  color: #667eea;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-copy:hover {
+  background: rgba(102, 126, 234, 0.2);
+}
+
+.key-item small {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.private-key-info {
+  margin-top: 20px;
+}
+
+.warning-box {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.warning-box h3 {
+  color: #92400e;
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.warning-box p {
+  color: #78350f;
+  margin-bottom: 15px;
+}
+
+.key-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.steps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.step-card {
+  background: rgba(248, 249, 250, 0.8);
+  border: 1px solid rgba(222, 226, 230, 0.6);
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+}
+
+.step-icon {
+  font-size: 2rem;
+  margin-bottom: 10px;
+}
+
+.step-card h3 {
+  margin: 0 0 10px 0;
+  color: #2d3748;
+  font-size: 1.1rem;
+}
+
+.step-card p {
+  color: #6b7280;
+  margin-bottom: 15px;
+  font-size: 0.9rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+}
+
+.stat-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+
+.stat-number {
+  font-size: 2rem;
+  font-weight: bold;
+  color: var(--primary-color, #3b82f6);
+  margin-bottom: 5px;
+}
+
+.stat-label {
+  color: #6b7280;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.tips-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.tip-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.tip-content {
+  color: #4a5568;
+  line-height: 1.5;
+}
+
+.tip-content strong {
+  color: #2d3748;
+}
+
+.btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-weight: 500;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: var(--primary-color, #3b82f6);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark, #2563eb);
+}
+
+.btn-secondary {
+  background: var(--secondary-color, #6b7280);
+  color: white;
+}
+
+.btn-secondary:hover {
+  background: #4b5563;
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    padding: 15px;
+  }
+  
+  .dashboard-header h1 {
+    font-size: 2rem;
+  }
+  
+  .steps-grid,
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .key-info-card,
+  .getting-started-card,
+  .security-tips-card {
+    padding: 20px;
+  }
+  
+  .key-value {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .btn-copy {
+    align-self: center;
+  }
+}
+</style>
+
+<script>
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(function() {
+    // Show temporary feedback
+    const button = event.target;
+    const original = button.textContent;
+    button.textContent = '✓';
+    setTimeout(() => {
+      button.textContent = original;
+    }, 1000);
+  });
+}
+</script>

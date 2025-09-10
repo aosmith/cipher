@@ -21,7 +21,7 @@ class UsersController < ApplicationController
     if @user.save
       # Set this user as the current session user (simple approach)
       session[:user_id] = @user.id
-      redirect_to @user, notice: 'User created successfully. Your encryption keys have been generated.'
+      redirect_to dashboard_users_path, notice: 'Welcome to Cipher! Your account has been created successfully.'
     else
       render :new, status: :unprocessable_entity
     end
@@ -54,6 +54,13 @@ class UsersController < ApplicationController
     # Friend management page
     @current_user = current_user_session
     render 'friends'
+  end
+
+  def dashboard
+    # User dashboard showing their keys and getting started guide
+    @current_user = current_user_session
+    return redirect_to root_path, alert: 'Please log in first' unless @current_user
+    render 'dashboard'
   end
 
   private
