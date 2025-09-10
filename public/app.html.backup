@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cipher Mobile</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <style>
+        /* Mobile-optimized CSS */
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        
+        .mobile-app {
+            min-height: 100vh;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        
+        .app-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .mobile-header-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .mobile-logo {
+            font-size: 24px;
+            font-weight: bold;
+            text-decoration: none;
+            color: white;
+        }
+        
+        .mobile-menu-button {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            font-size: 24px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        
+        .app-main {
+            padding: 20px;
+        }
+        
+        .welcome-section {
+            text-align: center;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        
+        .welcome-section h1 {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+            color: #333;
+            font-weight: 300;
+        }
+        
+        .welcome-section p {
+            font-size: 1.2em;
+            margin-bottom: 40px;
+            color: #666;
+        }
+        
+        .auth-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 40px;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-size: 18px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+        
+        .btn:hover, .btn:active {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+        }
+        
+        .features-section {
+            margin-top: 60px;
+        }
+        
+        .features-grid {
+            display: grid;
+            gap: 20px;
+        }
+        
+        .feature-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .feature-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 1.3em;
+            color: #333;
+        }
+        
+        .feature-card p {
+            margin: 0;
+            color: #666;
+            line-height: 1.5;
+        }
+        
+        /* Mobile menu overlay */
+        .mobile-menu {
+            position: fixed;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            transition: left 0.3s ease;
+            z-index: 200;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .mobile-menu.active {
+            left: 0;
+        }
+        
+        .mobile-menu-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+        }
+        
+        .mobile-menu-close {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            font-size: 30px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        
+        .mobile-nav-section {
+            margin-bottom: 30px;
+        }
+        
+        .mobile-nav-title {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.8;
+            margin-bottom: 15px;
+        }
+        
+        .mobile-nav-link {
+            display: block;
+            color: white;
+            text-decoration: none;
+            padding: 15px 0;
+            font-size: 18px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .mobile-nav-link:hover {
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body class="mobile-app">
+    <header class="app-header">
+        <div class="mobile-header-container">
+            <a href="#" class="mobile-logo">= Cipher</a>
+            <button id="mobile-menu-button" class="mobile-menu-button">0</button>
+        </div>
+    </header>
+
+    <!-- Mobile menu overlay -->
+    <div id="mobile-menu" class="mobile-menu">
+        <div class="mobile-menu-header">
+            <a href="#" class="mobile-logo">= Cipher</a>
+            <button id="mobile-menu-close" class="mobile-menu-close">×</button>
+        </div>
+        
+        <div class="mobile-nav-section">
+            <div class="mobile-nav-title">Get Started</div>
+            <a href="#signin" class="mobile-nav-link">= Sign In</a>
+            <a href="#signup" class="mobile-nav-link">( Create Account</a>
+        </div>
+        
+        <div class="mobile-nav-section">
+            <div class="mobile-nav-title">Learn More</div>
+            <a href="#features" class="mobile-nav-link">=ñ Features</a>
+            <a href="#security" class="mobile-nav-link">= Security</a>
+            <a href="#about" class="mobile-nav-link">9 About</a>
+        </div>
+    </div>
+
+    <main class="app-main">
+        <div class="welcome-section">
+            <h1>Welcome to Cipher</h1>
+            <p>Your secure, encrypted social network</p>
+            
+            <div class="auth-buttons">
+                <a href="#signin" class="btn btn-primary">= Sign In</a>
+                <a href="#signup" class="btn btn-secondary">( Create Account</a>
+            </div>
+            
+            <div class="features-section">
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <h3>= End-to-End Encryption</h3>
+                        <p>All your messages and data are encrypted locally on your device before being sent.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h3>< Peer-to-Peer Network</h3>
+                        <p>Direct communication without central servers. Your data stays private.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <h3>=ñ Native Mobile Experience</h3>
+                        <p>Optimized for mobile devices with offline capabilities and push notifications.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Mobile menu functionality
+        document.getElementById('mobile-menu-button').addEventListener('click', function() {
+            document.getElementById('mobile-menu').classList.add('active');
+        });
+        
+        document.getElementById('mobile-menu-close').addEventListener('click', function() {
+            document.getElementById('mobile-menu').classList.remove('active');
+        });
+        
+        // Close menu when clicking nav links
+        document.querySelectorAll('.mobile-nav-link').forEach(function(link) {
+            link.addEventListener('click', function() {
+                document.getElementById('mobile-menu').classList.remove('active');
+            });
+        });
+        
+        // Handle auth button clicks
+        document.querySelectorAll('a[href="#signin"]').forEach(function(link) {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                showSignInForm();
+            });
+        });
+        
+        document.querySelectorAll('a[href="#signup"]').forEach(function(link) {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                showSignUpForm();
+            });
+        });
+        
+        function showSignInForm() {
+            const main = document.querySelector('.app-main');
+            main.innerHTML = `
+                <div class="auth-form">
+                    <h1>= Sign In to Cipher</h1>
+                    <p>Import your existing keys to access your account</p>
+                    
+                    <form>
+                        <div class="form-group">
+                            <label for="private-key">Private Key</label>
+                            <textarea id="private-key" placeholder="Enter your private key..." rows="4"></textarea>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="username">Username</label>
+                            <input type="text" id="username" placeholder="Your username">
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">Sign In</button>
+                        <button type="button" class="btn btn-secondary" onclick="showWelcome()">Back</button>
+                    </form>
+                </div>
+            `;
+            addFormStyles();
+        }
+        
+        function showSignUpForm() {
+            const main = document.querySelector('.app-main');
+            main.innerHTML = `
+                <div class="auth-form">
+                    <h1>( Create Cipher Account</h1>
+                    <p>Generate new keys and create your secure account</p>
+                    
+                    <form>
+                        <div class="form-group">
+                            <label for="new-username">Choose Username</label>
+                            <input type="text" id="new-username" placeholder="Choose a username">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="display-name">Display Name</label>
+                            <input type="text" id="display-name" placeholder="Your display name">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="bio">Bio (optional)</label>
+                            <textarea id="bio" placeholder="Tell us about yourself..." rows="3"></textarea>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">Create Account</button>
+                        <button type="button" class="btn btn-secondary" onclick="showWelcome()">Back</button>
+                    </form>
+                </div>
+            `;
+            addFormStyles();
+        }
+        
+        function showWelcome() {
+            location.reload();
+        }
+        
+        function addFormStyles() {
+            const style = document.createElement('style');
+            style.textContent = `
+                .auth-form {
+                    max-width: 500px;
+                    margin: 0 auto;
+                    text-align: center;
+                }
+                
+                .auth-form h1 {
+                    font-size: 2.5em;
+                    margin-bottom: 15px;
+                    color: #333;
+                    font-weight: 300;
+                }
+                
+                .auth-form p {
+                    font-size: 1.1em;
+                    color: #666;
+                    margin-bottom: 40px;
+                }
+                
+                .form-group {
+                    margin-bottom: 20px;
+                    text-align: left;
+                }
+                
+                .form-group label {
+                    display: block;
+                    margin-bottom: 8px;
+                    color: #333;
+                    font-weight: 600;
+                }
+                
+                .form-group input, .form-group textarea {
+                    width: 100%;
+                    padding: 15px;
+                    border: 2px solid #e1e5e9;
+                    border-radius: 10px;
+                    font-size: 16px;
+                    font-family: system-ui, -apple-system, sans-serif;
+                    transition: border-color 0.3s ease;
+                }
+                
+                .form-group input:focus, .form-group textarea:focus {
+                    outline: none;
+                    border-color: #667eea;
+                }
+                
+                .auth-form .btn {
+                    width: 100%;
+                    margin-bottom: 15px;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        console.log('Cipher mobile app loaded successfully');
+    </script>
+</body>
+</html>

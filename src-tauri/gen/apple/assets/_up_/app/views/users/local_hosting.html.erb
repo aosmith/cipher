@@ -1,0 +1,629 @@
+<% content_for :title, "Local Hosting - Cipher" %>
+
+<div class="local-hosting-page">
+  <div class="page-header">
+    <h1>💾 Local Hosting</h1>
+    <p class="page-subtitle">Earn CPH tokens by sharing your device's storage space with the network</p>
+  </div>
+
+  <!-- Hosting Status Overview -->
+  <div class="card hosting-overview">
+    <div class="card-header">
+      <h2>Hosting Status</h2>
+      <div class="hosting-toggle">
+        <label class="toggle-switch">
+          <input type="checkbox" id="hosting-toggle" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="hosting-status-text">Inactive</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="status-grid">
+        <div class="status-item">
+          <div class="status-icon">💾</div>
+          <div class="status-info">
+            <div class="status-label">Storage Allocated</div>
+            <div id="storage-allocated" class="status-value">0 MB</div>
+          </div>
+        </div>
+        
+        <div class="status-item">
+          <div class="status-icon">📊</div>
+          <div class="status-info">
+            <div class="status-label">Storage Used</div>
+            <div id="storage-used" class="status-value">0 MB</div>
+          </div>
+        </div>
+        
+        <div class="status-item">
+          <div class="status-icon">📁</div>
+          <div class="status-info">
+            <div class="status-label">Files Hosted</div>
+            <div id="files-hosted" class="status-value">0</div>
+          </div>
+        </div>
+        
+        <div class="status-item">
+          <div class="status-icon">💰</div>
+          <div class="status-info">
+            <div class="status-label">Total Earned</div>
+            <div id="total-earned" class="status-value">0 CPH</div>
+          </div>
+        </div>
+
+        <div class="status-item">
+          <div class="status-icon">🌐</div>
+          <div class="status-info">
+            <div class="status-label">P2P Network</div>
+            <div id="p2p-status" class="status-value status-disconnected">Connecting...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Storage Quota Configuration -->
+  <div class="card quota-config">
+    <div class="card-header">
+      <h2>Storage Quota</h2>
+    </div>
+    <div class="card-body">
+      <div class="quota-section">
+        <div class="quota-controls">
+          <div class="form-group">
+            <label for="quota-slider">Allocate Storage Space:</label>
+            <div class="quota-input-group">
+              <input type="range" id="quota-slider" min="100" max="10000" step="100" value="500" class="quota-range">
+              <div class="quota-value-container">
+                <input type="number" id="quota-input" min="100" max="10000" value="500" class="quota-number">
+                <span class="quota-unit">MB</span>
+              </div>
+            </div>
+            <small class="form-help">Minimum: 100MB • Maximum: <span id="max-available">0</span>MB available</small>
+          </div>
+          
+          <div class="quota-preview">
+            <div class="quota-bar">
+              <div class="quota-bar-used" id="quota-bar-used" style="width: 0%"></div>
+              <div class="quota-bar-allocated" id="quota-bar-allocated" style="width: 20%"></div>
+            </div>
+            <div class="quota-labels">
+              <span class="quota-label-used">Used: <span id="quota-used-mb">0</span>MB</span>
+              <span class="quota-label-available">Available: <span id="quota-available-mb">500</span>MB</span>
+            </div>
+          </div>
+          
+          <button id="apply-quota-btn" class="btn btn-primary">Apply Storage Quota</button>
+        </div>
+        
+        <div class="quota-info">
+          <h3>How It Works</h3>
+          <ul class="info-list">
+            <li>📁 Files are stored encrypted in your browser's local storage</li>
+            <li>🔒 You never have access to the actual file content</li>
+            <li>💰 Earn CPH tokens based on storage provided and bandwidth served</li>
+            <li>⚡ Higher reliability and uptime = higher earnings multiplier</li>
+            <li>🔄 Storage can be adjusted anytime (files may be redistributed)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Earnings Dashboard -->
+  <div class="card earnings-dashboard">
+    <div class="card-header">
+      <h2>Earnings Dashboard</h2>
+    </div>
+    <div class="card-body">
+      <div class="earnings-grid">
+        <div class="earnings-card">
+          <div class="earnings-icon">💎</div>
+          <div class="earnings-info">
+            <div class="earnings-label">Storage Rewards</div>
+            <div id="storage-rewards" class="earnings-value">0 CPH</div>
+            <div class="earnings-rate">0.001 CPH/KB/day</div>
+          </div>
+        </div>
+        
+        <div class="earnings-card">
+          <div class="earnings-icon">⚡</div>
+          <div class="earnings-info">
+            <div class="earnings-label">Bandwidth Rewards</div>
+            <div id="bandwidth-rewards" class="earnings-value">0 CPH</div>
+            <div class="earnings-rate">0.8 CPH/KB served</div>
+          </div>
+        </div>
+        
+        <div class="earnings-card">
+          <div class="earnings-icon">🎯</div>
+          <div class="earnings-info">
+            <div class="earnings-label">Reliability Bonus</div>
+            <div id="reliability-bonus" class="earnings-value">100%</div>
+            <div class="earnings-rate">Based on uptime</div>
+          </div>
+        </div>
+        
+        <div class="earnings-card">
+          <div class="earnings-icon">🏆</div>
+          <div class="earnings-info">
+            <div class="earnings-label">Pending Payout</div>
+            <div id="pending-payout" class="earnings-value">0 CPH</div>
+            <div class="earnings-actions">
+              <button id="claim-earnings-btn" class="btn btn-sm btn-success" disabled>Claim</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test Section (for development) -->
+  <div class="card">
+    <div class="card-header">
+      <h2>🧪 Test Local Hosting</h2>
+    </div>
+    <div class="card-body">
+      <div class="test-actions">
+        <button id="test-store-file" class="btn btn-primary">Test Store File</button>
+        <button id="test-retrieve-file" class="btn btn-secondary">Test Retrieve File</button>
+        <button id="clear-storage" class="btn btn-outline">Clear All Storage</button>
+      </div>
+      <div id="test-results" class="test-results">
+        <!-- Test results will appear here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Performance Metrics -->
+  <div class="card performance-metrics">
+    <div class="card-header">
+      <h2>Performance Metrics</h2>
+    </div>
+    <div class="card-body">
+      <div class="metrics-grid">
+        <div class="metric-item">
+          <div class="metric-label">Uptime</div>
+          <div id="uptime-metric" class="metric-value">0 hours</div>
+          <div class="metric-bar">
+            <div class="metric-fill" id="uptime-fill" style="width: 0%"></div>
+          </div>
+        </div>
+        
+        <div class="metric-item">
+          <div class="metric-label">Reliability Score</div>
+          <div id="reliability-metric" class="metric-value">100%</div>
+          <div class="metric-bar">
+            <div class="metric-fill" id="reliability-fill" style="width: 100%"></div>
+          </div>
+        </div>
+        
+        <div class="metric-item">
+          <div class="metric-label">Files Served</div>
+          <div id="files-served-metric" class="metric-value">0</div>
+        </div>
+        
+        <div class="metric-item">
+          <div class="metric-label">Data Served</div>
+          <div id="data-served-metric" class="metric-value">0 MB</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Activity -->
+  <div class="card recent-activity">
+    <div class="card-header">
+      <h2>Recent Activity</h2>
+    </div>
+    <div class="card-body">
+      <div id="activity-list" class="activity-list">
+        <div class="no-activity">
+          <div class="no-activity-icon">📭</div>
+          <p>No hosting activity yet</p>
+          <small>Start hosting to see file storage and serving events here</small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script type="module">
+import LocalHostingManager from 'local_hosting';
+import P2PHostingIntegration from 'p2p_hosting_integration';
+<% if current_user_session %>
+import CipherSignaling from 'channels/signaling_channel';
+<% end %>
+
+class LocalHostingUI {
+  constructor() {
+    this.hostingManager = new LocalHostingManager();
+    this.p2pIntegration = null;
+    this.isInitialized = false;
+    
+    this.init();
+  }
+
+  async init() {
+    await this.hostingManager.initializeDB();
+    await this.loadStorageEstimate();
+    await this.setupEventListeners();
+    await this.setupP2PIntegration();
+    await this.updateUI();
+    
+    this.isInitialized = true;
+    this.startPeriodicUpdates();
+  }
+
+  async setupP2PIntegration() {
+    <% if current_user_session %>
+    // Initialize P2P connection for local hosting
+    const signaling = new CipherSignaling(<%= current_user_session.id %>);
+    
+    // Wait for WebRTC to be ready
+    signaling.onConnected = () => {
+      if (signaling.webrtcManager) {
+        this.p2pIntegration = new P2PHostingIntegration(this.hostingManager, signaling.webrtcManager);
+        console.log('P2P hosting integration initialized');
+        
+        // Update UI to show P2P status
+        this.updateP2PStatus(true);
+      }
+    };
+
+    signaling.onDisconnected = () => {
+      this.updateP2PStatus(false);
+    };
+    <% else %>
+    // No user session, P2P integration unavailable
+    this.p2pIntegration = new P2PHostingIntegration(this.hostingManager, null);
+    this.updateP2PStatus(false);
+    <% end %>
+  }
+
+  updateP2PStatus(connected) {
+    const statusElement = document.getElementById('p2p-status');
+    if (statusElement) {
+      statusElement.textContent = connected ? 'Connected' : 'Disconnected';
+      statusElement.className = connected ? 'status-connected' : 'status-disconnected';
+    }
+  }
+
+  async loadStorageEstimate() {
+    if ('storage' in navigator && 'estimate' in navigator.storage) {
+      const estimate = await navigator.storage.estimate();
+      const availableMB = Math.floor((estimate.quota - estimate.usage) / (1024 * 1024));
+      const maxQuota = Math.min(availableMB * 0.8, 10000); // Max 80% of available or 10GB
+      
+      document.getElementById('max-available').textContent = Math.floor(maxQuota);
+      document.getElementById('quota-slider').max = maxQuota;
+      document.getElementById('quota-input').max = maxQuota;
+    }
+  }
+
+  setupEventListeners() {
+    // Hosting toggle
+    document.getElementById('hosting-toggle').addEventListener('change', (e) => {
+      this.toggleHosting(e.target.checked);
+    });
+
+    // Quota controls
+    const slider = document.getElementById('quota-slider');
+    const input = document.getElementById('quota-input');
+    
+    slider.addEventListener('input', (e) => {
+      input.value = e.target.value;
+      this.updateQuotaPreview(parseInt(e.target.value));
+    });
+    
+    input.addEventListener('input', (e) => {
+      slider.value = e.target.value;
+      this.updateQuotaPreview(parseInt(e.target.value));
+    });
+
+    // Apply quota button
+    document.getElementById('apply-quota-btn').addEventListener('click', () => {
+      this.applyQuota();
+    });
+
+    // Claim earnings button
+    document.getElementById('claim-earnings-btn').addEventListener('click', () => {
+      this.claimEarnings();
+    });
+
+    // Test buttons
+    document.getElementById('test-store-file')?.addEventListener('click', () => {
+      this.testStoreFile();
+    });
+
+    document.getElementById('test-retrieve-file')?.addEventListener('click', () => {
+      this.testRetrieveFile();
+    });
+
+    document.getElementById('clear-storage')?.addEventListener('click', () => {
+      this.clearStorage();
+    });
+
+    // Set up hosting manager event handlers
+    this.hostingManager.onQuotaUpdated = (quota) => this.onQuotaUpdated(quota);
+    this.hostingManager.onHostingStatusChanged = (active) => this.onHostingStatusChanged(active);
+    this.hostingManager.onFileStored = (hash, size) => this.onFileStored(hash, size);
+    this.hostingManager.onFileServed = (hash, size) => this.onFileServed(hash, size);
+  }
+
+  async updateUI() {
+    const stats = this.hostingManager.getHostingStats();
+    
+    // Update status
+    document.getElementById('hosting-toggle').checked = stats.hostingActive;
+    document.getElementById('hosting-status-text').textContent = stats.hostingActive ? 'Active' : 'Inactive';
+    
+    // Update quota display
+    document.getElementById('storage-allocated').textContent = `${stats.quota.allocated} MB`;
+    document.getElementById('storage-used').textContent = `${stats.quota.used} MB`;
+    document.getElementById('files-hosted').textContent = stats.filesHosted;
+    document.getElementById('total-earned').textContent = `${stats.earnings.totalEarned.toFixed(3)} CPH`;
+    
+    // Update quota slider
+    document.getElementById('quota-slider').value = stats.quota.allocated || 500;
+    document.getElementById('quota-input').value = stats.quota.allocated || 500;
+    this.updateQuotaPreview(stats.quota.allocated || 500);
+    
+    // Update earnings
+    document.getElementById('pending-payout').textContent = `${stats.earnings.pendingPayouts.toFixed(3)} CPH`;
+    document.getElementById('claim-earnings-btn').disabled = stats.earnings.pendingPayouts < 0.1;
+    
+    // Update performance metrics
+    const uptimeHours = Math.floor(stats.performance.uptime / (1000 * 60 * 60));
+    document.getElementById('uptime-metric').textContent = `${uptimeHours} hours`;
+    document.getElementById('reliability-metric').textContent = `${stats.performance.reliability}%`;
+    
+    const reliabilityFill = document.getElementById('reliability-fill');
+    reliabilityFill.style.width = `${stats.performance.reliability}%`;
+    
+    const uptimeFill = document.getElementById('uptime-fill');
+    const maxUptime = 24 * 7; // 1 week in hours
+    const uptimePercent = Math.min((uptimeHours / maxUptime) * 100, 100);
+    uptimeFill.style.width = `${uptimePercent}%`;
+  }
+
+  updateQuotaPreview(quotaMB) {
+    const stats = this.hostingManager.getHostingStats();
+    const usedMB = stats.quota.used;
+    const availableMB = quotaMB - usedMB;
+    
+    document.getElementById('quota-used-mb').textContent = usedMB;
+    document.getElementById('quota-available-mb').textContent = Math.max(0, availableMB);
+    
+    const usedPercent = quotaMB > 0 ? (usedMB / quotaMB) * 100 : 0;
+    const allocatedPercent = 100;
+    
+    document.getElementById('quota-bar-used').style.width = `${usedPercent}%`;
+    document.getElementById('quota-bar-allocated').style.width = `${allocatedPercent}%`;
+  }
+
+  async toggleHosting(active) {
+    try {
+      if (active) {
+        await this.hostingManager.startHosting();
+        this.showNotification('Hosting started successfully! You are now earning CPH tokens.', 'success');
+      } else {
+        await this.hostingManager.stopHosting();
+        this.showNotification('Hosting stopped. You are no longer earning tokens.', 'info');
+      }
+      
+      await this.updateUI();
+    } catch (error) {
+      console.error('Failed to toggle hosting:', error);
+      this.showNotification('Failed to update hosting status: ' + error.message, 'error');
+      
+      // Revert toggle state
+      document.getElementById('hosting-toggle').checked = !active;
+    }
+  }
+
+  async applyQuota() {
+    const quotaMB = parseInt(document.getElementById('quota-input').value);
+    
+    if (quotaMB < 100) {
+      this.showNotification('Minimum quota is 100MB', 'error');
+      return;
+    }
+    
+    try {
+      await this.hostingManager.setStorageQuota(quotaMB);
+      this.showNotification(`Storage quota set to ${quotaMB}MB`, 'success');
+      await this.updateUI();
+    } catch (error) {
+      console.error('Failed to set quota:', error);
+      this.showNotification('Failed to set quota: ' + error.message, 'error');
+    }
+  }
+
+  async claimEarnings() {
+    try {
+      const stats = this.hostingManager.getHostingStats();
+      
+      if (stats.earnings.pendingPayouts < 0.1) {
+        this.showNotification('Minimum payout is 0.1 CPH', 'error');
+        return;
+      }
+      
+      // In a real implementation, this would interact with the blockchain
+      if (window.cipherWallet?.isInitialized) {
+        // Claim rewards through blockchain
+        const txReceipt = await window.cipherWallet.token.claimHostRewards();
+        this.showNotification(`Earnings claimed! Transaction: ${txReceipt.transactionHash}`, 'success');
+        
+        // Reset pending payouts
+        this.hostingManager.earnings.pendingPayouts = 0;
+        await this.updateUI();
+      } else {
+        this.showNotification('Please connect your wallet to claim earnings', 'error');
+      }
+    } catch (error) {
+      console.error('Failed to claim earnings:', error);
+      this.showNotification('Failed to claim earnings: ' + error.message, 'error');
+    }
+  }
+
+  // Event handlers
+  onQuotaUpdated(quota) {
+    this.updateQuotaPreview(quota.allocated);
+  }
+
+  onHostingStatusChanged(active) {
+    document.getElementById('hosting-status-text').textContent = active ? 'Active' : 'Inactive';
+  }
+
+  onFileStored(hash, sizeMB) {
+    this.addActivityItem('stored', `File stored: ${sizeMB}MB`, hash);
+    this.updateUI();
+  }
+
+  onFileServed(hash, sizeMB) {
+    this.addActivityItem('served', `File served: ${sizeMB}MB`, hash);
+    this.updateUI();
+  }
+
+  addActivityItem(type, description, fileHash) {
+    const activityList = document.getElementById('activity-list');
+    const noActivity = activityList.querySelector('.no-activity');
+    
+    if (noActivity) {
+      noActivity.remove();
+    }
+    
+    const activityItem = document.createElement('div');
+    activityItem.className = 'activity-item';
+    activityItem.innerHTML = `
+      <div class="activity-icon">${type === 'stored' ? '💾' : '⚡'}</div>
+      <div class="activity-content">
+        <div class="activity-description">${description}</div>
+        <div class="activity-time">${new Date().toLocaleTimeString()}</div>
+        <div class="activity-hash">${fileHash.substring(0, 16)}...</div>
+      </div>
+    `;
+    
+    activityList.insertBefore(activityItem, activityList.firstChild);
+    
+    // Keep only last 10 items
+    const items = activityList.querySelectorAll('.activity-item');
+    if (items.length > 10) {
+      items[items.length - 1].remove();
+    }
+  }
+
+  startPeriodicUpdates() {
+    // Update UI every 30 seconds
+    setInterval(() => {
+      if (this.isInitialized) {
+        this.updateUI();
+      }
+    }, 30000);
+  }
+
+  showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `hosting-notification hosting-notification-${type}`;
+    notification.textContent = message;
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+      color: white;
+      padding: 16px 20px;
+      border-radius: 12px;
+      z-index: 10000;
+      max-width: 350px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+      font-weight: 500;
+      backdrop-filter: blur(10px);
+    `;
+    
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+      notification.remove();
+    }, 5000);
+  }
+
+  // Test methods for development
+  async testStoreFile() {
+    try {
+      const testData = new TextEncoder().encode('Test file content for local hosting');
+      const fileHash = 'test-file-hash-' + Date.now();
+      const metadata = {
+        filename: 'test.txt',
+        size: testData.byteLength,
+        uploadedAt: Date.now()
+      };
+
+      await this.hostingManager.storeFile(fileHash, testData, metadata);
+      this.showTestResult('✅ Test file stored successfully', 'success');
+      await this.updateUI();
+    } catch (error) {
+      this.showTestResult('❌ Failed to store test file: ' + error.message, 'error');
+    }
+  }
+
+  async testRetrieveFile() {
+    try {
+      const files = await this.hostingManager.getHostedFiles();
+      if (files.length === 0) {
+        this.showTestResult('⚠️ No files stored to retrieve', 'warning');
+        return;
+      }
+
+      const firstFile = files[0];
+      const retrievedData = await this.hostingManager.retrieveFile(firstFile.hash);
+      const content = new TextDecoder().decode(retrievedData);
+      
+      this.showTestResult(`✅ Retrieved file: ${firstFile.metadata.filename} - Content: ${content}`, 'success');
+    } catch (error) {
+      this.showTestResult('❌ Failed to retrieve file: ' + error.message, 'error');
+    }
+  }
+
+  async clearStorage() {
+    try {
+      await this.hostingManager.clearAllFiles();
+      this.showTestResult('🗑️ All files cleared from local storage', 'success');
+      await this.updateUI();
+    } catch (error) {
+      this.showTestResult('❌ Failed to clear storage: ' + error.message, 'error');
+    }
+  }
+
+  showTestResult(message, type) {
+    const resultsDiv = document.getElementById('test-results');
+    const resultElement = document.createElement('div');
+    resultElement.className = `test-result test-result-${type}`;
+    resultElement.textContent = message;
+    resultElement.style.cssText = `
+      margin: 8px 0;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 0.9rem;
+      background: ${type === 'success' ? '#d4edda' : type === 'error' ? '#f8d7da' : '#fff3cd'};
+      color: ${type === 'success' ? '#155724' : type === 'error' ? '#721c24' : '#856404'};
+      border: 1px solid ${type === 'success' ? '#c3e6cb' : type === 'error' ? '#f5c6cb' : '#ffeaa7'};
+    `;
+    
+    resultsDiv.appendChild(resultElement);
+    
+    // Remove old results (keep last 5)
+    while (resultsDiv.children.length > 5) {
+      resultsDiv.removeChild(resultsDiv.firstChild);
+    }
+  }
+}
+
+// Initialize the local hosting UI
+document.addEventListener('DOMContentLoaded', () => {
+  new LocalHostingUI();
+});
+</script>
