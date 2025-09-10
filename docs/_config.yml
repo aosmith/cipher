@@ -2,8 +2,8 @@
 title: "Cipher - End-to-End Encrypted P2P Social Network"
 description: "A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails. Share posts, images, and media with complete privacy."
 author: "Cipher Team"
-url: "https://your-username.github.io"
-baseurl: "/cipher"
+url: "https://cipher.social"
+baseurl: ""
 
 # Build settings
 markdown: kramdown
@@ -39,7 +39,7 @@ facebook:
 social:
   name: Cipher
   links:
-    - https://github.com/your-username/cipher
+    - https://github.com/aosmith/cipher
 
 # Google Analytics (optional)
 google_analytics: 

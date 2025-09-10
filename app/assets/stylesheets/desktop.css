@@ -1,0 +1,266 @@
+/* Desktop app specific styles */
+
+.desktop-titlebar {
+  display: none;
+}
+
+/* Show titlebar only in desktop environment */
+.desktop-app .desktop-titlebar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 30px;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 0 15px;
+  font-size: 13px;
+  font-weight: 500;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  -webkit-app-region: drag;
+}
+
+.desktop-titlebar-title {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.desktop-titlebar-buttons {
+  display: flex;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-button {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+}
+
+.titlebar-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.titlebar-button:active {
+  background: rgba(255, 255, 255, 0.4);
+  transform: scale(0.95);
+}
+
+/* Adjust app layout for desktop titlebar */
+.desktop-app .app-wrapper {
+  margin-top: 30px;
+}
+
+.desktop-app .app-header {
+  position: sticky;
+  top: 30px;
+}
+
+/* Desktop app specific adjustments */
+.desktop-app {
+  min-height: calc(100vh - 30px);
+}
+
+/* Custom scrollbars for desktop */
+.desktop-app ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.desktop-app ::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.desktop-app ::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+.desktop-app ::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+/* Desktop notification styles */
+.desktop-app .notification {
+  position: fixed;
+  top: 40px;
+  right: 20px;
+  z-index: 9999;
+}
+
+/* Hide web-specific elements in desktop */
+.desktop-app .pwa-install-prompt {
+  display: none !important;
+}
+
+/* Desktop-specific button styles */
+.desktop-app .btn {
+  transition: all 0.2s ease;
+}
+
+.desktop-app .btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Desktop window controls integration */
+.desktop-app .app-header .header-right {
+  padding-right: 100px; /* Make room for window controls */
+}
+
+/* Platform-specific styles */
+
+/* Windows-specific adjustments */
+.desktop-app.platform-windows .desktop-titlebar {
+  height: 32px;
+  background: #0078d4;
+}
+
+.desktop-app.platform-windows .desktop-titlebar-buttons {
+  gap: 0;
+}
+
+.desktop-app.platform-windows .titlebar-button {
+  width: 46px;
+  height: 32px;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+.desktop-app.platform-windows .titlebar-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.desktop-app.platform-windows .titlebar-button:last-child:hover {
+  background: #e81123;
+}
+
+.desktop-app.platform-windows .app-wrapper {
+  margin-top: 32px;
+}
+
+.desktop-app.platform-windows .app-header {
+  top: 32px;
+}
+
+/* Windows scrollbars */
+.desktop-app.platform-windows ::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.desktop-app.platform-windows ::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.desktop-app.platform-windows ::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 0;
+}
+
+/* macOS specific styles */
+.desktop-app.platform-macos .titlebar-button {
+  border-radius: 50%;
+}
+
+.desktop-app.platform-macos .titlebar-button:nth-child(1) {
+  background: #ff5f57;
+}
+
+.desktop-app.platform-macos .titlebar-button:nth-child(2) {
+  background: #ffbd2e;
+}
+
+.desktop-app.platform-macos .titlebar-button:nth-child(3) {
+  background: #28ca42;
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .desktop-app .desktop-titlebar {
+    background: linear-gradient(90deg, #4a5568 0%, #2d3748 100%);
+  }
+  
+  .desktop-app.platform-windows .desktop-titlebar {
+    background: #1f1f1f;
+    color: #ffffff;
+  }
+  
+  .desktop-app ::-webkit-scrollbar-track {
+    background: #2d3748;
+  }
+  
+  .desktop-app ::-webkit-scrollbar-thumb {
+    background: #4a5568;
+  }
+  
+  .desktop-app ::-webkit-scrollbar-thumb:hover {
+    background: #718096;
+  }
+  
+  .desktop-app.platform-windows ::-webkit-scrollbar-track {
+    background: #2d2d2d;
+  }
+  
+  .desktop-app.platform-windows ::-webkit-scrollbar-thumb {
+    background: #555555;
+  }
+}
+
+/* Desktop app animations */
+.desktop-app .app-wrapper {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Desktop-specific responsive adjustments */
+@media (max-width: 768px) {
+  .desktop-app .desktop-titlebar-title {
+    font-size: 12px;
+  }
+  
+  .titlebar-button {
+    width: 16px;
+    height: 16px;
+    font-size: 9px;
+  }
+}
+
+/* Focus styles for keyboard navigation */
+.desktop-app .titlebar-button:focus {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 1px;
+}
+
+/* Disable text selection on titlebar */
+.desktop-titlebar {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}

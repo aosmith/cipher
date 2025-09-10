@@ -1,0 +1,41 @@
+{
+  "name": "cipher-desktop",
+  "version": "1.0.0",
+  "description": "Cipher - End-to-End Encrypted P2P Social Network Desktop App",
+  "main": "index.js",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:debug": "tauri build --debug",
+    "tauri:build:windows": "tauri build --target x86_64-pc-windows-msvc",
+    "tauri:build:macos": "tauri build --target x86_64-apple-darwin",
+    "tauri:build:macos-arm": "tauri build --target aarch64-apple-darwin",
+    "tauri:build:linux": "tauri build --target x86_64-unknown-linux-gnu",
+    "setup:tauri": "npm install @tauri-apps/cli && npm run tauri init",
+    "dev:windows": "bin\\desktop.bat",
+    "dev:unix": "bin/desktop",
+    "build:windows": "scripts\\build-desktop-windows.bat",
+    "build:macos": "scripts/build-desktop.sh"
+  },
+  "keywords": [
+    "cipher",
+    "encryption",
+    "p2p",
+    "social-network",
+    "privacy",
+    "desktop-app",
+    "tauri",
+    "rails"
+  ],
+  "author": "Cipher Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aosmith/cipher.git"
+  },
+  "homepage": "https://cipher.social"
+}

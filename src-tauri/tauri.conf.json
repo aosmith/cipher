@@ -1,0 +1,130 @@
+{
+  "build": {
+    "beforeDevCommand": "rails server -p 3001",
+    "beforeBuildCommand": "rails assets:precompile",
+    "devPath": "http://localhost:3001",
+    "distDir": "../public",
+    "withGlobalTauri": false
+  },
+  "package": {
+    "productName": "Cipher",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      },
+      "window": {
+        "all": false,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "maximize": true,
+        "minimize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "startDragging": true
+      },
+      "notification": {
+        "all": true
+      },
+      "dialog": {
+        "all": false,
+        "ask": true,
+        "confirm": true,
+        "message": true,
+        "open": true,
+        "save": true
+      },
+      "clipboard": {
+        "all": false,
+        "readText": true,
+        "writeText": true
+      },
+      "globalShortcut": {
+        "all": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "SocialNetworking",
+      "copyright": "Copyright © 2025 Cipher Team",
+      "deb": {
+        "depends": []
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "nsis": {
+        "license": "../LICENSE",
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      },
+      "externalBin": [],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.cipher.social",
+      "longDescription": "A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails. Share posts, images, and media with complete privacy.",
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": "",
+        "frameworks": [],
+        "providerShortName": null,
+        "signingIdentity": null,
+        "minimumSystemVersion": "10.13"
+      },
+      "resources": [],
+      "shortDescription": "End-to-End Encrypted P2P Social Network",
+      "targets": "all",
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": "",
+        "wix": {
+          "language": "en-US",
+          "template": "main.wxs"
+        }
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 900,
+        "resizable": true,
+        "title": "Cipher",
+        "width": 1200,
+        "minHeight": 600,
+        "minWidth": 800,
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": false,
+        "decorations": true,
+        "transparent": false,
+        "skipTaskbar": false,
+        "theme": "Auto"
+      }
+    ],
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false,
+      "tooltip": "Cipher - Encrypted Social Network"
+    }
+  }
+}

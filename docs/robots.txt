@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://your-username.github.io/cipher/sitemap.xml
+Sitemap: https://cipher.social/sitemap.xml

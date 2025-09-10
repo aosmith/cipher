@@ -7,6 +7,12 @@
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
+    
+    <!-- Desktop app specific meta tags -->
+    <% if Rails.env.desktop? %>
+      <meta name="desktop-app" content="true">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'self' tauri: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:;">
+    <% end %>
 
     <%= yield :head %>
 
@@ -23,7 +29,19 @@
   </head>
 
   <body>
-    <div class="app-wrapper">
+    <!-- Desktop app specific elements -->
+    <% if Rails.env.desktop? %>
+      <div class="desktop-titlebar" data-tauri-drag-region>
+        <div class="desktop-titlebar-title">Cipher</div>
+        <div class="desktop-titlebar-buttons">
+          <button id="titlebar-minimize" class="titlebar-button">−</button>
+          <button id="titlebar-maximize" class="titlebar-button">□</button>
+          <button id="titlebar-close" class="titlebar-button">×</button>
+        </div>
+      </div>
+    <% end %>
+    
+    <div class="app-wrapper <%= 'desktop-app' if Rails.env.desktop? %>">
       <header class="app-header">
         <div class="header-container">
           <div class="header-left">
@@ -353,5 +371,74 @@
       // Make it available globally for other scripts
       window.CipherWalletManager = CipherWalletManager;
     </script>
+    
+    <!-- Desktop app specific JavaScript -->
+    <% if Rails.env.desktop? %>
+      <script type="module">
+        // Import Tauri API for desktop functionality
+        const { appWindow } = await import('@tauri-apps/api/window');
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        
+        // Get platform information and apply styling
+        const platform = await invoke('get_platform');
+        document.body.classList.add(`platform-${platform}`);
+        
+        // Platform-specific titlebar button symbols
+        const buttonSymbols = {
+          windows: ['−', '□', '×'],
+          macos: ['', '', ''],  // macOS uses colored circles
+          linux: ['−', '□', '×']
+        };
+        
+        const symbols = buttonSymbols[platform] || buttonSymbols.windows;
+        document.getElementById('titlebar-minimize').textContent = symbols[0];
+        document.getElementById('titlebar-maximize').textContent = symbols[1];
+        document.getElementById('titlebar-close').textContent = symbols[2];
+        
+        // Titlebar controls
+        document.getElementById('titlebar-minimize')?.addEventListener('click', () => appWindow.minimize());
+        document.getElementById('titlebar-maximize')?.addEventListener('click', () => appWindow.toggleMaximize());
+        document.getElementById('titlebar-close')?.addEventListener('click', () => appWindow.hide());
+        
+        // Desktop-specific functionality
+        window.desktopApi = {
+          platform: platform,
+          minimize: () => appWindow.minimize(),
+          maximize: () => appWindow.toggleMaximize(),
+          close: () => appWindow.hide(),
+          startRailsServer: () => invoke('start_rails_server'),
+          stopRailsServer: () => invoke('stop_rails_server'),
+          openExternal: (url) => invoke('open_external_url', { url }),
+          getPlatform: () => invoke('get_platform')
+        };
+        
+        // Handle external links in desktop app
+        document.addEventListener('click', (e) => {
+          const link = e.target.closest('a');
+          if (link && link.href && link.href.startsWith('http') && !link.href.includes('localhost')) {
+            e.preventDefault();
+            window.desktopApi.openExternal(link.href);
+          }
+        });
+        
+        // Platform-specific keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+          const cmdOrCtrl = platform === 'macos' ? e.metaKey : e.ctrlKey;
+          
+          if (cmdOrCtrl && e.key === 'w') {
+            e.preventDefault();
+            appWindow.hide();
+          } else if (cmdOrCtrl && e.key === 'm') {
+            e.preventDefault();
+            appWindow.minimize();
+          } else if (cmdOrCtrl && e.key === 'q' && platform !== 'windows') {
+            e.preventDefault();
+            appWindow.close();
+          }
+        });
+        
+        console.log(`Desktop app functionality initialized for ${platform}`);
+      </script>
+    <% end %>
   </body>
 </html>

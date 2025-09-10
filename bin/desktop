@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+
+require "fileutils"
+
+# Path to your Rails app
+APP_ROOT = File.expand_path("..", __dir__)
+
+def system!(*args)
+  system(*args, exception: true)
+end
+
+FileUtils.chdir APP_ROOT do
+  puts "== Starting Cipher Desktop App =="
+  
+  # Check if Tauri is set up
+  unless File.exist?("src-tauri/Cargo.toml")
+    puts "Setting up Tauri..."
+    system! "npm install"
+    system! "npx tauri init --ci"
+  end
+  
+  # Check dependencies
+  puts "Checking dependencies..."
+  system! "bundle check || bundle install"
+  
+  # Setup database if needed
+  unless File.exist?("storage/development.sqlite3")
+    puts "Setting up database..."
+    system! "bin/rails db:prepare RAILS_ENV=desktop"
+  end
+  
+  # Start the desktop app
+  puts "Launching Cipher Desktop App..."
+  system! "npm run tauri:dev"
+end

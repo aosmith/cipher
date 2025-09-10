@@ -109,8 +109,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Update GitHub links with actual repository URL
 function updateGitHubLinks() {
-    // This would be updated with your actual GitHub username/repo
-    const githubUsername = 'your-username';
+    // Updated with correct GitHub username
+    const githubUsername = 'aosmith';
     const repoName = 'cipher';
     const githubUrl = `https://github.com/${githubUsername}/${repoName}`;
     
@@ -122,13 +122,13 @@ function updateGitHubLinks() {
     // Update og:url meta tag
     const ogUrl = document.querySelector('meta[property="og:url"]');
     if (ogUrl) {
-        ogUrl.content = `https://${githubUsername}.github.io/${repoName}/`;
+        ogUrl.content = `https://cipher.social/`;
     }
     
     // Update twitter:url meta tag
     const twitterUrl = document.querySelector('meta[property="twitter:url"]');
     if (twitterUrl) {
-        twitterUrl.content = `https://${githubUsername}.github.io/${repoName}/`;
+        twitterUrl.content = `https://cipher.social/`;
     }
 }
 
@@ -243,4 +243,4 @@ document.addEventListener('keydown', function(e) {
 
 console.log('%c🔐 Cipher - End-to-End Encrypted P2P Social Network', 'color: #667eea; font-size: 20px; font-weight: bold;');
 console.log('%cBuilt with privacy and security in mind 🛡️', 'color: #764ba2; font-size: 14px;');
-console.log('%cInterested in the code? Check out: https://github.com/your-username/cipher', 'color: #333; font-size: 12px;');
+console.log('%cInterested in the code? Check out: https://github.com/aosmith/cipher', 'color: #333; font-size: 12px;');
