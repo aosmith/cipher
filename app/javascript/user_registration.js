@@ -85,18 +85,12 @@ class UserRegistration {
       
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Hide key generation and submit form
-      this.keyGenSection.style.display = 'none';
-      this.submitButton.disabled = false;
+      // Show the private key to the user before proceeding
+      this.showPrivateKey(keyPair.privateKeyBase64);
       
       // Clear password fields to ensure they're never sent to server
       this.passwordField.value = '';
       this.confirmPasswordField.value = '';
-      
-      // Submit the form directly with proper method
-      setTimeout(() => {
-        this.form.submit();
-      }, 100);
       
     } catch (error) {
       console.error('Key generation failed:', error);
@@ -107,6 +101,93 @@ class UserRegistration {
         this.keyGenSection.style.display = 'none';
       }, 3000);
     }
+  }
+
+  showPrivateKey(privateKeyBase64) {
+    // Hide the key generation section
+    this.keyGenSection.style.display = 'none';
+    
+    // Create and show private key display modal
+    const modal = document.createElement('div');
+    modal.className = 'private-key-modal';
+    modal.innerHTML = `
+      <div class="private-key-content">
+        <div class="private-key-header">
+          <h2>🔐 Your Private Key</h2>
+          <p><strong>CRITICAL:</strong> Save this private key securely! This is your only chance to see it.</p>
+        </div>
+        
+        <div class="private-key-display">
+          <div class="key-section">
+            <label>Private Key (Base64):</label>
+            <div class="key-value">
+              <textarea readonly id="private-key-textarea" class="private-key-textarea">${privateKeyBase64}</textarea>
+              <button onclick="copyPrivateKey()" class="btn-copy" title="Copy to clipboard">📋</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="private-key-warning">
+          <h3>⚠️ IMPORTANT SECURITY NOTES:</h3>
+          <ul>
+            <li><strong>Keep this private key safe</strong> - it's the only way to access your account</li>
+            <li><strong>Never share it</strong> with anyone - it gives full access to your encrypted data</li>
+            <li><strong>Store it securely</strong> - consider using a password manager</li>
+            <li><strong>We cannot recover it</strong> - if lost, your account is permanently inaccessible</li>
+          </ul>
+        </div>
+        
+        <div class="private-key-actions">
+          <div class="checkbox-container">
+            <input type="checkbox" id="private-key-saved" class="private-key-checkbox">
+            <label for="private-key-saved">I have securely saved my private key</label>
+          </div>
+          <button id="continue-signup" class="btn btn-primary btn-large" disabled>Continue to Account</button>
+        </div>
+      </div>
+    `;
+    
+    // Add modal to page
+    document.body.appendChild(modal);
+    
+    // Setup modal interactions
+    this.setupPrivateKeyModal(modal);
+  }
+
+  setupPrivateKeyModal(modal) {
+    const checkbox = modal.querySelector('#private-key-saved');
+    const continueButton = modal.querySelector('#continue-signup');
+    const privateKeyTextarea = modal.querySelector('#private-key-textarea');
+    
+    // Enable continue button when checkbox is checked
+    checkbox.addEventListener('change', () => {
+      continueButton.disabled = !checkbox.checked;
+    });
+    
+    // Handle continue button
+    continueButton.addEventListener('click', () => {
+      // Remove modal
+      modal.remove();
+      
+      // Submit the form
+      this.submitButton.disabled = false;
+      setTimeout(() => {
+        this.form.submit();
+      }, 100);
+    });
+    
+    // Global function to copy private key
+    window.copyPrivateKey = () => {
+      privateKeyTextarea.select();
+      navigator.clipboard.writeText(privateKeyTextarea.value).then(() => {
+        const copyButton = modal.querySelector('.btn-copy');
+        const original = copyButton.textContent;
+        copyButton.textContent = '✓';
+        setTimeout(() => {
+          copyButton.textContent = original;
+        }, 1000);
+      });
+    };
   }
 
   async handleFormSubmission(event) {
