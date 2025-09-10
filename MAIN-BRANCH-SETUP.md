@@ -8,18 +8,19 @@ The repository has been set up with `main` as the primary development branch.
 - Pushed `main` branch to origin
 - All latest code including macOS desktop app release is now on `main`
 
-## Manual GitHub Step Required
+## GitHub Default Branch - ✅ COMPLETED
 
-**Action Needed**: Set `main` as the default branch on GitHub:
+**Action Completed**: `main` is now the default branch on GitHub:
 
-1. Go to https://github.com/aosmith/cipher/settings/branches
-2. Change default branch from `cipher` to `main`
-3. Delete the old `cipher` branch after confirming the switch
+1. ✅ Default branch changed from `cipher` to `main` 
+2. ✅ GitHub now serves `main` branch by default for new clones
+3. ⚠️ Optional: Delete the old `cipher` branch when no longer needed
 
 ## Branch Status
 
-- ✅ `main` branch: Contains all latest code and releases
-- ⚠️ `cipher` branch: Can be deleted after default branch change
+- ✅ `main` branch: Default branch with all latest code and releases
+- ✅ Default branch: Successfully changed to `main` on GitHub
+- ⚠️ `cipher` branch: Can be deleted when no longer needed
 - ✅ Repository URLs: No changes needed (still `aosmith/cipher`)
 
 ## For Contributors
