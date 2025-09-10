@@ -154,9 +154,9 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
     login_as(@user)
     other_post = @other_user.posts.create!(content: "Other post")
     
-    assert_raises(ActiveRecord::RecordNotFound) do
-      get edit_post_path(other_post)
-    end
+    get edit_post_path(other_post)
+    assert_redirected_to root_path
+    assert_equal "Access denied", flash[:alert]
   end
 
   test "should update own post with valid content" do
@@ -187,9 +187,9 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
     other_post = @other_user.posts.create!(content: "Other post")
     original_content = other_post.content
     
-    assert_raises(ActiveRecord::RecordNotFound) do
-      patch post_path(other_post), params: { post: { content: "Hacked content" } }
-    end
+    patch post_path(other_post), params: { post: { content: "Hacked content" } }
+    assert_redirected_to root_path
+    assert_equal "Access denied", flash[:alert]
     
     other_post.reload
     assert_equal original_content, other_post.content
@@ -211,10 +211,11 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
     other_post = @other_user.posts.create!(content: "Other post")
     
     assert_no_difference "Post.count" do
-      assert_raises(ActiveRecord::RecordNotFound) do
-        delete post_path(other_post)
-      end
+      delete post_path(other_post)
     end
+    
+    assert_redirected_to root_path
+    assert_equal "Access denied", flash[:alert]
   end
 
   test "should handle multiple file attachments" do

@@ -5,6 +5,14 @@
     <%= link_to "Create New Post", new_post_path, class: "btn btn-primary" %>
   </div>
 
+  <% if @post&.errors&.any? %>
+    <div class="error-messages">
+      <% @post.errors.full_messages.each do |message| %>
+        <div class="error"><%= message %></div>
+      <% end %>
+    </div>
+  <% end %>
+
   <% if @posts.any? %>
     <div class="posts-grid">
       <% @posts.each do |post| %>
