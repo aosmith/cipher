@@ -1,29 +1,32 @@
-# Cipher Desktop v0.5.0 - macOS
+# Cipher Desktop v0.5.6 - macOS
 
 ## What's New
 
-🚀 **Cross-Platform Desktop Support**
-- Added native macOS desktop application using Tauri
-- Universal binary supporting both Intel and Apple Silicon
-- Native macOS window controls and styling
-- Integrated Rails backend with desktop WebView frontend
+✅ **Enhanced User Registration**
+- Simplified user registration with server-side key generation
+- Improved form validation and error handling
+- Added comprehensive browser tests with Selenium
+- Better password security validation
+
+🌐 **WebRTC P2P Improvements**
+- Updated with Open Relay Project free STUN/TURN servers
+- Improved peer-to-peer networking reliability
+- Better connection stability for distributed social features
 
 🔧 **Technical Improvements**
-- Rails 8.0.2 with desktop environment configuration
-- Automated build and release pipeline
-- macOS-specific optimizations and integrations
+- Updated to v0.5.6 with latest improvements
+- Fixed model validations and test coverage
+- Enhanced browser test suite for registration workflow
+- Updated WebRTC configuration for better connectivity
 
 ## Installation Requirements
 
 - macOS 10.13 or later
-- ~15MB free disk space
-- Apple Silicon or Intel Mac
-
-## Known Issues
-
-- Build currently blocked by Rust dependency compatibility (see BUILD-ISSUES.md)
-- Actual binary will be available when build issues are resolved
+- ~4MB free disk space
+- Apple Silicon Mac (Intel version available on request)
 
 ## Previous Versions
 
-See archive/ directory for older releases.
+- v0.5.5: Previous WebRTC updates
+- v0.5.0: Initial macOS desktop release
+- See archive/ directory for older releases.
