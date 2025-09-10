@@ -20,9 +20,11 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
   test "should create user with valid params" do
     user_params = {
       user: {
-        username: "newuser"
+        username: "newuser",
+        display_name: "New User"
       },
-      public_key: "new_public_key_12345"
+      password: "securepassword123",
+      confirm_password: "securepassword123"
     }
     
     assert_difference "User.count", 1 do
@@ -30,5 +32,10 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     end
     
     assert_redirected_to dashboard_users_path
+    
+    # Verify the user was created with a generated public key
+    user = User.find_by(username: "newuser")
+    assert_not_nil user
+    assert_not_empty user.public_key
   end
 end

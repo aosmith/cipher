@@ -18,12 +18,45 @@ class UsersController < ApplicationController
   def create
     @user = User.new(user_params)
     
-    if @user.save
-      # Set this user as the current session user (simple approach)
+    # Validate password fields
+    password = params[:password]
+    confirm_password = params[:confirm_password]
+    
+    if password.blank? || confirm_password.blank?
+      @user.errors.add(:base, "Password and confirmation are required")
+    elsif password.length < 8
+      @user.errors.add(:base, "Password must be at least 8 characters long")
+    elsif password != confirm_password
+      @user.errors.add(:base, "Password and confirmation do not match")
+    end
+    
+    # Generate cryptographic keys server-side if validation passes
+    if @user.errors.empty?
+      begin
+        # Generate a random 32-byte key pair using RbNaCl
+        private_key = RbNaCl::PrivateKey.generate
+        public_key = private_key.public_key
+        
+        # Store ONLY the public key (private key is never stored or transmitted)
+        @user.public_key = Base64.encode64(public_key.to_bytes).strip
+        
+        Rails.logger.info "Generated key pair for user: #{@user.username}"
+        Rails.logger.info "Public key length: #{@user.public_key.length} characters"
+        # NOTE: Private key is generated but immediately discarded for security
+        
+      rescue => e
+        Rails.logger.error "Key generation failed: #{e.message}"
+        @user.errors.add(:base, "Key generation failed. Please try again.")
+      end
+    end
+    
+    if @user.errors.empty? && @user.save
+      # Set this user as the current session user
       session[:user_id] = @user.id
       redirect_to dashboard_users_path, notice: 'Welcome to Cipher! Your account has been created successfully.'
     else
-      render :new, status: :unprocessable_entity
+      Rails.logger.error "User creation failed: #{@user.errors.full_messages}"
+      render :new, status: :unprocessable_content
     end
   end
 
@@ -70,9 +103,7 @@ class UsersController < ApplicationController
   end
 
   def user_params
-    params.require(:user).permit(:username, :display_name).merge(
-      public_key: params[:public_key]
-    )
+    params.require(:user).permit(:username, :display_name)
   end
 
   def current_user_session
