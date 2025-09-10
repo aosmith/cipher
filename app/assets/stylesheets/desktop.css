@@ -105,6 +105,10 @@
 
 /* Mobile responsive behavior for web apps */
 @media (max-width: 768px) {
+  .mobile-header-container {
+    display: flex !important;
+  }
+  
   .web-app .mobile-header-container {
     display: flex;
   }
@@ -493,10 +497,18 @@
   padding: 20px 16px;
 }
 
+/* Hide mobile header by default (for web browsers) */
 .mobile-header-container {
-  display: flex;
+  display: none;
   justify-content: space-between;
   align-items: center;
+}
+
+/* Show mobile header on mobile apps */
+.mobile-app .mobile-header-container,
+.platform-ios .mobile-header-container,
+.platform-android .mobile-header-container {
+  display: flex;
 }
 
 .mobile-logo {
