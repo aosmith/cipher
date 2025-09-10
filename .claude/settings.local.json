@@ -19,7 +19,10 @@
       "Bash(git add:*)",
       "Bash(git push:*)",
       "Bash(./scripts/update-release-links.sh:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(./scripts/prepare-release.sh:*)",
+      "Bash(npx tauri:*)",
+      "Bash(RAILS_ENV=production rails assets:precompile)"
     ],
     "deny": [],
     "ask": []

@@ -58,13 +58,6 @@
       "appimage": {
         "bundleMediaFramework": true
       },
-      "nsis": {
-        "license": "../LICENSE",
-        "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine",
-        "languages": ["English"],
-        "displayLanguageSelector": false
-      },
       "externalBin": [],
       "icon": [
         "icons/32x32.png",
@@ -117,14 +110,8 @@
         "decorations": true,
         "transparent": false,
         "skipTaskbar": false,
-        "theme": "Auto"
+        "theme": null
       }
-    ],
-    "systemTray": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
-      "menuOnLeftClick": false,
-      "tooltip": "Cipher - Encrypted Social Network"
-    }
+    ]
   }
 }

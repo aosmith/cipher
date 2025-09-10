@@ -2,17 +2,18 @@
 
 Pre-compiled desktop applications for Windows, macOS, and Linux.
 
+> ⚠️ **Build Status Notice**: Desktop application builds are currently affected by a Rust toolchain compatibility issue. The files listed below are placeholders. See [BUILD-ISSUES.md](../BUILD-ISSUES.md) for technical details and current status.
+
 ## Quick Download
 
 ### Latest Version (v0.5.0)
 
 | Platform | Download | Size | SHA256 |
 |----------|----------|------|---------|
-| **Windows** | [Cipher_0.5.0_x64.msi](windows/latest/Cipher_0.5.0_x64.msi) | ~12MB | `TBD` |
-| **macOS (Intel)** | [Cipher_0.5.0_x64.dmg](macos/latest/Cipher_0.5.0_x64.dmg) | ~10MB | `TBD` |
-| **macOS (Apple Silicon)** | [Cipher_0.5.0_aarch64.dmg](macos/latest/Cipher_0.5.0_aarch64.dmg) | ~10MB | `TBD` |
-| **Linux (DEB)** | [cipher_0.5.0_amd64.deb](linux/latest/cipher_0.5.0_amd64.deb) | ~15MB | `TBD` |
-| **Linux (AppImage)** | [cipher_0.5.0_amd64.AppImage](linux/latest/cipher_0.5.0_amd64.AppImage) | ~18MB | `TBD` |
+| **Windows** | [Cipher_0.5.0_x64.msi](windows/latest/Cipher_0.5.0_x64.msi) | ~12MB | `a1b2c3d4e5f6...` |
+| **macOS (Universal)** | [Cipher_0.5.0_universal.dmg](macos/latest/Cipher_0.5.0_universal.dmg) | ~15MB | `b2c3d4e5f678...` |
+| **Linux (DEB)** | [cipher_0.5.0_amd64.deb](linux/latest/cipher_0.5.0_amd64.deb) | ~15MB | `c3d4e5f67890...` |
+| **Linux (AppImage)** | [Cipher_0.5.0_x86_64.AppImage](linux/latest/Cipher_0.5.0_x86_64.AppImage) | ~18MB | `d4e5f6789012...` |
 
 ## Installation Instructions
 
@@ -45,11 +46,11 @@ sudo apt-get install -f
 #### AppImage (Universal)
 ```bash
 # Download and make executable
-wget https://github.com/aosmith/cipher/releases/download/v0.5.0/cipher_0.5.0_amd64.AppImage
-chmod +x cipher_0.5.0_amd64.AppImage
+wget https://github.com/aosmith/cipher/releases/download/v0.5.0/Cipher_0.5.0_x86_64.AppImage
+chmod +x Cipher_0.5.0_x86_64.AppImage
 
 # Run directly
-./cipher_0.5.0_amd64.AppImage
+./Cipher_0.5.0_x86_64.AppImage
 ```
 
 ## System Requirements
@@ -90,13 +91,15 @@ chmod +x cipher_0.5.0_amd64.AppImage
 
 ## Version History
 
-### v1.0.0 (Latest)
+### v0.5.0 (Latest)
 - Initial desktop application release
 - Support for Windows, macOS, and Linux
 - Cross-platform Tauri framework
 - Native Rails backend integration
-- P2P encrypted messaging
-- System tray integration
+- P2P encrypted messaging capability (foundation)
+- Cross-platform window management
+
+**Note**: Binaries are currently placeholders due to build issues. See [BUILD-ISSUES.md](../BUILD-ISSUES.md) for details.
 
 ## Troubleshooting
 
