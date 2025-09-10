@@ -121,6 +121,7 @@
 .nav-links {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .nav-link {
@@ -130,6 +131,16 @@
   padding: 8px 16px;
   border-radius: 8px;
   transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+/* Navigation text responsive behavior */
+.nav-text-short {
+  display: none;
+}
+
+.nav-text-full {
+  display: inline;
 }
 
 .nav-link:hover {
@@ -301,12 +312,21 @@
   }
   
   .nav-links {
-    gap: 8px;
+    gap: 6px;
   }
   
   .nav-link {
-    padding: 6px 12px;
-    font-size: 0.9rem;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+  }
+  
+  /* Switch to short navigation text on smaller screens */
+  .nav-text-full {
+    display: none;
+  }
+  
+  .nav-text-short {
+    display: inline;
   }
   
   .footer-content {
