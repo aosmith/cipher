@@ -69,7 +69,8 @@
       "Bash(sudo ln:*)",
       "Bash(export:*)",
       "Bash(java:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
