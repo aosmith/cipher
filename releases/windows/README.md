@@ -4,8 +4,8 @@ Windows desktop application releases for Cipher.
 
 ## Latest Release
 
-- **Version**: v0.5.7
-- **File**: `Cipher_0.5.7_x64.msi`
+- **Version**: v0.5.9
+- **File**: `Cipher_0.5.9_x64.msi`
 - **Size**: ~12MB
 - **Requirements**: Windows 10+ (64-bit)
 
@@ -21,7 +21,7 @@ Windows desktop application releases for Cipher.
 ```
 windows/
 ├── latest/                 # Current release
-│   ├── Cipher_0.5.7_x64.msi
+│   ├── Cipher_0.5.9_x64.msi
 │   ├── checksums.txt
 │   └── CHANGELOG.md
 ├── archive/               # Previous versions

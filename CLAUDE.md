@@ -149,3 +149,5 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize if you start a server also stop it
 - use `bin/reload` to restart the server after CSS/layout changes
 - memorize clear the cache after changes.
+- memorize use stylesheets instead of inline styles.
+- memorize compile any binaries we can and push tags to git for any new version.
