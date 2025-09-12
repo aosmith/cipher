@@ -1,4 +1,14 @@
 Rails.application.routes.draw do
+  # Messages routes
+  resources :messages, only: [:index, :create, :destroy, :show] do
+    collection do
+      get 'with/:user_id', to: 'messages#show', as: :conversation_with
+    end
+  end
+  
+  # Shortcut route for messaging a specific user
+  get 'messages/:user_id', to: 'messages#show', as: :user_message
+  
   resources :users, only: [:index, :show, :create, :new] do
     collection do
       get :import_keys
@@ -18,6 +28,11 @@ Rails.application.routes.draw do
   
   get 'feed', to: 'feed#index'
   
+  # Email verification routes
+  get 'email_verification', to: 'email_verifications#show'
+  patch 'email_verification', to: 'email_verifications#verify'
+  post 'email_verification/resend', to: 'email_verifications#resend'
+  
   # WebSocket mount for Action Cable
   mount ActionCable.server => '/cable'
   
@@ -29,15 +44,29 @@ Rails.application.routes.draw do
       post 'verify_identity', to: 'auth#verify_identity'
       post 'login', to: 'auth#login'
       
+      # Friend-based sync endpoints
+      get 'sync_data', to: 'sync#sync_data', as: :sync_data
+      post 'accept_sync', to: 'sync#accept_sync', as: :accept_sync
+      get 'users/:user_id/friends', to: 'sync#friends'
+      get 'users/:user_id/posts/for_sync', to: 'sync#posts_for_sync' 
+      get 'posts/my_posts_for_friends', to: 'sync#my_posts_for_friends'
+      get 'posts/:id/sync_data', to: 'sync#post_sync_data'
+      post 'posts/sync_store', to: 'sync#sync_store'
+      post 'posts/bulk', to: 'posts#bulk_create'
+      get 'content/:content_hash/exists', to: 'sync#content_exists'
+      get 'sync/stats', to: 'sync#sync_stats'
+      
       # Friends management
       resources :friends, only: [:index, :show, :create, :update, :destroy] do
         collection do
           post :send_request
           post :respond_to_request
+          get :search_by_public_key
         end
       end
       
       post 'users/by_public_key', to: 'users#by_public_key'
+      get 'users/current_with_private_key', to: 'users#current_user_with_private_key'
       
       # Blockchain endpoints
       get 'blockchain/config', to: 'blockchain#config'

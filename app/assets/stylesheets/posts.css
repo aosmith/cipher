@@ -15,7 +15,7 @@
 .file-upload-area {
   border: 2px dashed #ddd;
   border-radius: 12px;
-  padding: 20px;
+  padding: var(--content-spacing-md);
   text-align: center;
   background: #fafafa;
   transition: all 0.3s ease;
@@ -29,23 +29,25 @@
 }
 
 .file-upload-prompt {
-  padding: 20px;
+  padding: var(--content-spacing-md);
 }
 
 .upload-icon {
   font-size: 3em;
-  margin-bottom: 10px;
+  margin-bottom: var(--content-spacing-sm);
   opacity: 0.6;
 }
 
 .file-upload-prompt p {
-  margin: 8px 0;
+  margin: var(--content-spacing-xs) 0;
   color: #666;
+  line-height: var(--line-height-normal);
 }
 
 .upload-hint {
   font-size: 0.9em;
   opacity: 0.8;
+  line-height: var(--line-height-normal);
 }
 
 .file-input {
@@ -59,17 +61,17 @@
 }
 
 .file-previews {
-  margin-top: 20px;
+  margin-top: var(--content-spacing-md);
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 15px;
+  gap: var(--content-spacing-sm);
 }
 
 .file-preview {
   position: relative;
   border: 1px solid #ddd;
   border-radius: 8px;
-  padding: 10px;
+  padding: var(--content-spacing-sm);
   background: white;
   text-align: center;
 }
@@ -83,15 +85,17 @@
 }
 
 .file-preview-info {
-  margin-top: 8px;
+  margin-top: var(--content-spacing-xs);
   font-size: 0.8em;
   color: #666;
+  line-height: var(--line-height-normal);
 }
 
 .file-preview-name {
   font-weight: 500;
-  margin-bottom: 4px;
+  margin-bottom: var(--content-spacing-xs);
   word-break: break-word;
+  line-height: var(--line-height-normal);
 }
 
 .file-preview-size {

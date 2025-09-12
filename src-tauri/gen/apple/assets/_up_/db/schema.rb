@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2025_09_12_100848) do
+ActiveRecord::Schema[8.0].define(version: 2025_09_12_183237) do
   create_table "attachment_shares", force: :cascade do |t|
     t.integer "attachment_id", null: false
     t.integer "user_id", null: false
@@ -59,6 +59,21 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_100848) do
     t.index ["status"], name: "index_friendships_on_status"
   end
 
+  create_table "messages", force: :cascade do |t|
+    t.integer "sender_id", null: false
+    t.integer "recipient_id", null: false
+    t.text "content"
+    t.text "encrypted_content"
+    t.datetime "read_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["created_at"], name: "index_messages_on_created_at"
+    t.index ["recipient_id", "read_at"], name: "index_messages_on_recipient_id_and_read_at"
+    t.index ["recipient_id"], name: "index_messages_on_recipient_id"
+    t.index ["sender_id", "recipient_id", "created_at"], name: "index_messages_on_sender_id_and_recipient_id_and_created_at"
+    t.index ["sender_id"], name: "index_messages_on_sender_id"
+  end
+
   create_table "peers", force: :cascade do |t|
     t.integer "user_id", null: false
     t.string "address"
@@ -77,6 +92,16 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_100848) do
     t.datetime "timestamp"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.integer "original_user_id"
+    t.integer "synced_from_user_id"
+    t.boolean "is_synced", default: false
+    t.datetime "synced_at"
+    t.string "content_hash"
+    t.index ["content_hash"], name: "index_posts_on_content_hash"
+    t.index ["is_synced"], name: "index_posts_on_is_synced"
+    t.index ["original_user_id"], name: "index_posts_on_original_user_id"
+    t.index ["synced_at"], name: "index_posts_on_synced_at"
+    t.index ["synced_from_user_id"], name: "index_posts_on_synced_from_user_id"
     t.index ["user_id"], name: "index_posts_on_user_id"
   end
 
@@ -100,6 +125,14 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_100848) do
     t.string "display_name"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.text "private_key"
+    t.string "email"
+    t.datetime "email_verified_at"
+    t.string "verification_code"
+    t.datetime "verification_code_expires_at"
+    t.integer "content_size_limit", default: 10485760
+    t.index ["email"], name: "index_users_on_email", unique: true
+    t.index ["verification_code"], name: "index_users_on_verification_code"
   end
 
   add_foreign_key "attachment_shares", "attachments"
@@ -109,8 +142,12 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_100848) do
   add_foreign_key "comments", "users"
   add_foreign_key "friendships", "users", column: "addressee_id"
   add_foreign_key "friendships", "users", column: "requester_id"
+  add_foreign_key "messages", "users", column: "recipient_id"
+  add_foreign_key "messages", "users", column: "sender_id"
   add_foreign_key "peers", "users"
   add_foreign_key "posts", "users"
+  add_foreign_key "posts", "users", column: "original_user_id"
+  add_foreign_key "posts", "users", column: "synced_from_user_id"
   add_foreign_key "sync_messages", "peers"
   add_foreign_key "sync_messages", "users"
 end

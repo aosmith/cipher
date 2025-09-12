@@ -27,8 +27,21 @@ class PostsController < ApplicationController
     if @post.save
       redirect_to root_path, notice: 'Post created successfully!'
     else
-      @posts = current_user_session.posts.includes(:attachments).order(created_at: :desc)
-      render :index, status: :unprocessable_content
+      # Check if it's a spam prevention error and handle with redirect
+      spam_errors = @post.errors.full_messages.select do |msg|
+        msg.include?('Rate limit exceeded: Maximum') || 
+        msg.include?('Daily limit exceeded: Maximum') || 
+        msg.include?('Duplicate content detected') ||
+        msg.include?('Malicious content detected') ||
+        msg.include?('New users must have at least one friend to post')
+      end
+      
+      if spam_errors.any?
+        redirect_to root_path, alert: "Please try again later. #{spam_errors.first}"
+      else
+        @posts = current_user_session.posts.includes(:attachments).order(created_at: :desc)
+        render :index, status: :unprocessable_content
+      end
     end
   end
 

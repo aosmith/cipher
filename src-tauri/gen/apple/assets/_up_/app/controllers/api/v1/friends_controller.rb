@@ -7,9 +7,40 @@ class Api::V1::FriendsController < ApplicationController
     render json: friends
   end
 
+  def search_by_public_key
+    public_key = params[:public_key]
+    
+    if public_key.blank?
+      return render json: { error: 'public_key required' }, status: 400
+    end
+    
+    user = User.find_by(public_key: public_key)
+    
+    if user
+      # Only return public information, never private keys
+      render json: {
+        id: user.id,
+        username: user.username,
+        display_name: user.display_name,
+        public_key: user.public_key,
+        created_at: user.created_at,
+        is_friend: current_user.friends_with?(user),
+        pending_request: current_user.sent_friendships.pending.exists?(addressee: user)
+      }
+    else
+      render json: { error: 'User not found' }, status: 404
+    end
+  end
+
   def send_request
-    username = params[:username]
-    target_user = User.find_by(username: username)
+    # Accept either username or public_key
+    if params[:username].present?
+      target_user = User.find_by(username: params[:username])
+    elsif params[:public_key].present?
+      target_user = User.find_by(public_key: params[:public_key])
+    else
+      return render json: { error: 'Username or public key required' }, status: 400
+    end
     
     if target_user.nil?
       return render json: { error: 'User not found' }, status: 404

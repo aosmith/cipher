@@ -1,8 +1,13 @@
 <div class="container">
   <% if @current_user %>
     <div class="dashboard-welcome">
-      <h2>Your Cipher Dashboard</h2>
-      <p>Manage your encrypted communications and network connections.</p>
+      <div class="welcome-header">
+        <h1>Cipher Social Network</h1>
+        <h2>Your Cipher Dashboard</h2>
+      </div>
+      <div class="welcome-description">
+        <p>Manage your encrypted communications and network connections.</p>
+      </div>
     </div>
     <section class="status-section">
       <h2>🌐 Network Status</h2>
@@ -17,9 +22,26 @@
 
     <section class="status-section">
       <h2>💬 Messages & Posts</h2>
-      <div class="message-actions">
-        <%= link_to "📝 Create Post", new_post_path, class: "btn btn-primary" %>
-        <%= link_to "📋 View All Posts", posts_path, class: "btn btn-secondary" %>
+      <div class="quick-post-form">
+        <%= form_with model: Post.new, url: posts_path, multipart: true, class: "inline-post-form" do |form| %>
+          <div class="form-group">
+            <%= form.text_area :content, placeholder: "What's on your mind?", rows: 3, class: "form-control" %>
+          </div>
+          <div class="form-group">
+            <label for="attachments">Attachments</label>
+            <input type="file" 
+                   id="attachments"
+                   name="attachments[]" 
+                   class="file-input-visible" 
+                   multiple 
+                   accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
+                   style="display: block; width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+          <div class="form-buttons">
+            <%= form.submit "📤 Post Securely", class: "btn btn-primary" %>
+            <%= link_to "📋 View All Posts", posts_path, class: "btn btn-secondary" %>
+          </div>
+        <% end %>
       </div>
       
       <div id="message-list" class="message-list">
@@ -336,8 +358,8 @@
 <style>
 .message-actions {
   display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: var(--content-spacing-sm);
+  margin-bottom: var(--content-spacing-md);
   flex-wrap: wrap;
 }
 
@@ -345,23 +367,82 @@
   font-size: 0.95em;
 }
 
+.form-buttons {
+  display: flex;
+  gap: var(--content-spacing-sm);
+  margin-top: var(--content-spacing-sm);
+  flex-wrap: wrap;
+}
+
+.form-buttons .btn {
+  font-size: 0.95em;
+}
+
+/* Dashboard Welcome Section */
+.dashboard-welcome {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: var(--content-spacing-xl);
+  margin-bottom: var(--section-spacing);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.welcome-header {
+  text-align: center;
+  margin-bottom: var(--content-spacing-lg);
+}
+
+.welcome-header h1 {
+  color: #2d3748;
+  font-size: 2.2em;
+  font-weight: 700;
+  margin: 0 0 var(--content-spacing-sm) 0;
+  letter-spacing: -0.5px;
+  line-height: var(--line-height-tight);
+}
+
+.welcome-header h2 {
+  color: #4a5568;
+  font-size: 1.4em;
+  font-weight: 500;
+  margin: 0;
+  line-height: var(--line-height-tight);
+}
+
+.welcome-description {
+  text-align: center;
+  margin-top: var(--content-spacing-md);
+}
+
+.welcome-description p {
+  color: #718096;
+  font-size: 1.1em;
+  line-height: var(--line-height-normal);
+  margin: 0;
+  max-width: 500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* Message header layout */
 .message-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 15px;
+  margin-bottom: var(--content-spacing-sm);
 }
 
 .message-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--content-spacing-xs);
 }
 
 .message-header .message-actions {
   margin-bottom: 0;
-  gap: 8px;
+  gap: var(--content-spacing-xs);
 }
 
 .btn-delete {
@@ -389,11 +470,20 @@
   .message-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
+    gap: var(--content-spacing-sm);
   }
   
   .message-header .message-actions {
     align-self: flex-end;
+  }
+  
+  .dashboard-welcome {
+    padding: var(--content-spacing-md);
+    margin-bottom: var(--content-spacing-lg);
+  }
+  
+  .welcome-header {
+    margin-bottom: var(--content-spacing-md);
   }
 }
 </style>

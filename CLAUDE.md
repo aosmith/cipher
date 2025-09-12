@@ -279,6 +279,7 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize if you start a server also stop it
 - use `bin/reload` to restart the server after CSS/layout changes
 - memorize clear the cache after changes.
+- memorize when the user says "compile everything" or "build all apps" they ALWAYS mean desktop AND mobile platforms (iOS and Android).
 - NEVER remove or comment out tests instead of fixing them or the underlying problem - always fix the root cause
 - memorize use stylesheets instead of inline styles.
 - memorize compile any binaries we can and push tags to git for any new version.
@@ -291,3 +292,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize if I say vX.X.X I mean semver, omit the v
 - memorize Removing a broken test is not fixing it
 - memorize removing failing tests is not fixing them.  Fix the problem not the test unless it is directly asked for.
+- memorize when I say compile everything I mean all platforms you can

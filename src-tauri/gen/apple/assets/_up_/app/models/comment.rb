@@ -12,6 +12,6 @@ class Comment < ApplicationRecord
   private
 
   def set_timestamp
-    self.timestamp = Time.current
+    self.timestamp = Time.current unless timestamp.present?
   end
 end

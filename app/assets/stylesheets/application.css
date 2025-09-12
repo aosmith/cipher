@@ -29,6 +29,70 @@
   background: #9ca3af;
 }
 
+/* CSS Custom Properties for Consistent Spacing */
+:root {
+  /* Content Spacing Variables */
+  --content-spacing-xs: 8px;
+  --content-spacing-sm: 16px;
+  --content-spacing-md: 24px;
+  --content-spacing-lg: 32px;
+  --content-spacing-xl: 48px;
+  --content-spacing-2xl: 64px;
+  
+  /* Text Line Heights */
+  --line-height-tight: 1.4;
+  --line-height-normal: 1.6;
+  --line-height-relaxed: 1.8;
+  
+  /* Section Spacing */
+  --section-spacing: var(--content-spacing-xl);
+  --paragraph-spacing: var(--content-spacing-sm);
+  --heading-spacing: var(--content-spacing-md);
+}
+
+/* Global Content Spacing Standards */
+h1, h2, h3, h4, h5, h6 {
+  margin-bottom: var(--heading-spacing);
+  line-height: var(--line-height-tight);
+}
+
+p {
+  margin-bottom: var(--paragraph-spacing);
+  line-height: var(--line-height-normal);
+}
+
+/* Section Spacing */
+section {
+  margin-bottom: var(--section-spacing);
+}
+
+/* List Spacing */
+ul, ol {
+  margin-bottom: var(--paragraph-spacing);
+}
+
+ul li, ol li {
+  margin-bottom: var(--content-spacing-xs);
+  line-height: var(--line-height-normal);
+}
+
+/* Form Element Spacing */
+.form-group {
+  margin-bottom: var(--content-spacing-md);
+}
+
+/* Card-like Content Spacing */
+.message-item, .post, .card {
+  padding: var(--content-spacing-md);
+  margin-bottom: var(--content-spacing-md);
+}
+
+/* Button Group Spacing */
+.form-buttons, .message-actions {
+  gap: var(--content-spacing-sm);
+  margin-top: var(--content-spacing-md);
+}
+
 /* Smooth animations */
 * {
   scroll-behavior: smooth;
