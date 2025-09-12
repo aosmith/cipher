@@ -4,7 +4,7 @@ macOS desktop application releases for Cipher.
 
 ## Latest Release
 
-- **Version**: vv0.6.1v0.6.1
+- **Version**: vv0.6.2v0.6.1v0.6.1
 - **Intel**: `Cipher_v0.6.1_x64.dmg` (~10MB)
 - **Apple Silicon**: `Cipher_v0.6.1_aarch64.dmg` (~10MB)
 - **Requirements**: macOS 10.13+ (High Sierra)
