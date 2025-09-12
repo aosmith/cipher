@@ -161,9 +161,9 @@ After building, you'll find platform-specific installers:
 ```
 src-tauri/target/release/bundle/
 ├── msi/
-│   └── Cipher_0.5.10_x64_en-US.msi
+│   └── Cipher_0.6.0_x64_en-US.msi
 └── nsis/
-    └── Cipher_0.5.10_x64-setup.exe
+    └── Cipher_0.6.0_x64-setup.exe
 ```
 
 ### macOS
@@ -172,16 +172,16 @@ src-tauri/target/release/bundle/
 ├── macos/
 │   └── Cipher.app
 └── dmg/
-    └── Cipher_0.5.10_x64.dmg
+    └── Cipher_0.6.0_x64.dmg
 ```
 
 ### Linux
 ```
 src-tauri/target/release/bundle/
 ├── deb/
-│   └── cipher_0.5.10_amd64.deb
+│   └── cipher_0.6.0_amd64.deb
 └── appimage/
-    └── cipher_0.5.10_amd64.AppImage
+    └── cipher_0.6.0_amd64.AppImage
 ```
 
 ## Code Signing & Distribution
@@ -220,10 +220,10 @@ xcrun notarytool submit Cipher.dmg --apple-id YOUR_ID --password APP_PASSWORD --
 ### Linux Signing
 ```bash
 # Sign .deb package
-debsign -k YOUR_GPG_KEY cipher_0.5.10_amd64.deb
+debsign -k YOUR_GPG_KEY cipher_0.6.0_amd64.deb
 
 # Sign .AppImage  
-gpg --detach-sign cipher_0.5.10_amd64.AppImage
+gpg --detach-sign cipher_0.6.0_amd64.AppImage
 ```
 
 ## Platform UI Differences

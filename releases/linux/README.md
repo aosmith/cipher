@@ -4,9 +4,9 @@ Linux desktop application releases for Cipher.
 
 ## Latest Release
 
-- **Version**: v0.5.10
-- **DEB Package**: `cipher_0.5.10_amd64.deb` (~15MB)
-- **AppImage**: `cipher_0.5.10_amd64.AppImage` (~18MB)
+- **Version**: v0.6.0
+- **DEB Package**: `cipher_0.6.0_amd64.deb` (~15MB)
+- **AppImage**: `cipher_0.6.0_amd64.AppImage` (~18MB)
 - **Requirements**: Ubuntu 20.04+ / Debian 11+ or equivalent
 
 ## Installation Options
@@ -15,10 +15,10 @@ Linux desktop application releases for Cipher.
 
 ```bash
 # Download
-wget https://github.com/aosmith/cipher/releases/download/v0.5.10/cipher_0.5.10_amd64.deb
+wget https://github.com/aosmith/cipher/releases/download/v0.6.0/cipher_0.6.0_amd64.deb
 
 # Install
-sudo dpkg -i cipher_0.5.10_amd64.deb
+sudo dpkg -i cipher_0.6.0_amd64.deb
 
 # Fix dependencies if needed
 sudo apt-get install -f
@@ -28,13 +28,13 @@ sudo apt-get install -f
 
 ```bash
 # Download
-wget https://github.com/aosmith/cipher/releases/download/v0.5.10/cipher_0.5.10_amd64.AppImage
+wget https://github.com/aosmith/cipher/releases/download/v0.6.0/cipher_0.6.0_amd64.AppImage
 
 # Make executable
-chmod +x cipher_0.5.10_amd64.AppImage
+chmod +x cipher_0.6.0_amd64.AppImage
 
 # Run
-./cipher_0.5.10_amd64.AppImage
+./cipher_0.6.0_amd64.AppImage
 ```
 
 ## File Structure
@@ -42,8 +42,8 @@ chmod +x cipher_0.5.10_amd64.AppImage
 ```
 linux/
 ├── latest/                        # Current release
-│   ├── cipher_0.5.10_amd64.deb        # DEB package
-│   ├── cipher_0.5.10_amd64.AppImage   # AppImage
+│   ├── cipher_0.6.0_amd64.deb        # DEB package
+│   ├── cipher_0.6.0_amd64.AppImage   # AppImage
 │   ├── checksums.txt
 │   └── CHANGELOG.md
 ├── archive/                      # Previous versions
@@ -92,7 +92,7 @@ sudo pacman -S webkit2gtk gtk3 libappindicator-gtk3
 **Missing dependencies:**
 ```bash
 # Check missing libraries
-ldd ./cipher_0.5.10_amd64.AppImage
+ldd ./cipher_0.6.0_amd64.AppImage
 
 # Install WebKit2GTK
 sudo apt install libwebkit2gtk-4.0-37

@@ -6,14 +6,14 @@ Pre-compiled desktop applications for Windows, macOS, and Linux.
 
 ## Quick Download
 
-### Latest Version (v0.5.10)
+### Latest Version (v0.6.0)
 
 | Platform | Download | Size | SHA256 |
 |----------|----------|------|---------|
-| **Windows** | [Cipher_0.5.10_x64.msi](windows/latest/Cipher_0.5.10_x64.msi) | ~12MB | `placeholder` |
-| **macOS (ARM64)** | [Cipher_0.5.10_aarch64.dmg](macos/latest/Cipher_0.5.10_aarch64.dmg) | 2.7MB | `55ae616b236c...` |
-| **Linux (DEB)** | [cipher_0.5.10_amd64.deb](linux/latest/cipher_0.5.10_amd64.deb) | ~15MB | `placeholder` |
-| **Linux (AppImage)** | [Cipher_0.5.10_x86_64.AppImage](linux/latest/Cipher_0.5.10_x86_64.AppImage) | ~18MB | `placeholder` |
+| **Windows** | [Cipher_0.6.0_x64.msi](windows/latest/Cipher_0.6.0_x64.msi) | ~12MB | `placeholder` |
+| **macOS (ARM64)** | [Cipher_0.6.0_aarch64.dmg](macos/latest/Cipher_0.6.0_aarch64.dmg) | 2.7MB | `55ae616b236c...` |
+| **Linux (DEB)** | [cipher_0.6.0_amd64.deb](linux/latest/cipher_0.6.0_amd64.deb) | ~15MB | `placeholder` |
+| **Linux (AppImage)** | [Cipher_0.6.0_x86_64.AppImage](linux/latest/Cipher_0.6.0_x86_64.AppImage) | ~18MB | `placeholder` |
 
 ## Installation Instructions
 
@@ -38,8 +38,8 @@ Pre-compiled desktop applications for Windows, macOS, and Linux.
 #### DEB Package (Ubuntu/Debian)
 ```bash
 # Download and install
-wget https://github.com/aosmith/cipher/releases/download/v0.5.10/cipher_0.5.10_amd64.deb
-sudo dpkg -i cipher_0.5.10_amd64.deb
+wget https://github.com/aosmith/cipher/releases/download/v0.6.0/cipher_0.6.0_amd64.deb
+sudo dpkg -i cipher_0.6.0_amd64.deb
 
 # If dependencies are missing:
 sudo apt-get install -f
@@ -48,11 +48,11 @@ sudo apt-get install -f
 #### AppImage (Universal)
 ```bash
 # Download and make executable
-wget https://github.com/aosmith/cipher/releases/download/v0.5.10/Cipher_0.5.10_x86_64.AppImage
-chmod +x Cipher_0.5.10_x86_64.AppImage
+wget https://github.com/aosmith/cipher/releases/download/v0.6.0/Cipher_0.6.0_x86_64.AppImage
+chmod +x Cipher_0.6.0_x86_64.AppImage
 
 # Run directly
-./Cipher_0.5.10_x86_64.AppImage
+./Cipher_0.6.0_x86_64.AppImage
 ```
 
 ## System Requirements
