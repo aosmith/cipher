@@ -13,7 +13,10 @@ Rails.application.routes.draw do
   end
   resources :posts do
     resources :attachments, only: [:show, :create]
+    resources :comments, only: [:create, :destroy]
   end
+  
+  get 'feed', to: 'feed#index'
   
   # WebSocket mount for Action Cable
   mount ActionCable.server => '/cable'

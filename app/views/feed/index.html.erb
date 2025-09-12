@@ -1,0 +1,146 @@
+<% content_for :title, "Feed" %>
+
+<div class="max-w-2xl mx-auto py-8 px-4">
+  <div class="mb-8">
+    <h1 class="text-3xl font-bold text-gray-900 mb-2">Your Feed</h1>
+    <p class="text-gray-600">Posts from your <%= pluralize(@friends_count, 'friend') %></p>
+  </div>
+
+  <% if @posts.any? %>
+    <div class="space-y-6">
+      <% @posts.each do |post| %>
+        <article class="bg-white rounded-lg shadow-md border border-gray-200 p-6">
+          <div class="flex items-start space-x-4">
+            <div class="flex-shrink-0">
+              <div class="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-lg">
+                <%= post.user.username.first.upcase %>
+              </div>
+            </div>
+            
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center space-x-2 mb-2">
+                <h3 class="text-lg font-semibold text-gray-900"><%= post.user.username %></h3>
+                <span class="text-gray-500 text-sm">·</span>
+                <time class="text-gray-500 text-sm" datetime="<%= post.timestamp.iso8601 %>">
+                  <%= time_ago_in_words(post.timestamp) %> ago
+                </time>
+              </div>
+              
+              <% if post.content.present? %>
+                <div class="text-gray-800 mb-4 whitespace-pre-wrap"><%= post.content %></div>
+              <% end %>
+              
+              <% if post.attachments.any? %>
+                <div class="mb-4">
+                  <% post.attachments.each do |attachment| %>
+                    <div class="flex items-center space-x-2 text-sm text-gray-600 bg-gray-50 rounded p-2 mb-2">
+                      <% if attachment.content_type.start_with?('image/') %>
+                        🖼️
+                      <% elsif attachment.content_type.start_with?('video/') %>
+                        🎥
+                      <% elsif attachment.content_type.start_with?('audio/') %>
+                        🎵
+                      <% else %>
+                        📎
+                      <% end %>
+                      <span><%= attachment.filename %></span>
+                      <span class="text-xs">(<%= number_to_human_size(attachment.file_size) %>)</span>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+              
+              <!-- Comments Section -->
+              <% if post.comments.any? %>
+                <div class="mt-4 border-t border-gray-100 pt-4">
+                  <div class="space-y-3">
+                    <% post.comments.recent.limit(3).each do |comment| %>
+                      <div class="flex space-x-2">
+                        <div class="flex-shrink-0">
+                          <div class="w-8 h-8 bg-gray-400 rounded-full flex items-center justify-center text-white font-semibold text-xs">
+                            <%= comment.user.username.first.upcase %>
+                          </div>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                          <div class="flex items-center space-x-1">
+                            <span class="text-sm font-medium text-gray-900"><%= comment.user.username %></span>
+                            <span class="text-xs text-gray-500">
+                              <%= time_ago_in_words(comment.timestamp) %> ago
+                            </span>
+                            <% if comment.user == current_user_session %>
+                              <%= button_to "×", post_comment_path(post, comment), method: :delete, 
+                                            class: "text-xs text-red-500 hover:text-red-700 ml-auto",
+                                            confirm: "Delete this comment?",
+                                            title: "Delete comment" %>
+                            <% end %>
+                          </div>
+                          <p class="text-sm text-gray-800"><%= comment.content %></p>
+                        </div>
+                      </div>
+                    <% end %>
+                    
+                    <% if post.comments.count > 3 %>
+                      <div class="text-center">
+                        <%= link_to "View all #{post.comments.count} comments", post_path(post), 
+                                    class: "text-sm text-blue-600 hover:text-blue-700" %>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <!-- Comment Form -->
+              <div class="mt-4 border-t border-gray-100 pt-4">
+                <%= form_with model: [post, Comment.new], local: true, class: "flex space-x-3" do |form| %>
+                  <div class="flex-shrink-0">
+                    <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-xs">
+                      <%= current_user_session.username.first.upcase %>
+                    </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <%= form.text_field :content, placeholder: "Write a comment...", 
+                                        class: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent",
+                                        required: true %>
+                  </div>
+                  <div>
+                    <%= form.submit "Post", class: "px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors" %>
+                  </div>
+                <% end %>
+              </div>
+              
+              <div class="flex items-center space-x-4 text-sm text-gray-500 mt-2">
+                <%= link_to post_path(post), class: "hover:text-blue-600 transition-colors" do %>
+                  💬 <%= pluralize(post.comments.count, 'comment') %>
+                <% end %>
+              </div>
+            </div>
+          </div>
+        </article>
+      <% end %>
+    </div>
+  <% else %>
+    <div class="text-center py-12">
+      <div class="text-6xl mb-4">📭</div>
+      <h2 class="text-xl font-semibold text-gray-900 mb-2">No posts yet</h2>
+      <p class="text-gray-600 mb-6">
+        <% if @friends_count == 0 %>
+          You don't have any friends yet. Start connecting with others to see their posts here.
+        <% else %>
+          Your friends haven't posted anything yet. Be the first to share something!
+        <% end %>
+      </p>
+      
+      <div class="space-y-3">
+        <% if @friends_count == 0 %>
+          <%= link_to users_path, class: "inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors" do %>
+            🔍 Find Friends
+          <% end %>
+        <% end %>
+        
+        <%= link_to new_post_path, class: "inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors ml-2" do %>
+          ✏️ Create Post
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+</div>

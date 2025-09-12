@@ -92,6 +92,9 @@
                 <%= link_to posts_path, class: "desktop-nav-link" do %>
                   📝 Posts
                 <% end %>
+                <%= link_to feed_path, class: "desktop-nav-link" do %>
+                  📰 Feed
+                <% end %>
                 <%= link_to friends_users_path, class: "desktop-nav-link" do %>
                   👥 Friends
                 <% end %>
@@ -150,6 +153,7 @@
                   <%= link_to "Dashboard", dashboard_users_path, class: "nav-link" %>
                   <%= link_to "Profile", user_path(current_user_session), class: "nav-link" %>
                   <%= link_to "Posts", posts_path, class: "nav-link" %>
+                  <%= link_to "Feed", feed_path, class: "nav-link" %>
                   <%= link_to "Friends", friends_users_path, class: "nav-link" %>
                   <%= link_to "Hosting", local_hosting_users_path, class: "nav-link" %>
                   <%= link_to "Host Panel", host_dashboard_users_path, class: "nav-link" %>
