@@ -153,4 +153,5 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize compile any binaries we can and push tags to git for any new version.
 - memorize when we version bump it should only be our apps and not dependancies unless they have been updated as well.  Ask before updating deps like Tauri
 - memorize ALWAYS recompile binaries after version bumps using ./scripts/prepare-release.sh [version] - Don't just bump version numbers without rebuilding!
+- memorize the update-release-links.sh script now only updates package versions, not Tauri dependency versions - this prevents build breaks
 - memorize use as little javascript as possible, the client and the server are the same machine so latency is not an issue

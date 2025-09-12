@@ -70,10 +70,11 @@ if [[ -f "package.json" ]]; then
     echo "✅ Updated package.json"
 fi
 
-# Update Cargo.toml version
+# Update Cargo.toml version (only package version, not dependencies)
 if [[ -f "src-tauri/Cargo.toml" ]]; then
     echo "📝 Updating src-tauri/Cargo.toml version"
-    sed -i.bak "s|version = \"[0-9.]*\"|version = \"${VERSION}\"|g" src-tauri/Cargo.toml
+    # Only update the package version in [package] section, not dependencies
+    sed -i.bak "/^\[package\]/,/^\[/ s|^version = \"[0-9.]*\"|version = \"${VERSION}\"|" src-tauri/Cargo.toml
     rm -f src-tauri/Cargo.toml.bak
     echo "✅ Updated src-tauri/Cargo.toml"
 fi
