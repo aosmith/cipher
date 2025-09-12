@@ -1,6 +1,6 @@
 {
   "name": "cipher-desktop",
-  "version": "v0.6.1",
+  "version": "0.6.2",
   "description": "Cipher - End-to-End Encrypted P2P Social Network Desktop App",
   "main": "index.js",
   "scripts": {
