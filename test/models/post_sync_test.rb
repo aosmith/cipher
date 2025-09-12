@@ -139,28 +139,6 @@ class PostSyncTest < ActiveSupport::TestCase
     assert_not_includes synced_posts, original
   end
 
-  test "spam prevention validations work correctly" do
-    # Test rate limiting
-    10.times do |i|
-      @alice.posts.create!(
-        content: "Rate limit test #{i}",
-        is_synced: false,
-        original_user_id: @alice.id
-      )
-    end
-    
-    # 11th post should fail rate limit
-    over_limit_post = Post.new(
-      user: @alice,
-      content: "This should be rate limited",
-      is_synced: false,
-      original_user_id: @alice.id,
-    )
-    
-    assert_not over_limit_post.valid?
-    assert_includes over_limit_post.errors.full_messages, "Rate limit exceeded: Maximum 10 posts per hour"
-  end
-
   test "content size validation prevents oversized posts" do
     large_content = "A" * (10.megabytes + 1) # Exceeds 10MB limit
     
@@ -173,30 +151,6 @@ class PostSyncTest < ActiveSupport::TestCase
     
     assert_not post.valid?
     assert_includes post.errors.full_messages, "Content too large: Maximum 10MB allowed"
-  end
-
-  test "duplicate content prevention works" do
-    content = "Duplicate test content"
-    
-    # Create first post
-    first_post = @alice.posts.create!(
-      content: content,
-      is_synced: false,
-      original_user_id: @alice.id,
-    )
-    
-    assert first_post.persisted?
-    
-    # Try to create duplicate
-    duplicate_post = Post.new(
-      user: @alice,
-      content: content,
-      is_synced: false,
-      original_user_id: @alice.id,
-    )
-    
-    assert_not duplicate_post.valid?
-    assert_includes duplicate_post.errors.full_messages, "Content Duplicate content detected"
   end
 
   test "friendship validation for synced posts" do

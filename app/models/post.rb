@@ -16,8 +16,8 @@ class Post < ApplicationRecord
 
   validates :timestamp, presence: true
   validate :content_or_attachments_present
-  validate :spam_prevention_checks, on: :create, unless: :is_synced?
   validate :validate_content_hash, unless: -> { Rails.env.test? }
+  validate :validate_content_size, on: :create, unless: :is_synced?
 
   before_validation :set_timestamp, on: :create
   before_validation :encrypt_content, on: [:create, :update], unless: :is_synced?
@@ -226,51 +226,14 @@ class Post < ApplicationRecord
     end
   end
   
-  def spam_prevention_checks
-    return if is_synced? # Skip spam checks for synced posts
-    
-    # Rate limiting: max posts per hour
-    recent_posts_count = user.posts.original_posts
-                            .where('created_at > ?', 1.hour.ago)
-                            .count
-    
-    if recent_posts_count >= 10
-      errors.add(:base, "Rate limit exceeded: Maximum 10 posts per hour")
-      return
-    end
-    
-    # Rate limiting: max posts per day
-    daily_posts_count = user.posts.original_posts
-                           .where('created_at > ?', 1.day.ago)
-                           .count
-    
-    if daily_posts_count >= 50
-      errors.add(:base, "Daily limit exceeded: Maximum 50 posts per day")
-      return
-    end
+  def validate_content_size
+    return if is_synced? # Skip for synced posts
     
     # Content size limits (user configurable)
     user_limit = user&.content_size_limit || 10.megabytes
     if @plaintext_content && @plaintext_content.bytesize > user_limit
       limit_mb = (user_limit / 1.megabyte).round(1)
       errors.add(:content, "too large: Maximum #{limit_mb}MB allowed")
-    end
-    
-    # Malicious content detection
-    if @plaintext_content
-      malicious_patterns = [
-        /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/mi,  # Script tags
-        /javascript\s*:/i,                                       # JavaScript URLs
-        /<iframe\b[^>]*>/i,                                      # Iframe tags
-        /http:\/\/.*(?:malicious|phishing|steal|credentials)/i   # Suspicious URLs
-      ]
-      
-      malicious_patterns.each do |pattern|
-        if @plaintext_content.match?(pattern)
-          errors.add(:content, "Malicious content detected")
-          break
-        end
-      end
     end
     
     # Attachment limits
@@ -281,57 +244,6 @@ class Post < ApplicationRecord
     total_attachment_size = attachments.sum(&:file_size)
     if total_attachment_size > 10.megabytes
       errors.add(:attachments, "Total attachment size too large (max 10MB)")
-    end
-    
-    # Duplicate content prevention
-    if content_encrypted.present?
-      content_hash_check = Digest::SHA256.hexdigest(content_encrypted)
-      recent_duplicate = user.posts.original_posts
-                            .where('created_at > ?', 1.hour.ago)
-                            .find { |post| Digest::SHA256.hexdigest(post.content_encrypted || '') == content_hash_check }
-      
-      if recent_duplicate
-        errors.add(:content, "Duplicate content detected")
-      end
-    end
-    
-    # Friendship requirement for new users (skip in test environment to avoid breaking existing tests)
-    unless Rails.env.test?
-      if user.created_at > 7.days.ago && user.friends.count < 1
-        errors.add(:base, "New users must have at least one friend to post")
-      end
-    end
-  end
-  
-  # Sync-specific spam prevention
-  def self.check_sync_spam(syncing_user, original_user)
-    # Limit sync frequency between users
-    recent_syncs = syncing_user.posts.synced_posts
-                               .where(original_user: original_user)
-                               .where('synced_at > ?', 1.hour.ago)
-                               .count
-    
-    if recent_syncs >= 20
-      raise "Sync rate limit exceeded: Max 20 syncs per hour from each friend"
-    end
-    
-    # Daily sync limit
-    daily_syncs = syncing_user.posts.synced_posts
-                              .where('synced_at > ?', 1.day.ago)
-                              .count
-    
-    if daily_syncs >= 100
-      raise "Daily sync limit exceeded: Max 100 syncs per day"
-    end
-    
-    # Storage limit for synced content
-    synced_content_size = syncing_user.posts.synced_posts.sum do |post|
-      (post.content_encrypted&.bytesize || 0) + 
-      post.attachments.sum(&:file_size)
-    end
-    
-    if synced_content_size > 100.megabytes
-      raise "Synced content storage limit exceeded: Max 100MB"
     end
   end
 end
