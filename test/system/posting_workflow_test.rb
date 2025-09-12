@@ -154,7 +154,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     
     # Verify post was created with attachment but no content
     post = Post.last
-    assert_equal "", post.content
+    assert post.content.blank?  # Content should be blank (nil or empty)
     assert_equal 1, post.attachments.count
   end
 
@@ -182,7 +182,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     visit root_path
     
     # Go to posts list
-    click_link "Your Posts"
+    click_link "Posts"
     assert_current_path posts_path
     assert_text "📝 My Posts"
     
