@@ -49,20 +49,6 @@ class User < ApplicationRecord
   # SECURITY: Context-aware private key serialization
   # Users can access their own private key, but never other users' private keys
   def as_json(options = {})
-    context_aware_serialization(:as_json, options)
-  end
-  
-  def to_json(options = {})
-    context_aware_serialization(:to_json, options)
-  end
-  
-  def serializable_hash(options = {})
-    context_aware_serialization(:serializable_hash, options)
-  end
-  
-  private
-  
-  def context_aware_serialization(method, options = {})
     # Allow private key inclusion only if explicitly requested AND it's for the current user
     current_user_id = Thread.current[:current_user_for_serialization]
     include_private_key = options.delete(:include_private_key) && (current_user_id == self.id)
@@ -73,17 +59,35 @@ class User < ApplicationRecord
       options = options.merge(except: excluded.uniq)
     end
     
-    # Call the original method on the superclass
-    case method
-    when :as_json
-      super(options)
-    when :to_json
-      super(options)
-    when :serializable_hash
-      super(options)
-    else
-      super(options)
+    super(options)
+  end
+  
+  def to_json(options = {})
+    # Allow private key inclusion only if explicitly requested AND it's for the current user
+    current_user_id = Thread.current[:current_user_for_serialization]
+    include_private_key = options.delete(:include_private_key) && (current_user_id == self.id)
+    
+    # By default, exclude private keys from serialization
+    unless include_private_key
+      excluded = Array(options[:except]) + [:private_key, :private_key_encrypted]
+      options = options.merge(except: excluded.uniq)
     end
+    
+    super(options)
+  end
+  
+  def serializable_hash(options = {})
+    # Allow private key inclusion only if explicitly requested AND it's for the current user
+    current_user_id = Thread.current[:current_user_for_serialization]
+    include_private_key = options.delete(:include_private_key) && (current_user_id == self.id)
+    
+    # By default, exclude private keys from serialization
+    unless include_private_key
+      excluded = Array(options[:except]) + [:private_key, :private_key_encrypted]
+      options = options.merge(except: excluded.uniq)
+    end
+    
+    super(options)
   end
 
   # Note: These methods are now handled client-side in JavaScript

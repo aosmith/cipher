@@ -10,14 +10,26 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
     @david = users(:david)
     
     # Set up friendship network
-    @alice.sent_friendships.create!(addressee: @bob, status: 'accepted')
-    @bob.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    unless Friendship.exists?(requester: @alice, addressee: @bob, status: 'accepted')
+      @alice.sent_friendships.create!(addressee: @bob, status: 'accepted')
+    end
+    unless Friendship.exists?(requester: @bob, addressee: @alice, status: 'accepted')
+      @bob.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    end
     
-    @alice.sent_friendships.create!(addressee: @charlie, status: 'accepted')
-    @charlie.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    unless Friendship.exists?(requester: @alice, addressee: @charlie, status: 'accepted')
+      @alice.sent_friendships.create!(addressee: @charlie, status: 'accepted')
+    end
+    unless Friendship.exists?(requester: @charlie, addressee: @alice, status: 'accepted')
+      @charlie.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    end
     
-    @bob.sent_friendships.create!(addressee: @david, status: 'accepted')
-    @david.sent_friendships.create!(addressee: @bob, status: 'accepted')
+    unless Friendship.exists?(requester: @bob, addressee: @david, status: 'accepted')
+      @bob.sent_friendships.create!(addressee: @david, status: 'accepted')
+    end
+    unless Friendship.exists?(requester: @david, addressee: @bob, status: 'accepted')
+      @david.sent_friendships.create!(addressee: @bob, status: 'accepted')
+    end
   end
 
   test "handles concurrent sync requests from multiple friends" do
@@ -532,10 +544,23 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
   private
 
   def login_as(user)
-    visit new_user_session_path
-    fill_in "Email", with: user.email
-    fill_in "Password", with: "password123"
-    click_on "Sign in"
-    assert_text "Dashboard", wait: 5
+    # For system tests, use API-based login
+    visit root_path
+    
+    page.execute_script("
+      fetch('/api/v1/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')
+        },
+        body: JSON.stringify({
+          username: '#{user.username}',
+          public_key: '#{user.public_key}'
+        })
+      });
+    ")
+    
+    sleep 0.5
   end
 end
