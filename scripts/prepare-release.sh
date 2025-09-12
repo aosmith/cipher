@@ -152,12 +152,13 @@ copy_to_releases() {
     fi
     
     if [[ -d "${bundle_dir}/macos" ]]; then
-        # Create zip of .app bundle
+        # Create zip of .app bundle using absolute paths
+        local current_dir=$(pwd)
         cd "${bundle_dir}/macos"
         for app in *.app; do
             if [[ -d "$app" ]]; then
-                zip -r "../../${release_base}/macos/latest/${app%.app}_${VERSION}.zip" "$app"
-                zip -r "../../${release_base}/macos/archive/v${VERSION}/${app%.app}_${VERSION}.zip" "$app"
+                zip -r "${current_dir}/${release_base}/macos/latest/${app%.app}_${VERSION}.zip" "$app" 2>/dev/null || true
+                zip -r "${current_dir}/${release_base}/macos/archive/v${VERSION}/${app%.app}_${VERSION}.zip" "$app" 2>/dev/null || true
             fi
         done
         cd - >/dev/null
