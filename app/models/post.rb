@@ -20,9 +20,10 @@ class Post < ApplicationRecord
   validate :validate_content_size, on: :create, unless: :is_synced?
 
   before_validation :set_timestamp, on: :create
-  before_validation :encrypt_content, on: [:create, :update], unless: :is_synced?
+  before_validation :encrypt_content, on: [:create, :update]
   before_validation :sign_content, on: :create, unless: :is_synced?
   before_validation :set_content_hash, on: [:create, :update], unless: :is_synced?
+  before_validation :set_synced_at, if: :is_synced?
   after_save :clear_plaintext_cache
   
   # Validation for sync fields consistency
@@ -79,6 +80,10 @@ class Post < ApplicationRecord
 
   def set_timestamp
     self.timestamp = Time.current
+  end
+
+  def set_synced_at
+    self.synced_at = Time.current if is_synced? && synced_at.blank?
   end
 
   def encrypt_content

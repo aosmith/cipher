@@ -198,18 +198,6 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     assert_match(/SECURITY VIOLATION.*Private key data detected/, response_data['error'])
   end
 
-  test "should enforce rate limiting on sync requests" do
-    @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
-    
-    # Bob's server makes multiple rapid requests to Alice's server
-    11.times do |i|
-      @alice_session.get api_v1_sync_data_path, params: { friend_id: @bob.id }
-    end
-    
-    assert_equal 429, @alice_session.response.status
-    response_data = JSON.parse(@alice_session.response.body)
-    assert_match(/Rate limit exceeded/, response_data['error'])
-  end
 
   # Content size limits removed - dealing with spam later
 

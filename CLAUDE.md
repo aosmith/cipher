@@ -279,6 +279,7 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize if you start a server also stop it
 - use `bin/reload` to restart the server after CSS/layout changes
 - memorize clear the cache after changes.
+- NEVER remove or comment out tests instead of fixing them or the underlying problem - always fix the root cause
 - memorize use stylesheets instead of inline styles.
 - memorize compile any binaries we can and push tags to git for any new version.
 - memorize when we version bump it should only be our apps and not dependancies unless they have been updated as well.  Ask before updating deps like Tauri
@@ -288,3 +289,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize We are user a local server to power a p2p encrypted social network, private keys can be on the server but they should never leave the users machine over p2p channels.  We can assume the browser to server connection is secure because it is localhost.
 - memorize When user asks to commit and push changes, ALWAYS use `git add .` to add ALL changes, then create a comprehensive commit message summarizing all modifications, then push to remote.
 - memorize if I say vX.X.X I mean semver, omit the v
+- memorize Removing a broken test is not fixing it

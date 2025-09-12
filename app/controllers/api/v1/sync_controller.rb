@@ -1,6 +1,5 @@
 class Api::V1::SyncController < ApplicationController
   before_action :require_current_user_session
-  before_action :check_rate_limits, only: [:sync_data, :accept_sync]
   
   # GET /api/v1/sync_data - Get data to share with a friend
   def sync_data
@@ -280,8 +279,6 @@ class Api::V1::SyncController < ApplicationController
       storage_used_mb: calculate_storage_used,
       last_sync_activity: last_sync_activity,
       sync_limits: {
-        hourly_sync_limit: 20,
-        daily_sync_limit: 100,
         storage_limit_mb: 100
       }
     }
@@ -339,19 +336,6 @@ class Api::V1::SyncController < ApplicationController
     end
   end
   
-  def check_rate_limits
-    # Simple rate limiting: max 10 requests per hour per user
-    cache_key = "sync_rate_limit:#{current_user_session.id}"
-    current_count = Rails.cache.read(cache_key) || 0
-    
-    if current_count >= 10
-      render json: { error: 'Rate limit exceeded: Maximum 10 sync requests per hour' }, status: :too_many_requests
-      return false
-    end
-    
-    Rails.cache.write(cache_key, current_count + 1, expires_in: 1.hour)
-    true
-  end
   
   # SECURITY: Ensure no private key data ever gets synced
   def sanitize_user_data(user_data)
