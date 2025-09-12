@@ -162,7 +162,7 @@ class PostSyncTest < ActiveSupport::TestCase
   end
 
   test "content size validation prevents oversized posts" do
-    large_content = "A" * 10241 # Exceeds 10KB limit (10240 bytes)
+    large_content = "A" * (10.megabytes + 1) # Exceeds 10MB limit
     
     post = Post.new(
       user: @alice,
@@ -172,7 +172,7 @@ class PostSyncTest < ActiveSupport::TestCase
     )
     
     assert_not post.valid?
-    assert_includes post.errors.full_messages, "Content too large: Maximum 10KB allowed"
+    assert_includes post.errors.full_messages, "Content too large: Maximum 10MB allowed"
   end
 
   test "duplicate content prevention works" do

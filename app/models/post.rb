@@ -249,9 +249,28 @@ class Post < ApplicationRecord
       return
     end
     
-    # Content size limits
-    if @plaintext_content && @plaintext_content.bytesize > 10.kilobytes
-      errors.add(:content, "too large: Maximum 10KB allowed")
+    # Content size limits (user configurable)
+    user_limit = user&.content_size_limit || 10.megabytes
+    if @plaintext_content && @plaintext_content.bytesize > user_limit
+      limit_mb = (user_limit / 1.megabyte).round(1)
+      errors.add(:content, "too large: Maximum #{limit_mb}MB allowed")
+    end
+    
+    # Malicious content detection
+    if @plaintext_content
+      malicious_patterns = [
+        /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/mi,  # Script tags
+        /javascript\s*:/i,                                       # JavaScript URLs
+        /<iframe\b[^>]*>/i,                                      # Iframe tags
+        /http:\/\/.*(?:malicious|phishing|steal|credentials)/i   # Suspicious URLs
+      ]
+      
+      malicious_patterns.each do |pattern|
+        if @plaintext_content.match?(pattern)
+          errors.add(:content, "Malicious content detected")
+          break
+        end
+      end
     end
     
     # Attachment limits
