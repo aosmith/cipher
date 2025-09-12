@@ -101,21 +101,32 @@ class WebRTCFallbackManager {
   getIceServers() {
     let servers = [];
     
-    // Include all servers from tiers up to current tier
-    for (let i = 0; i <= this.currentTierIndex && i < this.serverTiers.length; i++) {
-      const tier = this.serverTiers[i];
-      const validServers = tier.servers.filter(server => 
+    // Try current tier first, then include previous successful tiers as backup
+    if (this.currentTierIndex < this.serverTiers.length) {
+      const currentTier = this.serverTiers[this.currentTierIndex];
+      const currentTierServers = currentTier.servers.filter(server => 
         !this.failedServers.has(server.urls)
       );
-      servers.push(...validServers);
+      servers.push(...currentTierServers);
+      
+      // If current tier has no valid servers, include servers from previous tiers
+      if (currentTierServers.length === 0 && this.currentTierIndex > 0) {
+        for (let i = 0; i < this.currentTierIndex && i < this.serverTiers.length; i++) {
+          const tier = this.serverTiers[i];
+          const validServers = tier.servers.filter(server => 
+            !this.failedServers.has(server.urls)
+          );
+          servers.push(...validServers);
+        }
+      }
     }
     
     if (servers.length === 0) {
-      this.logConnection('No valid servers available, using minimal fallback', 'warn');
-      servers = [{ urls: "stun:stun.l.google.com:19302" }];
+      this.logConnection('No valid servers available, using Cloudflare fallback', 'warn');
+      servers = [{ urls: "stun:stun.cloudflare.com:3478" }];
     }
     
-    this.logConnection(`Using ${servers.length} ICE servers from tiers 0-${this.currentTierIndex}`);
+    this.logConnection(`Using ${servers.length} ICE servers from tier ${this.currentTierIndex} (${this.serverTiers[this.currentTierIndex]?.name || 'unknown'})`);
     return servers;
   }
   
@@ -135,6 +146,16 @@ class WebRTCFallbackManager {
       this.currentTierIndex++;
       const currentTier = this.serverTiers[this.currentTierIndex];
       this.logConnection(`Falling back to tier ${this.currentTierIndex}: ${currentTier.name}`, 'warn');
+      
+      // Mark all servers in the failed tier as potentially problematic
+      if (this.currentTierIndex > 0) {
+        const failedTier = this.serverTiers[this.currentTierIndex - 1];
+        failedTier.servers.forEach(server => {
+          this.failedServers.add(server.urls);
+        });
+        this.logConnection(`Marked all servers in tier ${this.currentTierIndex - 1} as failed`, 'warn');
+      }
+      
       return true;
     }
     
@@ -164,16 +185,46 @@ class WebRTCFallbackManager {
       ...additionalConfig
     };
     
+    this.logConnection(`Creating PeerConnection with tier ${this.currentTierIndex} servers: ${config.iceServers.map(s => s.urls).join(', ')}`);
+    
     const pc = new RTCPeerConnection(config);
+    
+    // Set up connection timeout
+    const connectionTimeout = setTimeout(() => {
+      if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+        this.logConnection(`Connection timeout after 10 seconds, triggering fallback`, 'warn');
+        this.handleConnectionFailure(pc);
+      }
+    }, 10000); // 10 second timeout
+    
+    // Clear timeout on successful connection
+    const clearTimeoutOnSuccess = () => {
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        clearTimeout(connectionTimeout);
+      }
+    };
     
     // Monitor ICE connection state
     pc.oniceconnectionstatechange = () => {
+      clearTimeoutOnSuccess();
       this.handleIceConnectionStateChange(pc);
     };
     
     // Monitor ICE gathering state
     pc.onicegatheringstatechange = () => {
       this.logConnection(`ICE gathering state: ${pc.iceGatheringState}`);
+      
+      // If gathering failed, trigger fallback
+      if (pc.iceGatheringState === 'complete' && 
+          pc.iceConnectionState !== 'connected' && 
+          pc.iceConnectionState !== 'completed') {
+        setTimeout(() => {
+          if (pc.iceConnectionState === 'checking' || pc.iceConnectionState === 'new') {
+            this.logConnection('ICE gathering complete but no connection established, triggering fallback', 'warn');
+            this.handleConnectionFailure(pc);
+          }
+        }, 5000); // Give it 5 more seconds after gathering completes
+      }
     };
     
     // Log ICE candidates
