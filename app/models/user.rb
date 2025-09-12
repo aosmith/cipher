@@ -30,9 +30,9 @@ class User < ApplicationRecord
   validates :public_key, presence: true, 
                         uniqueness: { message: "is already registered to another account. Please regenerate your keys." },
                         allow_blank: false
-  validates :email, presence: true, 
-                   uniqueness: { case_sensitive: false, message: "is already registered to another account." },
-                   format: { with: URI::MailTo::EMAIL_REGEXP, message: "must be a valid email address" }
+  validates :email, uniqueness: { case_sensitive: false, message: "is already registered to another account." }, 
+                   format: { with: URI::MailTo::EMAIL_REGEXP, message: "must be a valid email address" },
+                   allow_blank: true
 
   before_validation :check_public_key_presence, on: :create
   before_create :generate_verification_code
@@ -194,6 +194,7 @@ class User < ApplicationRecord
   end
   
   def generate_verification_code
+    return unless email.present?
     self.verification_code = SecureRandom.alphanumeric(6).upcase
     self.verification_code_expires_at = 15.minutes.from_now
   end
