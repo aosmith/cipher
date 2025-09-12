@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title><%= content_for(:title) || "Cipher" %></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+    
+    <!-- Desktop app specific meta tags -->
+    <% if Rails.env.desktop? %>
+      <meta name="desktop-app" content="true">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'self' tauri: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:;">
+    <% end %>
+
+    <%= yield :head %>
+
+    <%# Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!) %>
+    <%#= tag.link rel: "manifest", href: pwa_manifest_path(format: :json) %>
+
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/android-chrome-512x512.png">
+
+    <%# Includes all stylesheet files in app/assets/stylesheets %>
+    <%= stylesheet_link_tag :app, "data-turbo-track": "reload" %>
+    <%= javascript_importmap_tags %>
+  </head>
+
+  <body>
+    <!-- Desktop app specific elements - only show custom titlebar on Windows/Linux -->
+    <% if Rails.env.desktop? %>
+      <div id="desktop-titlebar" class="desktop-titlebar" data-tauri-drag-region style="display: none;">
+        <div class="desktop-titlebar-title">Cipher</div>
+        <div class="desktop-titlebar-buttons">
+          <button id="titlebar-minimize" class="titlebar-button">−</button>
+          <button id="titlebar-maximize" class="titlebar-button">□</button>
+          <button id="titlebar-close" class="titlebar-button">×</button>
+        </div>
+      </div>
+    <% end %>
+    
+    <div id="app-wrapper" class="app-wrapper <%= 'desktop-app' if Rails.env.desktop? %> <%= 'mobile-app platform-ios' if Rails.env.ios? %> <%= 'mobile-app platform-android' if Rails.env.android? %>">
+      <!-- Desktop native sidebar -->
+      <% if Rails.env.desktop? %>
+        <div class="desktop-sidebar">
+          <div class="desktop-sidebar-header">
+            <%= link_to root_path, class: "desktop-logo" do %>
+              🔐 Cipher
+            <% end %>
+          </div>
+          
+          <% if current_user_session %>
+            <div class="desktop-user-section">
+              <div class="desktop-user-info">
+                <div class="desktop-username">Hi, <%= current_user_session.username %></div>
+                <div class="desktop-peer-count"><%= current_user_session.peers.active.count %> peers online</div>
+              </div>
+              
+              <div class="desktop-wallet-section">
+                <div id="desktop-wallet-status" class="desktop-wallet-status">
+                  <button id="desktop-connect-wallet-btn" class="desktop-btn primary">Connect Wallet</button>
+                </div>
+                <div id="desktop-wallet-connected" style="display: none;">
+                  <div class="desktop-wallet-info">
+                    <div class="desktop-balance" id="desktop-wallet-balance">0 CPH</div>
+                    <div class="desktop-address" id="desktop-wallet-address"></div>
+                  </div>
+                  <div class="desktop-wallet-actions">
+                    <button id="desktop-deposit-btn" class="desktop-btn">Deposit</button>
+                    <button id="desktop-withdraw-btn" class="desktop-btn">Withdraw</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <nav class="desktop-nav">
+              <div class="desktop-nav-section">
+                <div class="desktop-nav-title">Navigation</div>
+                <%= link_to root_path, class: "desktop-nav-link" do %>
+                  🏠 Home
+                <% end %>
+                <%= link_to dashboard_users_path, class: "desktop-nav-link" do %>
+                  📊 Dashboard
+                <% end %>
+                <%= link_to user_path(current_user_session), class: "desktop-nav-link" do %>
+                  👤 Profile
+                <% end %>
+                <%= link_to posts_path, class: "desktop-nav-link" do %>
+                  📝 Posts
+                <% end %>
+                <%= link_to feed_path, class: "desktop-nav-link" do %>
+                  📰 Feed
+                <% end %>
+                <%= link_to friends_users_path, class: "desktop-nav-link" do %>
+                  👥 Friends
+                <% end %>
+              </div>
+              
+              <div class="desktop-nav-section">
+                <div class="desktop-nav-title">Hosting</div>
+                <%= link_to local_hosting_users_path, class: "desktop-nav-link" do %>
+                  🌐 Local Hosting
+                <% end %>
+                <%= link_to host_dashboard_users_path, class: "desktop-nav-link" do %>
+                  📊 Host Dashboard
+                <% end %>
+              </div>
+              
+              <div class="desktop-nav-section">
+                <div class="desktop-nav-title">Settings</div>
+                <%= link_to export_keys_users_path, class: "desktop-nav-link" do %>
+                  💾 Backup Keys
+                <% end %>
+              </div>
+            </nav>
+          <% else %>
+            <div class="desktop-user-section">
+              <div class="desktop-nav">
+                <div class="desktop-nav-section">
+                  <div class="desktop-nav-title">Get Started</div>
+                  <%= link_to import_keys_users_path, class: "desktop-nav-link" do %>
+                    🔑 Sign In
+                  <% end %>
+                  <%= link_to new_user_path, class: "desktop-nav-link" do %>
+                    ✨ Create Account
+                  <% end %>
+                </div>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+      
+      <!-- Unified header for all platforms -->
+      <header class="app-header">
+        <div class="header-container">
+          <div class="header-left">
+            <%= link_to root_path, class: "logo-link" do %>
+              <span class="logo">🔐 Cipher</span>
+            <% end %>
+          </div>
+          
+          <div class="header-right">
+            <% if current_user_session %>
+              <div class="user-nav">
+                <span class="user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
+                <span class="peer-count"><%= current_user_session.peers.active.count %> peers</span>
+                <div class="nav-links">
+                  <%= link_to "Dashboard", dashboard_users_path, class: "nav-link" %>
+                  <%= link_to "Profile", user_path(current_user_session), class: "nav-link" %>
+                  <%= link_to "Posts", posts_path, class: "nav-link" %>
+                  <%= link_to "Feed", feed_path, class: "nav-link" %>
+                  <%= link_to "Friends", friends_users_path, class: "nav-link" %>
+                  <%= link_to "Hosting", local_hosting_users_path, class: "nav-link" %>
+                  <%= link_to "Host Panel", host_dashboard_users_path, class: "nav-link" %>
+                  <%= link_to "Backup", export_keys_users_path, class: "nav-link" %>
+                </div>
+              </div>
+            <% else %>
+              <div class="auth-nav">
+                <%= link_to "Sign In", import_keys_users_path, class: "btn btn-secondary" %>
+                <%= link_to "Create Account", new_user_path, class: "btn btn-primary" %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </header>
+
+
+      <main class="app-main">
+        <%= yield %>
+      </main>
+
+      <footer class="app-footer">
+        <div class="footer-container">
+          <div class="footer-content">
+            <div class="footer-section">
+              <h4>Cipher</h4>
+              <p>Secure, decentralized communication for the modern web</p>
+              <div class="footer-links">
+                <%= link_to "About", "#" %>
+                <%= link_to "Security", "#" %>
+                <%= link_to "Privacy", "#" %>
+              </div>
+            </div>
+            
+            <div class="footer-section">
+              <h4>Community</h4>
+              <div class="footer-links">
+                <%= link_to "GitHub", "#" %>
+                <%= link_to "Documentation", "#" %>
+                <%= link_to "Support", "#" %>
+              </div>
+            </div>
+          </div>
+          
+          <div class="footer-bottom">
+            <div class="footer-info">
+              <span>&copy; 2025 Cipher. Zero-knowledge by design.</span>
+            </div>
+            <div class="footer-badges">
+              <span class="security-badge">🔐 End-to-End Encrypted</span>
+              <span class="privacy-badge">🛡️ Zero-Knowledge</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script type="module">
+      // Note: Temporarily removing imports to fix 404 errors
+      // These modules will be imported when actually needed
+
+      // Global wallet and token management
+      class CipherWalletManager {
+        constructor() {
+          this.web3 = null; // Will be initialized when Web3Utils is loaded
+          this.token = null; // Will be initialized when CipherToken is loaded
+          this.isInitialized = false;
+          this.modulesLoaded = false;
+          
+          // Contract addresses for Polygon Mumbai testnet
+          this.contractAddresses = {
+            token: '0x742d35Cc6935C5532a2EaD8d7C2A6d8EfB4e8Fc6',
+            storage: '0x8B7F2A3E9D4C5B6A7E8F9D0C1B2A3E4D5C6B7A8E'
+          };
+          
+          this.setupEventListeners();
+          this.loadModules().then(() => {
+            this.checkExistingConnection();
+          });
+        }
+
+        async loadModules() {
+          try {
+            // Dynamically import the required modules
+            const [Web3UtilsModule, CipherTokenModule] = await Promise.all([
+              import('web3_utils'),
+              import('cipher_token')
+            ]);
+            
+            // Initialize Web3Utils first
+            this.web3 = new Web3UtilsModule.default();
+            
+            // Initialize CipherToken and pass the Web3Utils instance to avoid conflicts
+            this.token = new CipherTokenModule.default();
+            // If CipherToken needs the web3 instance, we'll inject it
+            if (this.token.setWeb3Utils) {
+              this.token.setWeb3Utils(this.web3);
+            }
+            
+            this.modulesLoaded = true;
+            console.log('Wallet modules loaded successfully');
+          } catch (error) {
+            console.error('Failed to load wallet modules:', error);
+            this.showNotification('Failed to load wallet modules. Some features may not work.', 'warning');
+          }
+        }
+
+        async checkExistingConnection() {
+          if (this.web3 && this.web3.isMetaMaskAvailable && this.web3.isMetaMaskAvailable() && window.ethereum?.selectedAddress) {
+            try {
+              await this.web3.connectWallet();
+              this.updateWalletUI(true);
+              await this.initializeContracts();
+            } catch (error) {
+              console.log('No existing connection found');
+            }
+          }
+        }
+
+        setupEventListeners() {
+          // Web interface elements
+          const connectBtn = document.getElementById('connect-wallet-btn');
+          const depositBtn = document.getElementById('deposit-btn');
+          const withdrawBtn = document.getElementById('withdraw-btn');
+
+          connectBtn?.addEventListener('click', () => this.connectWallet());
+          depositBtn?.addEventListener('click', () => this.showDepositModal());
+          withdrawBtn?.addEventListener('click', () => this.showWithdrawModal());
+
+          // Desktop interface elements
+          const desktopConnectBtn = document.getElementById('desktop-connect-wallet-btn');
+          const desktopDepositBtn = document.getElementById('desktop-deposit-btn');
+          const desktopWithdrawBtn = document.getElementById('desktop-withdraw-btn');
+
+          desktopConnectBtn?.addEventListener('click', () => this.connectWallet());
+          desktopDepositBtn?.addEventListener('click', () => this.showDepositModal());
+          desktopWithdrawBtn?.addEventListener('click', () => this.showWithdrawModal());
+
+          // Mobile interface elements
+          const mobileConnectBtn = document.getElementById('mobile-connect-wallet-btn');
+          const mobileDepositBtn = document.getElementById('mobile-deposit-btn');
+          const mobileWithdrawBtn = document.getElementById('mobile-withdraw-btn');
+
+          mobileConnectBtn?.addEventListener('click', () => this.connectWallet());
+          mobileDepositBtn?.addEventListener('click', () => this.showDepositModal());
+          mobileWithdrawBtn?.addEventListener('click', () => this.showWithdrawModal());
+        }
+
+        async connectWallet() {
+          try {
+            const connectBtn = document.getElementById('connect-wallet-btn');
+            connectBtn.disabled = true;
+            connectBtn.textContent = 'Connecting...';
+
+            // Wait for modules to load if they haven't already
+            if (!this.modulesLoaded) {
+              this.showNotification('Loading wallet modules...', 'info');
+              await this.loadModules();
+            }
+
+            if (!this.web3) {
+              this.showNotification('Wallet functionality not available', 'error');
+              connectBtn.disabled = false;
+              connectBtn.textContent = 'Connect Wallet';
+              return;
+            }
+
+            await this.web3.connectWallet();
+            this.updateWalletUI(true);
+            await this.initializeContracts();
+
+            // Show success message
+            this.showNotification('Wallet connected successfully!', 'success');
+          } catch (error) {
+            console.error('Failed to connect wallet:', error);
+            this.showNotification('Failed to connect wallet: ' + error.message, 'error');
+            this.updateWalletUI(false);
+          }
+        }
+
+        async initializeContracts() {
+          try {
+            // TODO: Replace with actual deployed contract addresses
+            if (this.contractAddresses.token !== '0x0000000000000000000000000000000000000000') {
+              await this.token.initialize(
+                this.contractAddresses.token,
+                this.contractAddresses.storage
+              );
+              this.isInitialized = true;
+              await this.updateTokenBalance();
+            } else {
+              console.log('Contract addresses not set - using demo mode');
+            }
+          } catch (error) {
+            console.error('Failed to initialize contracts:', error);
+            this.showNotification('Contracts not deployed yet - using demo mode', 'warning');
+          }
+        }
+
+        updateWalletUI(connected) {
+          // Web interface elements
+          const walletStatus = document.getElementById('wallet-status');
+          const walletConnected = document.getElementById('wallet-connected');
+          const connectBtn = document.getElementById('connect-wallet-btn');
+
+          // Desktop interface elements
+          const desktopWalletStatus = document.getElementById('desktop-wallet-status');
+          const desktopWalletConnected = document.getElementById('desktop-wallet-connected');
+          const desktopConnectBtn = document.getElementById('desktop-connect-wallet-btn');
+
+          // Mobile interface elements
+          const mobileWalletStatus = document.getElementById('mobile-wallet-status');
+          const mobileWalletConnected = document.getElementById('mobile-wallet-connected');
+          const mobileConnectBtn = document.getElementById('mobile-connect-wallet-btn');
+
+          if (connected && this.web3 && this.web3.isConnected) {
+            // Update web interface
+            if (walletStatus) walletStatus.style.display = 'none';
+            if (walletConnected) walletConnected.style.display = 'block';
+
+            // Update desktop interface
+            if (desktopWalletStatus) desktopWalletStatus.style.display = 'none';
+            if (desktopWalletConnected) desktopWalletConnected.style.display = 'block';
+
+            // Update mobile interface
+            if (mobileWalletStatus) mobileWalletStatus.style.display = 'none';
+            if (mobileWalletConnected) mobileWalletConnected.style.display = 'block';
+
+            // Update address display for both interfaces
+            if (this.web3 && this.web3.getAccount) {
+              const address = this.web3.getAccount();
+              const shortAddress = address.slice(0, 6) + '...' + address.slice(-4);
+              
+              // Web interface
+              const addressElement = document.getElementById('wallet-address');
+              if (addressElement && address) {
+                addressElement.textContent = shortAddress;
+                addressElement.title = address;
+              }
+              
+              // Desktop interface
+              const desktopAddressElement = document.getElementById('desktop-wallet-address');
+              if (desktopAddressElement && address) {
+                desktopAddressElement.textContent = shortAddress;
+                desktopAddressElement.title = address;
+              }
+
+              // Mobile interface
+              const mobileAddressElement = document.getElementById('mobile-wallet-address');
+              if (mobileAddressElement && address) {
+                mobileAddressElement.textContent = shortAddress;
+                mobileAddressElement.title = address;
+              }
+            }
+          } else {
+            // Update web interface
+            if (walletStatus) walletStatus.style.display = 'block';
+            if (walletConnected) walletConnected.style.display = 'none';
+            if (connectBtn) {
+              connectBtn.disabled = false;
+              connectBtn.textContent = 'Connect Wallet';
+            }
+
+            // Update desktop interface
+            if (desktopWalletStatus) desktopWalletStatus.style.display = 'block';
+            if (desktopWalletConnected) desktopWalletConnected.style.display = 'none';
+            if (desktopConnectBtn) {
+              desktopConnectBtn.disabled = false;
+              desktopConnectBtn.textContent = 'Connect Wallet';
+            }
+
+            // Update mobile interface
+            if (mobileWalletStatus) mobileWalletStatus.style.display = 'block';
+            if (mobileWalletConnected) mobileWalletConnected.style.display = 'none';
+            if (mobileConnectBtn) {
+              mobileConnectBtn.disabled = false;
+              mobileConnectBtn.textContent = 'Connect Wallet';
+            }
+          }
+        }
+
+        async updateTokenBalance() {
+          if (!this.isInitialized) return;
+
+          try {
+            const balance = await this.token.getBalance();
+            
+            // Update web interface
+            const balanceElement = document.getElementById('wallet-balance');
+            if (balanceElement) {
+              balanceElement.textContent = `${balance} CPH`;
+            }
+            
+            // Update desktop interface
+            const desktopBalanceElement = document.getElementById('desktop-wallet-balance');
+            if (desktopBalanceElement) {
+              desktopBalanceElement.textContent = `${balance} CPH`;
+            }
+            
+            // Update mobile interface
+            const mobileBalanceElement = document.getElementById('mobile-wallet-balance');
+            if (mobileBalanceElement) {
+              mobileBalanceElement.textContent = `${balance} CPH`;
+            }
+          } catch (error) {
+            console.error('Failed to update balance:', error);
+          }
+        }
+
+        async showDepositModal() {
+          const amount = prompt('Enter amount of CPH to deposit:');
+          if (amount && parseFloat(amount) > 0) {
+            try {
+              await this.token.deposit(amount);
+              this.showNotification(`Successfully deposited ${amount} CPH`, 'success');
+              await this.updateTokenBalance();
+            } catch (error) {
+              this.showNotification('Deposit failed: ' + error.message, 'error');
+            }
+          }
+        }
+
+        async showWithdrawModal() {
+          const amount = prompt('Enter amount of CPH to withdraw:');
+          if (amount && parseFloat(amount) > 0) {
+            try {
+              await this.token.withdraw(amount);
+              this.showNotification(`Successfully withdrew ${amount} CPH`, 'success');
+              await this.updateTokenBalance();
+            } catch (error) {
+              this.showNotification('Withdrawal failed: ' + error.message, 'error');
+            }
+          }
+        }
+
+        showNotification(message, type = 'info') {
+          // Simple notification system
+          const notification = document.createElement('div');
+          notification.className = `notification notification-${type}`;
+          notification.textContent = message;
+          notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: ${type === 'success' ? '#48bb78' : type === 'error' ? '#f56565' : type === 'warning' ? '#ed8936' : '#4299e1'};
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px;
+            z-index: 9999;
+            max-width: 300px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+          `;
+
+          document.body.appendChild(notification);
+          setTimeout(() => {
+            notification.remove();
+          }, 5000);
+        }
+
+        // Public methods for file operations
+        async calculateUploadCost(fileSize) {
+          if (this.isInitialized) {
+            return this.token.calculateUploadCost(fileSize);
+          }
+          return Math.ceil(fileSize / 1024); // Fallback calculation
+        }
+
+        async uploadFile(fileHash, fileSize) {
+          if (!this.isInitialized) {
+            throw new Error('Token system not initialized');
+          }
+          return await this.token.uploadFile(fileHash, fileSize);
+        }
+
+        async downloadFile(fileHash) {
+          if (!this.isInitialized) {
+            throw new Error('Token system not initialized');
+          }
+          return await this.token.downloadFile(fileHash);
+        }
+      }
+
+      // Initialize wallet manager
+      window.cipherWallet = new CipherWalletManager();
+
+      // Make it available globally for other scripts
+      window.CipherWalletManager = CipherWalletManager;
+
+
+      // Platform-specific setup function
+      function setupPlatformUI(platform) {
+        const appWrapper = document.getElementById('app-wrapper');
+        
+        if (platform === 'android' || platform === 'ios') {
+          // Mobile platform detected
+          appWrapper.classList.remove('desktop-app');
+          appWrapper.classList.remove('web-app');
+          appWrapper.classList.add('mobile-app');
+        } else if (platform === 'desktop-native') {
+          // Native desktop app (Tauri)
+          appWrapper.classList.add('desktop-app');
+          appWrapper.classList.remove('mobile-app');
+          appWrapper.classList.remove('web-app');
+        } else {
+          // Web browser
+          appWrapper.classList.add('web-app');
+          appWrapper.classList.remove('desktop-app');
+          appWrapper.classList.remove('mobile-app');
+        }
+      }
+
+      // Detect platform and setup UI
+      if (typeof window.desktopApi !== 'undefined') {
+        // Desktop app with Tauri API available
+        window.desktopApi.getPlatform().then(platform => {
+          setupPlatformUI(platform);
+        });
+      } else {
+        // Web browser - always use web layout, CSS handles responsive behavior
+        setupPlatformUI('web'); // Web browser layout
+      }
+    </script>
+    
+    <!-- Desktop app specific JavaScript -->
+    <% if Rails.env.desktop? %>
+      <script type="module">
+        // Import Tauri API for desktop functionality
+        const { appWindow } = await import('@tauri-apps/api/window');
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        
+        // Get platform information and apply styling
+        const platform = await invoke('get_platform');
+        document.body.classList.add(`platform-${platform}`);
+        
+        // Show custom titlebar only on Windows and Linux, not macOS
+        const titlebarElement = document.getElementById('desktop-titlebar');
+        if (platform !== 'macos' && titlebarElement) {
+          titlebarElement.style.display = 'flex';
+          
+          // Platform-specific titlebar button symbols
+          const buttonSymbols = {
+            windows: ['−', '□', '×'],
+            linux: ['−', '□', '×']
+          };
+          
+          const symbols = buttonSymbols[platform] || buttonSymbols.windows;
+          document.getElementById('titlebar-minimize').textContent = symbols[0];
+          document.getElementById('titlebar-maximize').textContent = symbols[1];
+          document.getElementById('titlebar-close').textContent = symbols[2];
+        }
+        
+        // Titlebar controls
+        document.getElementById('titlebar-minimize')?.addEventListener('click', () => appWindow.minimize());
+        document.getElementById('titlebar-maximize')?.addEventListener('click', () => appWindow.toggleMaximize());
+        document.getElementById('titlebar-close')?.addEventListener('click', () => appWindow.hide());
+        
+        // Desktop-specific functionality
+        window.desktopApi = {
+          platform: platform,
+          minimize: () => appWindow.minimize(),
+          maximize: () => appWindow.toggleMaximize(),
+          close: () => appWindow.hide(),
+          startRailsServer: () => invoke('start_rails_server'),
+          stopRailsServer: () => invoke('stop_rails_server'),
+          openExternal: (url) => invoke('open_external_url', { url }),
+          getPlatform: () => invoke('get_platform')
+        };
+        
+        // Handle external links in desktop app
+        document.addEventListener('click', (e) => {
+          const link = e.target.closest('a');
+          if (link && link.href && link.href.startsWith('http') && !link.href.includes('localhost')) {
+            e.preventDefault();
+            window.desktopApi.openExternal(link.href);
+          }
+        });
+        
+        // Platform-specific keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+          const cmdOrCtrl = platform === 'macos' ? e.metaKey : e.ctrlKey;
+          
+          if (cmdOrCtrl && e.key === 'w') {
+            e.preventDefault();
+            appWindow.hide();
+          } else if (cmdOrCtrl && e.key === 'm') {
+            e.preventDefault();
+            appWindow.minimize();
+          } else if (cmdOrCtrl && e.key === 'q' && platform !== 'windows') {
+            e.preventDefault();
+            appWindow.close();
+          }
+        });
+        
+        console.log(`Desktop app functionality initialized for ${platform}`);
+      </script>
+    <% end %>
+  </body>
+</html>
