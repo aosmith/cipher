@@ -4,7 +4,7 @@ Linux desktop application releases for Cipher.
 
 ## Latest Release
 
-- **Version**: v0.6.2v0.6.1
+- **Version**: vv0.6.1v0.6.1
 - **DEB Package**: `cipher_v0.6.1_amd64.deb` (~15MB)
 - **AppImage**: `cipher_v0.6.1_amd64.AppImage` (~18MB)
 - **Requirements**: Ubuntu 20.04+ / Debian 11+ or equivalent

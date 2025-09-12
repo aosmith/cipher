@@ -1,6 +1,2 @@
-# SHA256 Checksums - Cipher v0.5.0 Windows
-
-# Note: These are placeholder checksums. Actual checksums will be generated when build issues are resolved.
-# See BUILD-ISSUES.md for current build status.
-
-a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890  Cipher_0.5.0_x64.msi
+9708949990b21706c56ef3531a6ab68e5368de542856fcdc056fff96e2d214a1  CHANGELOG.md
+8fc1784b3348944d288413a42dd90dccb57484e2f728e6e2e1cd6630efd1bd20  checksums.txt
