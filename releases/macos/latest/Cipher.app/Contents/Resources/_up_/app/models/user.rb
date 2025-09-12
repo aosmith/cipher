@@ -7,6 +7,10 @@ class User < ApplicationRecord
   has_many :comments, dependent: :destroy
   has_many :peers, dependent: :destroy
   
+  # Message associations
+  has_many :sent_messages, class_name: 'Message', foreign_key: 'sender_id', dependent: :destroy
+  has_many :received_messages, class_name: 'Message', foreign_key: 'recipient_id', dependent: :destroy
+  
   # Friendship associations
   has_many :sent_friendships, class_name: 'Friendship', foreign_key: 'requester_id', dependent: :destroy
   has_many :received_friendships, class_name: 'Friendship', foreign_key: 'addressee_id', dependent: :destroy
@@ -29,6 +33,36 @@ class User < ApplicationRecord
 
   before_validation :check_public_key_presence, on: :create
 
+  # SECURITY: Context-aware private key serialization
+  # Users can access their own private key, but never other users' private keys
+  def as_json(options = {})
+    context_aware_serialization(:as_json, options)
+  end
+  
+  def to_json(options = {})
+    context_aware_serialization(:to_json, options)
+  end
+  
+  def serializable_hash(options = {})
+    context_aware_serialization(:serializable_hash, options)
+  end
+  
+  private
+  
+  def context_aware_serialization(method, options = {})
+    # Allow private key inclusion only if explicitly requested AND it's for the current user
+    current_user_id = Thread.current[:current_user_for_serialization]
+    include_private_key = options.delete(:include_private_key) && (current_user_id == self.id)
+    
+    # By default, exclude private keys from serialization
+    unless include_private_key
+      excluded = Array(options[:except]) + [:private_key, :private_key_encrypted]
+      options = options.merge(except: excluded.uniq)
+    end
+    
+    super(options)
+  end
+
   # Note: These methods are now handled client-side in JavaScript
   # The server never sees or handles private keys
 
@@ -50,6 +84,8 @@ class User < ApplicationRecord
     user.public_key == public_key_base64
   end
   
+  public
+  
   # Get all friends (both as requester and addressee)
   def friends
     User.where(id: friend_ids)
@@ -58,6 +94,8 @@ class User < ApplicationRecord
   def friend_ids
     (friends_as_requester.pluck(:id) + friends_as_addressee.pluck(:id)).uniq
   end
+  
+  public
   
   # Check if two users are friends
   def friends_with?(user)
@@ -96,6 +134,27 @@ class User < ApplicationRecord
   # Get posts from friends
   def friends_posts
     Post.where(user_id: friend_ids)
+  end
+  
+  public
+  
+  # Messaging methods
+  def messages_with(user)
+    Message.between_users(self, user).recent
+  end
+  
+  def unread_messages_count
+    received_messages.unread.count
+  end
+  
+  def conversations
+    # Get all unique users this user has messaged or received messages from
+    sent_recipients = sent_messages.joins(:recipient).select('users.id, users.username, MAX(messages.created_at) as last_message_at').group('users.id, users.username')
+    received_senders = received_messages.joins(:sender).select('users.id, users.username, MAX(messages.created_at) as last_message_at').group('users.id, users.username')
+    
+    # Combine and get unique conversation partners
+    conversation_user_ids = (sent_messages.pluck(:recipient_id) + received_messages.pluck(:sender_id)).uniq
+    User.where(id: conversation_user_ids)
   end
 
   private

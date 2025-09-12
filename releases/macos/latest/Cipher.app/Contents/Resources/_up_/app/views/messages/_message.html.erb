@@ -1,0 +1,30 @@
+<%= turbo_frame_tag message do %>
+  <div class="message <%= 'message-own' if message.sender == current_user %>" id="<%= dom_id(message) %>">
+    <div class="message-content">
+      <div class="message-text">
+        <%= simple_format(message.content) %>
+      </div>
+      
+      <div class="message-meta">
+        <time class="message-time">
+          <%= message.created_at.strftime("%l:%M %p") %>
+        </time>
+        
+        <% if message.sender == current_user %>
+          <%= link_to message, method: :delete, 
+                      class: "message-delete", 
+                      confirm: "Delete this message?",
+                      data: { turbo_method: :delete } do %>
+            🗑️
+          <% end %>
+        <% end %>
+      </div>
+    </div>
+    
+    <% unless message.sender == current_user %>
+      <div class="message-avatar">
+        <div class="user-initial"><%= message.sender.username.first.upcase %></div>
+      </div>
+    <% end %>
+  </div>
+<% end %>
