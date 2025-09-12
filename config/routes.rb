@@ -28,6 +28,11 @@ Rails.application.routes.draw do
   
   get 'feed', to: 'feed#index'
   
+  # Email verification routes
+  get 'email_verification', to: 'email_verifications#show'
+  patch 'email_verification', to: 'email_verifications#verify'
+  post 'email_verification/resend', to: 'email_verifications#resend'
+  
   # WebSocket mount for Action Cable
   mount ActionCable.server => '/cable'
   
@@ -40,11 +45,14 @@ Rails.application.routes.draw do
       post 'login', to: 'auth#login'
       
       # Friend-based sync endpoints
+      get 'sync_data', to: 'sync#sync_data', as: :sync_data
+      post 'accept_sync', to: 'sync#accept_sync', as: :accept_sync
       get 'users/:user_id/friends', to: 'sync#friends'
       get 'users/:user_id/posts/for_sync', to: 'sync#posts_for_sync' 
       get 'posts/my_posts_for_friends', to: 'sync#my_posts_for_friends'
       get 'posts/:id/sync_data', to: 'sync#post_sync_data'
       post 'posts/sync_store', to: 'sync#sync_store'
+      post 'posts/bulk', to: 'posts#bulk_create'
       get 'content/:content_hash/exists', to: 'sync#content_exists'
       get 'sync/stats', to: 'sync#sync_stats'
       

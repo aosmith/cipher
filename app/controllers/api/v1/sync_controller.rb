@@ -1,5 +1,122 @@
 class Api::V1::SyncController < ApplicationController
   before_action :require_current_user_session
+  before_action :check_rate_limits, only: [:sync_data, :accept_sync]
+  
+  # GET /api/v1/sync_data - Get data to share with a friend
+  def sync_data
+    friend_id = params[:friend_id]
+    friend = User.find(friend_id)
+    
+    # Security: Allow sync data sharing with friends and friends of friends
+    unless current_user_session.friends_with?(friend) || current_user_session.friends_of_friends_with?(friend)
+      render json: { error: 'Access denied: Can only sync with friends or friends of friends' }, status: :forbidden
+      return
+    end
+    
+    # Get original posts from current user (exclude synced posts)
+    posts = current_user_session.posts.original_posts.includes(:attachments).recent.limit(50)
+    
+    posts_data = posts.map do |post|
+      {
+        content: post.content_encrypted,
+        original_user_id: post.original_user_id,
+        content_hash: post.content_hash,
+        created_at: post.created_at.iso8601,
+        timestamp: post.timestamp.iso8601
+      }
+    end
+    
+    sync_response = {
+      posts: posts_data,
+      user_id: current_user_session.id,
+      sync_metadata: {
+        last_sync_time: Time.current.iso8601,
+        total_posts: posts.count,
+        user_public_key: current_user_session.public_key,
+        user_id: current_user_session.id
+      }
+    }
+    
+    render json: sync_response
+  end
+  
+  # POST /api/v1/accept_sync - Accept sync data from a friend
+  def accept_sync
+    friend_id = params[:friend_id]
+    sync_data = params[:sync_data]
+    friend = User.find(friend_id)
+    
+    # Security: Allow accepting sync data from friends and friends of friends
+    unless current_user_session.friends_with?(friend) || current_user_session.friends_of_friends_with?(friend)
+      render json: { error: 'Access denied: Can only sync with friends or friends of friends' }, status: :forbidden
+      return
+    end
+    
+    # Validate sync data structure
+    unless sync_data && sync_data[:posts] && sync_data[:user_id]
+      render json: { error: 'Invalid sync data format' }, status: :bad_request
+      return
+    end
+    
+    # Security validation
+    begin
+      validate_sync_data_security(sync_data)
+    rescue => e
+      render json: { error: e.message }, status: :bad_request
+      return
+    end
+    
+    # Validate bulk limits
+    if sync_data[:posts].size > 100
+      render json: { error: 'Too many posts in sync batch (max 100)' }, status: :bad_request
+      return
+    end
+    
+    synced_count = 0
+    skipped_reasons = []
+    
+    sync_data[:posts].each do |post_data|
+      begin
+        # Check for oversized content
+        if post_data[:content] && post_data[:content].bytesize > 10.kilobytes
+          skipped_reasons << 'Content too large'
+          next
+        end
+        
+        # Check for duplicates
+        if Post.where(content_hash: post_data[:content_hash], user: current_user_session).exists?
+          skipped_reasons << 'Duplicate content detected'
+          next
+        end
+        
+        # Create synced post
+        synced_post = current_user_session.posts.build(
+          content_encrypted: post_data[:content],
+          is_synced: true,
+          original_user_id: post_data[:original_user_id],
+          synced_from_user_id: friend.id,
+          synced_at: Time.current,
+          content_hash: post_data[:content_hash],
+          timestamp: Time.parse(post_data[:created_at])
+        )
+        
+        if synced_post.save
+          synced_count += 1
+        else
+          skipped_reasons << synced_post.errors.full_messages.join(', ')
+        end
+        
+      rescue => e
+        skipped_reasons << e.message
+      end
+    end
+    
+    render json: {
+      success: true,
+      synced_posts_count: synced_count,
+      skipped_reasons: skipped_reasons.uniq
+    }
+  end
   
   # GET /api/v1/users/:user_id/friends
   def friends
@@ -220,6 +337,20 @@ class Api::V1::SyncController < ApplicationController
     unless current_user_session
       render json: { error: 'Authentication required' }, status: :unauthorized
     end
+  end
+  
+  def check_rate_limits
+    # Simple rate limiting: max 10 requests per hour per user
+    cache_key = "sync_rate_limit:#{current_user_session.id}"
+    current_count = Rails.cache.read(cache_key) || 0
+    
+    if current_count >= 10
+      render json: { error: 'Rate limit exceeded: Maximum 10 sync requests per hour' }, status: :too_many_requests
+      return false
+    end
+    
+    Rails.cache.write(cache_key, current_count + 1, expires_in: 1.hour)
+    true
   end
   
   # SECURITY: Ensure no private key data ever gets synced

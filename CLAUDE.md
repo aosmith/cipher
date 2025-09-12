@@ -2,9 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Philosophy
+
+**Quality over Speed**: We prioritize doing things right over doing them fast. This means:
+
+- **Comprehensive Testing**: Write thorough tests for all functionality, especially multi-user P2P scenarios
+- **Security First**: Every feature should be secure by design with proper validation and security measures
+- **Robust Architecture**: Build systems that gracefully handle edge cases, network failures, and concurrent operations
+- **Code Quality**: Prefer clean, maintainable code over quick hacks
+- **Documentation**: Document complex systems and architectural decisions
+- **Iterative Improvement**: It's better to implement fewer features well than many features poorly
+
+When making decisions, always ask: "Is this the right way to build this?" rather than "What's the fastest way to implement this?"
+
 ## Project Overview
 
-This is a Rails 8.0.2 application called "Cipher" with minimal features currently implemented. The application uses modern Rails conventions with Hotwire (Turbo + Stimulus), SQLite for the database, and is configured for deployment via Kamal.
+This is a Rails 8.0.2 application called "Cipher" - an end-to-end encrypted peer-to-peer social network. The application uses modern Rails conventions with Hotwire (Turbo + Stimulus), SQLite for the database, and is configured for deployment via Kamal. The core architecture enables users to run their own servers and sync content directly with friends via WebRTC.
 
 ## Development Commands
 
@@ -82,6 +95,7 @@ This is a Rails 8.0.2 application called "Cipher" with minimal features currentl
 - **Deployment**: Kamal with Docker
 - **Web Server**: Puma with Thruster for production
 - **Desktop App**: Tauri (Rust + WebView) for cross-platform native applications
+- **Architecture**: P2P social network with one user per server instance
 
 ## Security & Cryptography
 
@@ -198,6 +212,63 @@ When preparing a new release:
    - Test installation instructions
 
 **Note**: The `releases/` directory structure allows users to download pre-compiled desktop applications without building from source. The `.gitignore` is configured to ignore the actual binary files while preserving the directory structure and documentation.
+
+## P2P Social Network Features
+
+### Friends of Friends Sync (2-Degree Connections)
+The application now supports data synchronization not only with direct friends (1-degree connections) but also with friends of friends (2-degree connections), enabling broader content propagation:
+
+**Implementation:**
+- `User#friends_of_friends` - Returns users who are friends with your friends but not direct friends
+- `User#friends_of_friends_with?(user)` - Checks if a user is a friend of a friend
+- Sync controller updated to allow sync between friends of friends
+- Post validation allows syncing content from friends of friends
+- Maintains security by verifying mutual friendship connections
+
+**Benefits:**
+- Increases content discoverability across the social network
+- Enables organic content propagation through social connections
+- Maintains trust-based relationships (friends of friends are trusted)
+- Preserves user privacy by limiting to 2-degree connections only
+
+### Email Verification System
+A comprehensive email verification system with verification codes:
+
+**Features:**
+- Email validation with proper format checking
+- 6-character alphanumeric verification codes (uppercase)
+- 15-minute expiration window for verification codes
+- Case-insensitive code verification
+- Email uniqueness enforcement
+- User searchability by email address
+
+**API Endpoints:**
+- `GET /email_verification` - Show verification form
+- `PATCH /email_verification` - Verify email with code
+- `POST /email_verification/resend` - Resend verification code
+
+**Database Fields Added to Users:**
+- `email` - User's email address (unique, required)
+- `email_verified_at` - Timestamp when email was verified
+- `verification_code` - Current verification code
+- `verification_code_expires_at` - Code expiration timestamp
+
+**User Model Methods:**
+- `email_verified?` - Check if email is verified
+- `generate_verification_code` - Generate new 6-character code
+- `verify_email_with_code(code)` - Verify email with provided code
+- `resend_verification_code` - Generate and send new code
+
+**Scopes:**
+- `User.verified` - Users with verified emails
+- `User.unverified` - Users with unverified emails  
+- `User.search_by_email(email)` - Search users by email address
+
+**Security:**
+- Verification codes expire after 15 minutes
+- Codes are alphanumeric and case-insensitive
+- Email addresses are unique across the platform
+- Proper email format validation using URI::MailTo::EMAIL_REGEXP
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.

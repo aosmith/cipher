@@ -3,6 +3,8 @@
 <%
   alice_private_key = RbNaCl::PrivateKey.generate
   bob_private_key = RbNaCl::PrivateKey.generate
+  charlie_private_key = RbNaCl::PrivateKey.generate
+  david_private_key = RbNaCl::PrivateKey.generate
 %>
 
 alice:
@@ -16,3 +18,15 @@ bob:
   private_key: <%= Base64.strict_encode64(bob_private_key) %>
   username: bob
   display_name: Bob
+
+charlie:
+  public_key: <%= Base64.strict_encode64(charlie_private_key.public_key) %>
+  private_key: <%= Base64.strict_encode64(charlie_private_key) %>
+  username: charlie
+  display_name: Charlie
+
+david:
+  public_key: <%= Base64.strict_encode64(david_private_key.public_key) %>
+  private_key: <%= Base64.strict_encode64(david_private_key) %>
+  username: david
+  display_name: David

@@ -44,7 +44,7 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
     assert_text "Post created successfully!"
     assert_text "Hello Cipher! This is my first post."
     
-    alice_post = Post.find_by(content: "Hello Cipher! This is my first post.")
+    alice_post = Post.find_by(content_encrypted: "Hello Cipher! This is my first post.")
     assert_not_nil alice_post
     assert_equal alice, alice_post.user
 
@@ -67,7 +67,7 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
     fill_in "post[content]", with: "Hi everyone! Bob here with my first post."
     click_button "Create Post"
     
-    bob_post = Post.find_by(content: "Hi everyone! Bob here with my first post.")
+    bob_post = Post.find_by(content_encrypted: "Hi everyone! Bob here with my first post.")
     assert_not_nil bob_post
 
     # Step 4: Create friendship between Alice and Bob

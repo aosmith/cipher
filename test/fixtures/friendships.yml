@@ -5,7 +5,19 @@ alice_to_bob:
   addressee: bob
   status: accepted
 
-bob_pending:
+bob_to_alice:
   requester: bob  
   addressee: alice
-  status: pending
+  status: accepted
+
+# Alice and Charlie are NOT friends - for testing non-friend scenarios
+
+bob_to_david:
+  requester: bob
+  addressee: david
+  status: accepted
+  
+david_to_bob:
+  requester: david
+  addressee: bob
+  status: accepted

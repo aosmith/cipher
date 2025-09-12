@@ -30,8 +30,21 @@ class User < ApplicationRecord
   validates :public_key, presence: true, 
                         uniqueness: { message: "is already registered to another account. Please regenerate your keys." },
                         allow_blank: false
+  validates :email, presence: true, 
+                   uniqueness: { case_sensitive: false, message: "is already registered to another account." },
+                   format: { with: URI::MailTo::EMAIL_REGEXP, message: "must be a valid email address" }
 
   before_validation :check_public_key_presence, on: :create
+  before_create :generate_verification_code
+  
+  # Scopes
+  scope :verified, -> { where.not(email_verified_at: nil) }
+  scope :unverified, -> { where(email_verified_at: nil) }
+  scope :search_by_email, ->(email) { where("email LIKE ?", "%#{email}%") }
+  
+  def name
+    display_name
+  end
 
   # SECURITY: Context-aware private key serialization
   # Users can access their own private key, but never other users' private keys
@@ -134,6 +147,81 @@ class User < ApplicationRecord
   # Get posts from friends
   def friends_posts
     Post.where(user_id: friend_ids)
+  end
+  
+  # Get friends of friends (2-degree connections)
+  def friends_of_friends
+    return User.none if friend_ids.empty?
+    
+    # Find users who are friends with our friends, but not us directly
+    # Users who received friend requests from our friends
+    users_from_sent = User.joins(:received_friendships)
+        .where(received_friendships: { 
+          requester_id: friend_ids, 
+          status: 'accepted' 
+        })
+        .where.not(id: self.id) # Exclude self
+        .where.not(id: friend_ids) # Exclude direct friends
+        .distinct
+    
+    # Users who sent friend requests to our friends  
+    users_from_received = User.joins(:sent_friendships)
+        .where(sent_friendships: { 
+          addressee_id: friend_ids, 
+          status: 'accepted' 
+        })
+        .where.not(id: self.id) # Exclude self
+        .where.not(id: friend_ids) # Exclude direct friends
+        .distinct
+        
+    # Combine both queries
+    User.where(id: (users_from_sent.pluck(:id) + users_from_received.pluck(:id)).uniq)
+  end
+  
+  # Check if user is a friend of a friend (2-degree connection)
+  def friends_of_friends_with?(user)
+    return false if user == self
+    return false if friends_with?(user) # Already direct friends
+    
+    # Check if we have mutual friends
+    mutual_friends = friend_ids & user.friend_ids
+    mutual_friends.any?
+  end
+  
+  # Email verification methods
+  def email_verified?
+    email_verified_at.present?
+  end
+  
+  def generate_verification_code
+    self.verification_code = SecureRandom.alphanumeric(6).upcase
+    self.verification_code_expires_at = 15.minutes.from_now
+  end
+  
+  def verify_email_with_code(code)
+    return false if verification_code.blank?
+    return false if verification_code_expires_at < Time.current
+    return false unless verification_code == code.upcase
+    
+    self.email_verified_at = Time.current
+    self.verification_code = nil
+    self.verification_code_expires_at = nil
+    save!
+    
+    true
+  end
+  
+  def send_verification_email
+    # In a real implementation, this would send an email with the verification code
+    # For now, this is a placeholder that could integrate with ActionMailer
+    Rails.logger.info "Verification code for #{email}: #{verification_code}"
+    true
+  end
+  
+  def resend_verification_code
+    generate_verification_code
+    save!
+    send_verification_email
   end
   
   public
