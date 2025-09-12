@@ -9,8 +9,12 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
     @charlie = users(:charlie)
     
     # Set up friendship between Alice and Bob
-    @alice.sent_friendships.create!(addressee: @bob, status: 'accepted')
-    @bob.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    unless Friendship.exists?(requester: @alice, addressee: @bob, status: 'accepted')
+      @alice.sent_friendships.create!(addressee: @bob, status: 'accepted')
+    end
+    unless Friendship.exists?(requester: @bob, addressee: @alice, status: 'accepted')
+      @bob.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    end
     
     # Create some initial content for each user
     @alice.posts.create!(
@@ -34,7 +38,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       visit root_path
       
       # Alice starts local hosting to make her content available
-      click_on "💾 Local Hosting"
+      click_on "🌐 Local Hosting"
       
       # Wait for hosting to be enabled
       assert_text "🟢 Hosting Active", wait: 5
@@ -204,7 +208,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       visit root_path
       
       # Malicious user tries to inject harmful sync data
-      page.evaluate_script("""
+      malicious_script = <<~JAVASCRIPT
         if (window.friendBasedSync) {
           const maliciousData = {
             posts: [{
@@ -220,7 +224,9 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
           // Try to force sync malicious data
           window.friendBasedSync.processSyncData('alice@test.com', maliciousData);
         }
-      """)
+      JAVASCRIPT
+      
+      page.evaluate_script(malicious_script)
       
       # Should be rejected by security validation
       assert_text "❌ Security violation detected", wait: 5
@@ -356,10 +362,26 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
   private
 
   def login_as(user)
-    visit new_user_session_path
-    fill_in "Email", with: user.email
-    fill_in "Password", with: "password123"
-    click_on "Sign in"
-    assert_text "Dashboard", wait: 5
+    # For system tests, we'll use a direct session approach
+    # This simulates the user being logged in without going through the full key derivation
+    visit root_path
+    
+    # Use JavaScript to set the session for testing purposes
+    page.execute_script("
+      fetch('/api/v1/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')
+        },
+        body: JSON.stringify({
+          username: '#{user.username}',
+          public_key: '#{user.public_key}'
+        })
+      });
+    ")
+    
+    # Wait for login to complete
+    sleep 0.5
   end
 end

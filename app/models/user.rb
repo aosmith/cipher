@@ -73,7 +73,17 @@ class User < ApplicationRecord
       options = options.merge(except: excluded.uniq)
     end
     
-    super(options)
+    # Call the original method on the superclass
+    case method
+    when :as_json
+      super(options)
+    when :to_json
+      super(options)
+    when :serializable_hash
+      super(options)
+    else
+      super(options)
+    end
   end
 
   # Note: These methods are now handled client-side in JavaScript
