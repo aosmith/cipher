@@ -39,6 +39,15 @@ Rails.application.routes.draw do
       post 'verify_identity', to: 'auth#verify_identity'
       post 'login', to: 'auth#login'
       
+      # Friend-based sync endpoints
+      get 'users/:user_id/friends', to: 'sync#friends'
+      get 'users/:user_id/posts/for_sync', to: 'sync#posts_for_sync' 
+      get 'posts/my_posts_for_friends', to: 'sync#my_posts_for_friends'
+      get 'posts/:id/sync_data', to: 'sync#post_sync_data'
+      post 'posts/sync_store', to: 'sync#sync_store'
+      get 'content/:content_hash/exists', to: 'sync#content_exists'
+      get 'sync/stats', to: 'sync#sync_stats'
+      
       # Friends management
       resources :friends, only: [:index, :show, :create, :update, :destroy] do
         collection do

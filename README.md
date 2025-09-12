@@ -1,6 +1,21 @@
 # Cipher
 
-A Rails 8.0.2 application built with modern Rails conventions, featuring Hotwire for interactive frontend experiences and configured for seamless deployment via Kamal.
+## ⚠️ BETA SOFTWARE WARNING
+
+**This software is in BETA and should not be used for production or sensitive data.** While Cipher implements end-to-end encryption and zero-knowledge architecture, it has not undergone independent security audits. Use at your own risk and only with non-sensitive information until security has been independently verified.
+
+Key security considerations:
+- 🔒 End-to-end encryption is implemented but not audited
+- 🌐 P2P networking features are experimental 
+- 🔑 Key management system needs security review
+- 📡 WebRTC connections may expose metadata
+- 🛡️ Friend-based data syncing is new and untested at scale
+
+**For security-critical applications, wait for independent security audit completion.**
+
+---
+
+A decentralized social network built with Rails 8.0.2, featuring end-to-end encryption, peer-to-peer data syncing, and zero-knowledge architecture. Users run local servers that connect via WebRTC for secure, private communication.
 
 ## Quick Start
 

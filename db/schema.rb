@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2025_09_12_114122) do
+ActiveRecord::Schema[8.0].define(version: 2025_09_12_133207) do
   create_table "attachment_shares", force: :cascade do |t|
     t.integer "attachment_id", null: false
     t.integer "user_id", null: false
@@ -92,6 +92,16 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_114122) do
     t.datetime "timestamp"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.integer "original_user_id"
+    t.integer "synced_from_user_id"
+    t.boolean "is_synced", default: false
+    t.datetime "synced_at"
+    t.string "content_hash"
+    t.index ["content_hash"], name: "index_posts_on_content_hash"
+    t.index ["is_synced"], name: "index_posts_on_is_synced"
+    t.index ["original_user_id"], name: "index_posts_on_original_user_id"
+    t.index ["synced_at"], name: "index_posts_on_synced_at"
+    t.index ["synced_from_user_id"], name: "index_posts_on_synced_from_user_id"
     t.index ["user_id"], name: "index_posts_on_user_id"
   end
 
@@ -129,6 +139,8 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_114122) do
   add_foreign_key "messages", "users", column: "sender_id"
   add_foreign_key "peers", "users"
   add_foreign_key "posts", "users"
+  add_foreign_key "posts", "users", column: "original_user_id"
+  add_foreign_key "posts", "users", column: "synced_from_user_id"
   add_foreign_key "sync_messages", "peers"
   add_foreign_key "sync_messages", "users"
 end

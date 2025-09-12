@@ -84,7 +84,8 @@
       "WebFetch(domain:v2.tauri.app)",
       "Bash(sw_vers)",
       "Bash(RAILS_ENV=ios bin/rails server -p 3001 -b 127.0.0.1)",
-      "Bash(bin/dev:*)"
+      "Bash(bin/dev:*)",
+      "Bash(zip:*)"
     ],
     "deny": [],
     "ask": []
