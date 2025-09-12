@@ -156,10 +156,10 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
   end
 
   test "user can comment on multiple posts in feed" do
-    # Setup users and friendships
-    alice = User.create!(username: "alice", display_name: "Alice", public_key: "alice_key")
-    bob = User.create!(username: "bob", display_name: "Bob", public_key: "bob_key")
-    charlie = User.create!(username: "charlie", display_name: "Charlie", public_key: "charlie_key")
+    # Setup users with proper keys for system testing
+    alice = User.create!(username: "alice_system", display_name: "Alice", public_key: Base64.strict_encode64("alice_public_key_data_for_system_test"))
+    bob = User.create!(username: "bob_system", display_name: "Bob", public_key: Base64.strict_encode64("bob_public_key_data_for_system_test"))
+    charlie = User.create!(username: "charlie_system", display_name: "Charlie", public_key: Base64.strict_encode64("charlie_public_key_data_for_system_test"))
     
     # Create friendships
     Friendship.create!(requester: alice, addressee: bob, status: 'accepted')
@@ -202,19 +202,27 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
   private
 
   def login_as_user(user)
+    # For system tests, we'll use a direct session approach
+    # This simulates the user being logged in without going through the full key derivation
     visit root_path
     
-    # Look for login form on homepage or redirect to login page
-    if page.has_field?("username") || page.has_field?("public_key")
-      fill_in "username", with: user.username
-      fill_in "public_key", with: user.public_key
-      click_button "Sign In"
-    else
-      # If no login form visible, manually set session for testing
-      # This is a fallback for testing purposes
-      page.execute_script("window.sessionStorage.setItem('user_id', '#{user.id}')")
-      page.execute_script("document.cookie = '_cipher_session=user_id:#{user.id}'")
-      visit dashboard_users_path
-    end
+    # Use JavaScript to set the session for testing purposes
+    page.execute_script("
+      fetch('/api/v1/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')
+        },
+        body: JSON.stringify({
+          username: '#{user.username}',
+          public_key: '#{user.public_key}'
+        })
+      });
+    ")
+    
+    # Wait for the login to complete and refresh the page
+    sleep 0.5
+    visit root_path
   end
 end

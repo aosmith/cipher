@@ -1,12 +1,12 @@
 class MessagesController < ApplicationController
   before_action :require_current_user_session
   before_action :set_current_user_for_decryption
-  before_action :set_message, only: [:show, :destroy]
+  before_action :set_message, only: [:destroy]
   before_action :set_recipient, only: [:show, :create]
   
   # GET /messages - List all conversations
   def index
-    @conversations = current_user_session.conversations.includes(:sent_messages, :received_messages)
+    @conversations = current_user_session.conversations
     @unread_count = current_user_session.unread_messages_count
   end
   

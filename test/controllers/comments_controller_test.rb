@@ -2,20 +2,10 @@ require "test_helper"
 
 class CommentsControllerTest < ActionDispatch::IntegrationTest
   setup do
-    # Clean up fixtures 
-    AttachmentShare.destroy_all
-    Attachment.destroy_all
-    Comment.destroy_all
-    SyncMessage.destroy_all
-    Friendship.destroy_all
-    Peer.destroy_all
-    Post.destroy_all
-    User.destroy_all
-    
-    @user = User.create!(username: "testuser", public_key: "test_key")
-    @other_user = User.create!(username: "otheruser", public_key: "other_key")
-    @post = @user.posts.create!(content: "Test post")
-    @comment = @post.comments.create!(user: @user, content: "Test comment")
+    @user = users(:alice)
+    @other_user = users(:bob)
+    @post = posts(:alice_post)
+    @comment = comments(:alice_comment)
   end
 
   test "should create comment when logged in" do
@@ -82,26 +72,30 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
   test "should handle non-existent comment" do
     login_as(@user)
     
-    assert_raises(ActiveRecord::RecordNotFound) do
+    assert_no_difference('Comment.count') do
       delete post_comment_path(@post, id: 99999)
     end
+    # Should return 404 for non-existent resource
+    assert_response :not_found
   end
 
   test "should handle non-existent post" do
     login_as(@user)
     
-    assert_raises(ActiveRecord::RecordNotFound) do
+    assert_no_difference('Comment.count') do
       post "/posts/99999/comments", params: { comment: { content: "New comment" } }
     end
+    # Should return 404 for non-existent resource
+    assert_response :not_found
   end
 
   private
 
   def login_as(user)
-    # Simple approach for testing - override the session
-    # In a real app, you'd have a proper login mechanism
-    # For testing purposes, we'll directly set the session
-    post '/session_stub', params: { user_id: user.id } 
+    # Use the application's login mechanism via API
+    post "/api/v1/login", 
+         params: { username: user.username, public_key: user.public_key }, 
+         as: :json
     @current_user = user
   end
 end

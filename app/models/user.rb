@@ -84,6 +84,8 @@ class User < ApplicationRecord
     user.public_key == public_key_base64
   end
   
+  public
+  
   # Get all friends (both as requester and addressee)
   def friends
     User.where(id: friend_ids)
@@ -92,6 +94,8 @@ class User < ApplicationRecord
   def friend_ids
     (friends_as_requester.pluck(:id) + friends_as_addressee.pluck(:id)).uniq
   end
+  
+  public
   
   # Check if two users are friends
   def friends_with?(user)
@@ -131,6 +135,8 @@ class User < ApplicationRecord
   def friends_posts
     Post.where(user_id: friend_ids)
   end
+  
+  public
   
   # Messaging methods
   def messages_with(user)

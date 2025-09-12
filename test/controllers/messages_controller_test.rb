@@ -1,28 +1,10 @@
 require "test_helper"
 
 class MessagesControllerTest < ActionController::TestCase
-  # Skip fixture loading issues for now - create test data manually
-  
   def setup
-    # Create test users directly to avoid fixture dependency issues
-    @alice = User.create!(
-      username: 'alice',
-      display_name: 'Alice',
-      public_key: Base64.strict_encode64(RbNaCl::PrivateKey.generate.public_key),
-      private_key: Base64.strict_encode64(RbNaCl::PrivateKey.generate)
-    )
-    @bob = User.create!(
-      username: 'bob', 
-      display_name: 'Bob',
-      public_key: Base64.strict_encode64(RbNaCl::PrivateKey.generate.public_key),
-      private_key: Base64.strict_encode64(RbNaCl::PrivateKey.generate)
-    )
+    @alice = users(:alice)
+    @bob = users(:bob)
     login_as(@alice)
-  end
-  
-  def teardown
-    User.delete_all
-    Message.delete_all
   end
 
   test "should get index when logged in" do
