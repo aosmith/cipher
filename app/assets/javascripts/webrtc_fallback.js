@@ -6,20 +6,29 @@
 class WebRTCFallbackManager {
   constructor() {
     this.serverTiers = [
-      // Tier 1: Primary reliable servers (verified working)
+      // Tier 1: Primary Cloudflare servers (global anycast)
       {
-        name: 'Primary STUN servers',
+        name: 'Cloudflare servers',
         priority: 1,
+        servers: [
+          { urls: "stun:stun.cloudflare.com:3478" }
+        ]
+      },
+      
+      // Tier 2: Primary Google STUN servers
+      {
+        name: 'Primary Google STUN servers',
+        priority: 2,
         servers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" }
         ]
       },
       
-      // Tier 2: Secondary Google STUN cluster
+      // Tier 3: Secondary Google STUN cluster
       {
         name: 'Google STUN cluster',
-        priority: 2,
+        priority: 3,
         servers: [
           { urls: "stun:stun2.l.google.com:19302" },
           { urls: "stun:stun3.l.google.com:19302" },
@@ -27,22 +36,13 @@ class WebRTCFallbackManager {
         ]
       },
       
-      // Tier 3: Alternative public servers
+      // Tier 4: Alternative public servers
       {
         name: 'Alternative public servers',
-        priority: 3,
+        priority: 4,
         servers: [
           { urls: "stun:stun.services.mozilla.com" },
           { urls: "stun:stun.stunprotocol.org:3478" }
-        ]
-      },
-      
-      // Tier 4: Cloudflare servers
-      {
-        name: 'Cloudflare servers',
-        priority: 4,
-        servers: [
-          { urls: "stun:stun.cloudflare.com:3478" }
         ]
       },
       
