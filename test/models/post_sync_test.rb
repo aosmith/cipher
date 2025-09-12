@@ -162,7 +162,7 @@ class PostSyncTest < ActiveSupport::TestCase
   end
 
   test "content size validation prevents oversized posts" do
-    large_content = "A" * 10001 # Exceeds 10KB limit
+    large_content = "A" * 10241 # Exceeds 10KB limit (10240 bytes)
     
     post = Post.new(
       user: @alice,
@@ -196,7 +196,7 @@ class PostSyncTest < ActiveSupport::TestCase
     )
     
     assert_not duplicate_post.valid?
-    assert_includes duplicate_post.errors.full_messages, "Duplicate content detected"
+    assert_includes duplicate_post.errors.full_messages, "Content Duplicate content detected"
   end
 
   test "friendship validation for synced posts" do
@@ -218,7 +218,7 @@ class PostSyncTest < ActiveSupport::TestCase
     )
     
     assert_not synced_from_stranger.valid?
-    assert_includes synced_from_stranger.errors.full_messages, "Can only sync content from friends"
+    assert_includes synced_from_stranger.errors.full_messages, "Can only sync posts from friends or friends of friends"
   end
 
   test "sync timestamps are properly managed" do

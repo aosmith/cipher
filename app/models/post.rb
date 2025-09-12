@@ -25,8 +25,8 @@ class Post < ApplicationRecord
   before_validation :set_content_hash, on: [:create, :update], unless: :is_synced?
   after_save :clear_plaintext_cache
   
-  # Validation for synced posts
-  validate :sync_fields_consistency, if: :is_synced?
+  # Validation for sync fields consistency
+  validate :sync_fields_consistency
 
   def content=(plaintext_content)
     @plaintext_content = plaintext_content
@@ -208,6 +208,11 @@ class Post < ApplicationRecord
       if user && original_user && !user.friends_with?(original_user) && !user.friends_of_friends_with?(original_user)
         errors.add(:base, "Can only sync posts from friends or friends of friends")
       end
+    else
+      # If not synced, these fields should not be set
+      errors.add(:synced_from_user, "can only be set if post is synced") if synced_from_user_id.present?
+      errors.add(:original_user, "can only be set if post is synced") if original_user_id.present? && original_user_id != user_id
+      errors.add(:synced_at, "can only be set if post is synced") if synced_at.present?
     end
   end
   
@@ -244,7 +249,10 @@ class Post < ApplicationRecord
       return
     end
     
-    # Content size limits removed - dealing with spam later
+    # Content size limits
+    if @plaintext_content && @plaintext_content.bytesize > 10.kilobytes
+      errors.add(:content, "too large: Maximum 10KB allowed")
+    end
     
     # Attachment limits
     if attachments.size > 5
