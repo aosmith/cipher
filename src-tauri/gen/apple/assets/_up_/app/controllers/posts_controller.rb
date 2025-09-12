@@ -8,11 +8,8 @@ class PostsController < ApplicationController
   end
 
   def show
-    @post = Post.find(params[:id])
-    # Ensure user can view this post
-    unless @post.user == current_user_session
-      redirect_to root_path, alert: 'Access denied'
-    end
+    # @post is already set by set_post callback
+    # Access control is handled in set_post
   end
 
   def new
@@ -30,7 +27,8 @@ class PostsController < ApplicationController
     if @post.save
       redirect_to root_path, notice: 'Post created successfully!'
     else
-      render :new, status: :unprocessable_entity
+      @posts = current_user_session.posts.includes(:attachments).order(created_at: :desc)
+      render :index, status: :unprocessable_content
     end
   end
 
@@ -41,7 +39,7 @@ class PostsController < ApplicationController
     if @post.update(post_params)
       redirect_to @post, notice: 'Post updated successfully!'
     else
-      render :edit, status: :unprocessable_entity
+      render :edit, status: :unprocessable_content
     end
   end
 
@@ -54,6 +52,8 @@ class PostsController < ApplicationController
 
   def set_post
     @post = current_user_session.posts.find(params[:id])
+  rescue ActiveRecord::RecordNotFound
+    redirect_to root_path, alert: 'Access denied' and return
   end
 
   def post_params

@@ -5,6 +5,7 @@ class Post < ApplicationRecord
 
   belongs_to :user
   has_many :attachments, dependent: :destroy
+  has_many :comments, dependent: :destroy
 
   scope :recent, -> { order(timestamp: :desc) }
 
@@ -12,16 +13,19 @@ class Post < ApplicationRecord
   validate :content_or_attachments_present
 
   before_validation :set_timestamp, on: :create
-  before_validation :encrypt_content, on: :create
+  before_validation :encrypt_content, on: [:create, :update]
   before_validation :sign_content, on: :create
+  after_save :clear_plaintext_cache
 
   def content=(plaintext_content)
     @plaintext_content = plaintext_content
   end
 
   def content
+    # If plaintext content is cached, return it
     return @plaintext_content if @plaintext_content
     
+    # Otherwise, return decrypted content from database
     if content_encrypted.present?
       decrypt_content
     end
@@ -95,11 +99,22 @@ class Post < ApplicationRecord
   end
 
   def content_or_attachments_present
-    has_content = @plaintext_content.present? || content_encrypted.present?
     has_attachments = attachments.any?
+    
+    # If @plaintext_content has been explicitly set (not nil), use that for validation
+    if defined?(@plaintext_content) && !@plaintext_content.nil?
+      has_content = @plaintext_content.present?
+    else
+      # Otherwise, check existing encrypted content
+      has_content = content_encrypted.present?
+    end
     
     unless has_content || has_attachments
       errors.add(:base, "Post must have either content or attachments")
     end
+  end
+
+  def clear_plaintext_cache
+    @plaintext_content = nil
   end
 end

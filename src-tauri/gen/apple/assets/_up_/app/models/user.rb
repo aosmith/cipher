@@ -4,6 +4,7 @@ class User < ApplicationRecord
   require 'bcrypt'
 
   has_many :posts, dependent: :destroy
+  has_many :comments, dependent: :destroy
   has_many :peers, dependent: :destroy
   
   # Friendship associations
@@ -90,6 +91,11 @@ class User < ApplicationRecord
   # Get pending friend requests sent by this user
   def sent_friend_requests
     sent_friendships.pending.includes(:addressee)
+  end
+  
+  # Get posts from friends
+  def friends_posts
+    Post.where(user_id: friend_ids)
   end
 
   private

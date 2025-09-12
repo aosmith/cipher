@@ -22,16 +22,6 @@
           <small>Share this with others so they can send you encrypted messages</small>
         </div>
         
-        <div class="private-key-info">
-          <div class="warning-box">
-            <h3>⚠️ Important: Your Private Key</h3>
-            <p>Your private key was shown during account creation and is stored securely in your browser. 
-            If you didn't save it, you can export it from the backup section.</p>
-            <div class="key-actions">
-              <%= link_to "💾 Backup Your Keys", export_keys_users_path, class: "btn btn-secondary" %>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -146,6 +136,10 @@
 .dashboard-header {
   text-align: center;
   margin-bottom: 40px;
+  background: white;
+  border-radius: 16px;
+  padding: 30px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
 }
 
 .dashboard-header h1 {
@@ -237,32 +231,6 @@
   font-style: italic;
 }
 
-.private-key-info {
-  margin-top: 20px;
-}
-
-.warning-box {
-  background: #fef3c7;
-  border: 1px solid #f59e0b;
-  border-radius: 8px;
-  padding: 20px;
-}
-
-.warning-box h3 {
-  color: #92400e;
-  margin-top: 0;
-  margin-bottom: 10px;
-}
-
-.warning-box p {
-  color: #78350f;
-  margin-bottom: 15px;
-}
-
-.key-actions {
-  display: flex;
-  gap: 10px;
-}
 
 .steps-grid {
   display: grid;

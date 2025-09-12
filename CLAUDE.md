@@ -151,3 +151,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize clear the cache after changes.
 - memorize use stylesheets instead of inline styles.
 - memorize compile any binaries we can and push tags to git for any new version.
+- memorize when we version bump it should only be our apps and not dependancies unless they have been updated as well.  Ask before updating deps like Tauri
