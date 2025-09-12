@@ -1,6 +1,6 @@
 [package]
 name = "cipher-desktop"
-version = "0.5.9"
+version = "0.5.10"
 description = "Cipher - End-to-End Encrypted P2P Social Network"
 authors = ["Cipher Team"]
 license = "MIT"
@@ -14,12 +14,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
-tauri-build = { version = "2.0", features = [] }
+tauri-build = { version = "0.5.10", features = [] }
 
 [dependencies]
 serde_json = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-tauri = { version = "2.0", features = ["devtools"] }
+serde = { version = "0.5.10", features = ["derive"] }
+tauri = { version = "0.5.10", features = ["devtools"] }
 tauri-plugin-shell = "2.0.0"
 
 [features]
