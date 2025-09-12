@@ -16,12 +16,12 @@
   <% if @posts.any? %>
     <div class="posts-grid">
       <% @posts.each do |post| %>
-        <div class="post-card">
+        <div class="post-card post" data-post-id="<%= post.id %>" data-has-media="<%= post.has_media? %>">
           <div class="post-header">
             <div class="post-author">
               <strong><%= post.user.display_name || post.user.username %></strong>
             </div>
-            <div class="post-timestamp">
+            <div class="post-timestamp" data-timestamp="<%= post.timestamp&.iso8601 %>">
               <%= post.timestamp&.strftime("%b %d, %Y at %I:%M %p") %>
             </div>
             <div class="post-actions">

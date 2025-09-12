@@ -33,8 +33,14 @@ class Api::V1::FriendsController < ApplicationController
   end
 
   def send_request
-    public_key = params[:public_key]
-    target_user = User.find_by(public_key: public_key)
+    # Accept either username or public_key
+    if params[:username].present?
+      target_user = User.find_by(username: params[:username])
+    elsif params[:public_key].present?
+      target_user = User.find_by(public_key: params[:public_key])
+    else
+      return render json: { error: 'Username or public key required' }, status: 400
+    end
     
     if target_user.nil?
       return render json: { error: 'User not found' }, status: 404

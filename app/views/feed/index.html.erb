@@ -16,12 +16,12 @@
   <% if @posts.any? %>
     <div class="message-list">
       <% @posts.each do |post| %>
-        <div class="message-item">
+        <div class="message-item post" data-post-id="<%= post.id %>" data-has-media="<%= post.has_media? %>">
           <div class="message-header">
             <div class="author">
               <%= post.user.display_name || post.user.username %> (@<%= post.user.username %>)
             </div>
-            <div class="timestamp">
+            <div class="timestamp" data-timestamp="<%= post.timestamp.iso8601 %>">
               <%= time_ago_in_words(post.timestamp) %> ago • 🔒 Encrypted
             </div>
           </div>
