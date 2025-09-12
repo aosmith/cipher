@@ -57,7 +57,7 @@ This is a Rails 8.0.2 application called "Cipher" with minimal features currentl
 - `./scripts/prepare-release.sh [version]` - Build all platforms and prepare release files
 - `./scripts/update-release-links.sh [version]` - Update all version numbers and download links
 - **Releases Directory**: `releases/` contains pre-compiled desktop apps for Windows, macOS, and Linux
-- **Current Version**: v0.5.8
+- **Current Version**: v0.5.10
 - See `releases/README.md` for installation instructions and download links
 
 #### Version Management
@@ -152,3 +152,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize use stylesheets instead of inline styles.
 - memorize compile any binaries we can and push tags to git for any new version.
 - memorize when we version bump it should only be our apps and not dependancies unless they have been updated as well.  Ask before updating deps like Tauri
+- memorize ALWAYS recompile binaries after version bumps using ./scripts/prepare-release.sh [version] - Don't just bump version numbers without rebuilding!
