@@ -41,6 +41,10 @@ class CommentsController < ApplicationController
   end
 
   def redirect_back_or_to(fallback_location, options = {})
-    redirect_back(fallback_location: fallback_location, **options)
+    if request.referer
+      redirect_back(fallback_location: fallback_location, **options)
+    else
+      redirect_to fallback_location, **options
+    end
   end
 end

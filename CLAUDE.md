@@ -215,3 +215,5 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize the update-release-links.sh script now only updates package versions, not Tauri dependency versions - this prevents build breaks
 - memorize use as little javascript as possible, the client and the server are the same machine so latency is not an issue
 - memorize We are user a local server to power a p2p encrypted social network, private keys can be on the server but they should never leave the users machine over p2p channels.  We can assume the browser to server connection is secure because it is localhost.
+- memorize When user asks to commit and push changes, ALWAYS use `git add .` to add ALL changes, then create a comprehensive commit message summarizing all modifications, then push to remote.
+- memorize if I say vX.X.X I mean semver, omit the v

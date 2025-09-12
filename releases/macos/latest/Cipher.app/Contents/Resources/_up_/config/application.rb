@@ -23,5 +23,14 @@ module Cipher
     #
     # config.time_zone = "Central Time (US & Canada)"
     # config.eager_load_paths << Rails.root.join("extras")
+    
+    # SECURITY: Filter private keys and sensitive data from logs
+    config.filter_parameters += [
+      :private_key, :privateKey, :private_key_encrypted,
+      :password, :password_confirmation, :current_password,
+      :secret, :token, :api_key, :auth_token,
+      :crypto_key, :encryption_key, :signing_key,
+      /private.*key/i, /.*secret.*/i, /.*token.*/i, /.*key.*private/i
+    ]
   end
 end
