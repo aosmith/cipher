@@ -83,6 +83,63 @@ This is a Rails 8.0.2 application called "Cipher" with minimal features currentl
 - **Web Server**: Puma with Thruster for production
 - **Desktop App**: Tauri (Rust + WebView) for cross-platform native applications
 
+## Security & Cryptography
+
+### Local-First Architecture
+
+**Local Deployment Model**
+- Application runs entirely on user's local machine (Tauri desktop app or `rails server`)
+- Database is local SQLite file owned by the user
+- No remote server concerns - user controls their own data
+- Private keys can be stored locally since it's the user's own device
+- Encryption protects data at rest and in peer-to-peer communication
+
+**Encryption for Privacy & P2P Communication**
+- Messages: Encrypted with recipient's public key, signed with sender's private key
+- Posts: Can be encrypted for privacy or stored plaintext (user's choice)
+- Attachments: Encrypted with symmetric keys for sharing
+- Private keys derived from username/password for deterministic key generation
+- Use NaCl (libsodium) for all cryptographic operations
+
+**Key Management**
+- Username + Password → Private Key (via PBKDF2/Argon2 key derivation)
+- Private Key → Public Key (via NaCl crypto_sign_keypair_seed)
+- Private keys stored encrypted in local database (AES with password-derived key)
+- Public keys shared for secure peer-to-peer communication
+- Session unlocks private key for encryption/decryption operations
+
+**Peer-to-Peer Security**
+- Messages encrypted end-to-end between users
+- Public key cryptography enables secure communication without shared secrets
+- Digital signatures verify message authenticity
+- Local data encrypted to prevent unauthorized access to user's device
+
+**CRITICAL: Private Key Protection**
+- ❌ **NEVER transmit private keys over P2P network channels**
+- ❌ **NEVER expose other users' private keys through any API**  
+- ❌ **NEVER log private keys in application logs**
+- ✅ **Users can access their OWN private key via localhost API**
+- ✅ **Private keys stored on local server (user's machine)**
+- ✅ **Browser ↔ Server communication is secure (localhost)**
+- ✅ **Only public keys transmitted over P2P channels**
+- ✅ **Context-aware serialization prevents cross-user private key access**
+
+**Security Model:**
+- **Localhost Communication**: Browser ↔ Server communication is secure (localhost)
+- **Own Private Key**: User can access their own private key via localhost API
+- **Others' Private Keys**: Never accessible through any API or serialization
+- **P2P Network**: Only public keys are transmitted between users over P2P channels
+- **Local Storage**: Private keys stored on local server, never transmitted over P2P
+- **Logging**: All private key parameters filtered from application logs
+- **Trust Boundary**: Server is trusted (user's machine), P2P network is not trusted
+
+**Security Safeguards Implemented:**
+- Parameter filtering in `config/application.rb` and `config/initializers/security.rb`
+- Context-aware User model serialization (own vs others' private keys)
+- `serialize_user_safely` helper method for controllers
+- API endpoints use explicit field selection for other users
+- Thread-local context tracking for safe serialization
+
 ### File Structure
 - Standard Rails 8 application structure
 - Currently contains only base application classes (no custom models/controllers yet)
@@ -155,3 +212,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize ALWAYS recompile binaries after version bumps using ./scripts/prepare-release.sh [version] - Don't just bump version numbers without rebuilding!
 - memorize the update-release-links.sh script now only updates package versions, not Tauri dependency versions - this prevents build breaks
 - memorize use as little javascript as possible, the client and the server are the same machine so latency is not an issue
+- memorize We are user a local server to power a p2p encrypted social network, private keys can be on the server but they should never leave the users machine over p2p channels.  We can assume the browser to server connection is secure because it is localhost.

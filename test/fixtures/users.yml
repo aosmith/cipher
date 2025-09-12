@@ -1,11 +1,18 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
-one:
-  public_key: test_public_key_one
-  username: user_one
-  display_name: User One
+<%
+  alice_private_key = RbNaCl::PrivateKey.generate
+  bob_private_key = RbNaCl::PrivateKey.generate
+%>
 
-two:
-  public_key: test_public_key_two
-  username: user_two
-  display_name: User Two
+alice:
+  public_key: <%= Base64.strict_encode64(alice_private_key.public_key) %>
+  private_key: <%= Base64.strict_encode64(alice_private_key) %>
+  username: alice
+  display_name: Alice
+
+bob:
+  public_key: <%= Base64.strict_encode64(bob_private_key.public_key) %>
+  private_key: <%= Base64.strict_encode64(bob_private_key) %>
+  username: bob
+  display_name: Bob

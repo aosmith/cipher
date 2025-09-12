@@ -1,4 +1,14 @@
 Rails.application.routes.draw do
+  # Messages routes
+  resources :messages, only: [:index, :create, :destroy, :show] do
+    collection do
+      get 'with/:user_id', to: 'messages#show', as: :conversation_with
+    end
+  end
+  
+  # Shortcut route for messaging a specific user
+  get 'messages/:user_id', to: 'messages#show', as: :user_message
+  
   resources :users, only: [:index, :show, :create, :new] do
     collection do
       get :import_keys
@@ -38,6 +48,7 @@ Rails.application.routes.draw do
       end
       
       post 'users/by_public_key', to: 'users#by_public_key'
+      get 'users/current_with_private_key', to: 'users#current_user_with_private_key'
       
       # Blockchain endpoints
       get 'blockchain/config', to: 'blockchain#config'

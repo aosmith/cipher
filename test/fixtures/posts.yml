@@ -1,13 +1,13 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
-one:
-  user: one
-  content_encrypted: MyText
-  signature: MyText
-  timestamp: 2025-09-09 20:11:02
+alice_post:
+  user: alice
+  content_encrypted: Hello world from Alice!
+  signature: alice_signature
+  timestamp: <%= 1.day.ago %>
 
-two:
-  user: two
-  content_encrypted: MyText
-  signature: MyText
-  timestamp: 2025-09-09 20:11:02
+bob_post:
+  user: bob
+  content_encrypted: Bob's thoughts on encryption
+  signature: bob_signature
+  timestamp: <%= 2.hours.ago %>

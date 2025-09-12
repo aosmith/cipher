@@ -1,0 +1,13 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+alice_to_bob:
+  sender: alice
+  recipient: bob
+  content: Hello Bob!
+  read_at: <%= 1.day.ago %>
+
+bob_to_alice:
+  sender: bob
+  recipient: alice
+  content: Hi Alice, how are you?
+  read_at: nil

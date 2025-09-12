@@ -7,6 +7,9 @@
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
+    <% if current_user_session %>
+      <meta name="current-user-id" content="<%= current_user_session.id %>">
+    <% end %>
     
     <!-- Desktop app specific meta tags -->
     <% if Rails.env.desktop? %>
@@ -98,6 +101,9 @@
                 <%= link_to friends_users_path, class: "desktop-nav-link" do %>
                   👥 Friends
                 <% end %>
+                <%= link_to messages_path, class: "desktop-nav-link" do %>
+                  💬 Messages
+                <% end %>
               </div>
               
               <div class="desktop-nav-section">
@@ -159,6 +165,7 @@
                   <%= link_to "Posts", posts_path, class: "nav-link" %>
                   <%= link_to "Feed", feed_path, class: "nav-link" %>
                   <%= link_to "Friends", friends_users_path, class: "nav-link" %>
+                  <%= link_to "Messages", messages_path, class: "nav-link" %>
                   <%= link_to "Hosting", local_hosting_users_path, class: "nav-link" %>
                   <%= link_to "Host Panel", host_dashboard_users_path, class: "nav-link" %>
                   <%= link_to "Backup", export_keys_users_path, class: "nav-link" %>

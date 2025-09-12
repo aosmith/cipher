@@ -22,6 +22,9 @@
 
     <div class="profile-actions">
       <%= link_to "💬 New Post", new_post_path, class: "btn btn-primary" %>
+      <% if current_user_session && @user != current_user_session %>
+        <%= link_to "📩 Send Message", user_message_path(@user), class: "btn btn-outline" %>
+      <% end %>
     </div>
 
     <div class="key-info">
