@@ -1,17 +1,17 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
-one:
-  post: one
-  filename: MyString
-  content_type: MyString
-  file_size: 1
-  data_encrypted: MyText
-  checksum: MyString
+alice_attachment:
+  post: alice_post
+  filename: alice_photo.jpg
+  content_type: image/jpeg
+  file_size: 1024000
+  data_encrypted: encrypted_alice_photo_data
+  checksum: alice_photo_checksum
 
-two:
-  post: two
-  filename: MyString
-  content_type: MyString
-  file_size: 1
-  data_encrypted: MyText
-  checksum: MyString
+bob_attachment:
+  post: bob_post
+  filename: bob_document.pdf
+  content_type: application/pdf
+  file_size: 512000
+  data_encrypted: encrypted_bob_doc_data
+  checksum: bob_doc_checksum

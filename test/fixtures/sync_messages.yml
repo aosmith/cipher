@@ -1,19 +1,19 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
-one:
-  user: one
-  peer: one
-  payload: MyText
-  message_type: MyString
-  status: MyString
-  processed_count: 1
-  error_count: 1
+alice_sync:
+  user: alice
+  peer: alice_peer
+  payload: alice_sync_payload_data
+  message_type: friend_request
+  status: pending
+  processed_count: 0
+  error_count: 0
 
-two:
-  user: two
-  peer: two
-  payload: MyText
-  message_type: MyString
-  status: MyString
+bob_sync:
+  user: bob
+  peer: bob_peer
+  payload: bob_sync_payload_data
+  message_type: message_sync
+  status: completed
   processed_count: 1
-  error_count: 1
+  error_count: 0

@@ -44,6 +44,7 @@ Rails.application.routes.draw do
         collection do
           post :send_request
           post :respond_to_request
+          get :search_by_public_key
         end
       end
       

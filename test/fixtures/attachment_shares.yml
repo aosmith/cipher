@@ -1,11 +1,11 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
-one:
-  attachment: one
-  user: one
-  encrypted_key: MyText
+alice_share:
+  attachment: alice_attachment
+  user: alice
+  encrypted_key: alice_encrypted_key_for_attachment
 
-two:
-  attachment: two
-  user: two
-  encrypted_key: MyText
+bob_share:
+  attachment: alice_attachment  
+  user: bob
+  encrypted_key: bob_encrypted_key_for_alice_attachment

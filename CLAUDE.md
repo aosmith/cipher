@@ -107,6 +107,8 @@ This is a Rails 8.0.2 application called "Cipher" with minimal features currentl
 - Private keys stored encrypted in local database (AES with password-derived key)
 - Public keys shared for secure peer-to-peer communication
 - Session unlocks private key for encryption/decryption operations
+- **Public keys are the primary identifier** for P2P interactions (prevent username collisions)
+- Usernames are local display names, public keys ensure global uniqueness
 
 **Peer-to-Peer Security**
 - Messages encrypted end-to-end between users

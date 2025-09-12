@@ -1,13 +1,13 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
-one:
-  user: one
-  post: one
-  content: MyText
-  timestamp: 2025-09-12 17:08:48
+alice_comment:
+  user: alice
+  post: alice_post
+  content: Great post Alice!
+  timestamp: <%= 1.hour.ago %>
 
-two:
-  user: two
-  post: two
-  content: MyText
-  timestamp: 2025-09-12 17:08:48
+bob_comment:
+  user: bob
+  post: alice_post
+  content: Thanks for sharing this!
+  timestamp: <%= 30.minutes.ago %>

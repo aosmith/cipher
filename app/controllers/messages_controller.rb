@@ -56,7 +56,7 @@ class MessagesController < ApplicationController
         format.html { redirect_back(fallback_location: messages_path) }
       end
     else
-      redirect_back(fallback_location: messages_path), alert: "You can only delete your own messages"
+      redirect_back(fallback_location: messages_path, alert: "You can only delete your own messages")
     end
   end
   
