@@ -290,3 +290,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize When user asks to commit and push changes, ALWAYS use `git add .` to add ALL changes, then create a comprehensive commit message summarizing all modifications, then push to remote.
 - memorize if I say vX.X.X I mean semver, omit the v
 - memorize Removing a broken test is not fixing it
+- memorize removing failing tests is not fixing them.  Fix the problem not the test unless it is directly asked for.

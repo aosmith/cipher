@@ -45,6 +45,10 @@ class User < ApplicationRecord
   def name
     display_name
   end
+  
+  def name=(value)
+    self.display_name = value
+  end
 
   # SECURITY: Context-aware private key serialization
   # Users can access their own private key, but never other users' private keys
@@ -112,6 +116,14 @@ class User < ApplicationRecord
   end
   
   public
+  
+  # Get all friendships (both sent and received)
+  def friendships
+    Friendship.where(
+      "(requester_id = ? OR addressee_id = ?)",
+      self.id, self.id
+    )
+  end
   
   # Get all friends (both as requester and addressee)
   def friends

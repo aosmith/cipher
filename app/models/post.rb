@@ -95,16 +95,25 @@ class Post < ApplicationRecord
   end
 
   def sign_content
-    # Create a signature for the entire post including attachments
-    content_to_sign = [content_encrypted, attachments.map(&:checksum)].flatten.compact.join
+    # Skip signing if we're already in the signing process (prevent recursion)
+    return if @signing_in_progress
+    @signing_in_progress = true
     
-    # If there's no content to sign, create a minimal signature with timestamp
-    if content_to_sign.empty?
-      content_to_sign = timestamp&.to_i&.to_s || Time.current.to_i.to_s
+    begin
+      # Create a signature for the entire post including attachments
+      attachment_checksums = attachments.loaded? ? attachments.map(&:checksum) : []
+      content_to_sign = [content_encrypted, attachment_checksums].flatten.compact.join
+      
+      # If there's no content to sign, create a minimal signature with timestamp
+      if content_to_sign.empty?
+        content_to_sign = timestamp&.to_i&.to_s || Time.current.to_i.to_s
+      end
+      
+      # For now, create a simple signature (in production this would use proper cryptographic signing)
+      self.signature = Digest::SHA256.hexdigest("#{user.id}-#{content_to_sign}-#{timestamp}")
+    ensure
+      @signing_in_progress = false
     end
-    
-    # For now, create a simple signature (in production this would use proper cryptographic signing)
-    self.signature = Digest::SHA256.hexdigest("#{user.id}-#{content_to_sign}-#{timestamp}")
   end
 
   def decrypt_content
@@ -193,11 +202,14 @@ class Post < ApplicationRecord
   end
   
   def generate_content_hash
+    # Prevent infinite recursion by using loaded attachments only
+    attachment_checksums = attachments.loaded? ? attachments.map(&:checksum).sort.join : ""
+    
     content_to_hash = [
       content_encrypted,
       timestamp&.to_i&.to_s,
       signature,
-      attachments.map(&:checksum).sort.join
+      attachment_checksums
     ].compact.join
     
     Digest::SHA256.hexdigest(content_to_hash)

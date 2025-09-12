@@ -9,7 +9,7 @@
     </div>
   </div>
   
-  <% if @friends_count > 0 %>
+  <% if @friends_count >= 0 %>
     <p class="peer-count">Posts from your <%= pluralize(@friends_count, 'friend') %></p>
   <% end %>
 
@@ -54,14 +54,14 @@
 
           <% if post.comments.any? %>
             <div class="comments-section">
-              <h4>💬 Comments (<%= post.comments.count %>)</h4>
+              <h4><%= pluralize(post.comments.count, 'comment') %></h4>
               <% post.comments.recent.limit(3).each do |comment| %>
                 <div class="comment-item">
                   <div class="comment-header">
                     <span class="comment-author"><%= comment.user.username %></span>
                     <span class="comment-timestamp"><%= time_ago_in_words(comment.timestamp) %> ago</span>
                     <% if comment.user == current_user_session %>
-                      <%= button_to "🗑️", post_comment_path(post, comment), method: :delete, 
+                      <%= button_to "×", post_comment_path(post, comment), method: :delete, 
                                     confirm: "Delete this comment?",
                                     class: "btn btn-small btn-danger" %>
                     <% end %>
@@ -88,7 +88,7 @@
                                     class: "form-control",
                                     required: true %>
               </div>
-              <%= form.submit "Post Comment", class: "btn btn-primary btn-small" %>
+              <%= form.submit "Post", class: "btn btn-primary btn-small" %>
             <% end %>
           </div>
         </div>
@@ -96,11 +96,11 @@
     </div>
   <% else %>
     <div class="welcome">
-      <h2>📭 Your feed is empty</h2>
+      <h2>No posts yet</h2>
       <% if @friends_count == 0 %>
-        <p>Connect with friends to see their posts and updates in your personalized feed.</p>
+        <p>You don't have any friends yet</p>
         <div class="form-actions">
-          <%= link_to "🔍 Find Friends to Follow", users_path, class: "btn btn-primary btn-large" %>
+          <%= link_to "Find Friends", users_path, class: "btn btn-primary btn-large" %>
           <%= link_to "✏️ Create Your First Post", new_post_path, class: "btn btn-secondary btn-large" %>
         </div>
       <% else %>

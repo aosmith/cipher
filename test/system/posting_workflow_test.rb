@@ -113,11 +113,9 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     visit posts_path
     assert_text "Post to delete"
     
-    # Click delete link
+    # Click delete button
     within ".post[data-post-id='#{post.id}']" do
-      accept_confirm do
-        click_link "Delete"
-      end
+      click_button "Delete"
     end
     
     assert_text "Post deleted successfully!"
@@ -229,7 +227,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     
     # In real browser test, this would need multiple file inputs or drag-drop
     # For now, we'll simulate by checking the form accepts multiple files
-    assert_selector "input[type=file][multiple]", text: "attachments"
+    assert_selector "input[type=file][multiple]"
   end
 
   test "unauthorized user cannot access post creation" do

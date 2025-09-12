@@ -7,9 +7,9 @@ class CommentsController < ApplicationController
     @comment.user = current_user_session
 
     if @comment.save
-      redirect_back_or_to(@post, notice: "Comment added successfully!")
+      redirect_to feed_path, notice: "Comment added successfully!"
     else
-      redirect_back_or_to(@post, alert: "Failed to add comment: #{@comment.errors.full_messages.join(', ')}")
+      redirect_to feed_path, alert: "Failed to add comment: #{@comment.errors.full_messages.join(', ')}"
     end
   end
 
@@ -41,7 +41,7 @@ class CommentsController < ApplicationController
   end
 
   def redirect_back_or_to(fallback_location, options = {})
-    if request.referer
+    if request.referer && request.referer != request.url
       redirect_back(fallback_location: fallback_location, **options)
     else
       redirect_to fallback_location, **options
