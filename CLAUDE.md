@@ -30,9 +30,11 @@ This is a Rails 8.0.2 application called "Cipher" - an end-to-end encrypted peer
 - `bin/dev` - Start development server (equivalent to `bin/rails server`)
 - `bin/rails server` - Start Rails server directly
 
-**Server Reloading**: 
+**Server Reloading**:
 - Rails automatically reloads most code changes in development mode
 - For configuration, routes, or initializer changes that require restart: `bin/reload`
+- **CSS Changes**: Always run `bin/reload` after CSS modifications to ensure changes are visible
+- **When to reload**: Run `bin/reload` for CSS, layout changes, configuration, routes, or initializers
 - The reload command triggers a graceful restart without stopping the server process
 
 ### Testing
@@ -287,6 +289,7 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize ALWAYS recompile binaries after version bumps using ./scripts/prepare-release.sh [version] - Don't just bump version numbers without rebuilding!
 - memorize the update-release-links.sh script now only updates package versions, not Tauri dependency versions - this prevents build breaks
 - memorize use as little javascript as possible, the client and the server are the same machine so latency is not an issue
+- memorize NEVER use JavaScript when server-side Ruby can accomplish the same task - always prefer server-side solutions
 - memorize We are user a local server to power a p2p encrypted social network, private keys can be on the server but they should never leave the users machine over p2p channels.  We can assume the browser to server connection is secure because it is localhost.
 - memorize When user asks to commit and push changes, ALWAYS use `git add .` to add ALL changes, then create a comprehensive commit message summarizing all modifications, then push to remote.
 - memorize if I say vX.X.X I mean semver, omit the v

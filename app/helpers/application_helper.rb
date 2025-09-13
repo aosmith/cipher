@@ -34,4 +34,22 @@ module ApplicationHelper
     return unless session[:user_id]
     @current_user_session ||= User.find_by(id: session[:user_id])
   end
+
+  def stun_server_status
+    # Simple server connectivity check using Ruby's built-in networking
+    require 'socket'
+    require 'timeout'
+
+    begin
+      Timeout::timeout(3) do
+        socket = UDPSocket.new
+        socket.connect('stun.l.google.com', 19302)
+        socket.close
+        return { indicator: '●', status: 'Google STUN servers reachable', color: '#27ae60' }
+      end
+    rescue => e
+      Rails.logger.info "STUN server check failed: #{e.message}"
+      return { indicator: '●', status: 'STUN server check failed', color: '#e74c3c' }
+    end
+  end
 end

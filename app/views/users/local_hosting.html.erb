@@ -2,8 +2,8 @@
 
 <div class="local-hosting-page">
   <div class="welcome-hero">
-    <h2>💾 Hosting</h2>
-    <p>Earn CPH tokens by sharing your device's storage space with the network</p>
+    <h2>💾 Storage Sharing</h2>
+    <p>Help the community by sharing your device's storage space with the network - completely free!</p>
     
     <!-- Tab Navigation -->
     <div class="tab-navigation">
@@ -51,10 +51,10 @@
         </div>
         
         <div class="status-item">
-          <div class="status-icon">💰</div>
+          <div class="status-icon">🤝</div>
           <div class="status-info">
-            <div class="status-label">Total Earned</div>
-            <div id="total-earned" class="status-value">0 CPH</div>
+            <div class="status-label">People Helped</div>
+            <div id="people-helped" class="status-value">0</div>
           </div>
         </div>
 
@@ -110,8 +110,8 @@
           <ul class="info-list">
             <li>📁 Files are stored encrypted in your browser's local storage</li>
             <li>🔒 You never have access to the actual file content</li>
-            <li>💰 Earn CPH tokens based on storage provided and bandwidth served</li>
-            <li>⚡ Higher reliability and uptime = higher earnings multiplier</li>
+            <li>🤝 Help friends store their encrypted data</li>
+            <li>⚡ Higher reliability and uptime = better network performance</li>
             <li>🔄 Storage can be adjusted anytime (files may be redistributed)</li>
           </ul>
         </div>
@@ -119,48 +119,46 @@
     </div>
   </div>
 
-  <!-- Earnings Dashboard -->
-  <div class="card earnings-dashboard">
+  <!-- Community Impact Dashboard -->
+  <div class="card impact-dashboard">
     <div class="card-header">
-      <h2>Earnings Dashboard</h2>
+      <h2>Community Impact</h2>
     </div>
     <div class="card-body">
-      <div class="earnings-grid">
-        <div class="earnings-card">
-          <div class="earnings-icon">💎</div>
-          <div class="earnings-info">
-            <div class="earnings-label">Storage Rewards</div>
-            <div id="storage-rewards" class="earnings-value">0 CPH</div>
-            <div class="earnings-rate">0.001 CPH/KB/day</div>
+      <div class="impact-grid">
+        <div class="impact-card">
+          <div class="impact-icon">📁</div>
+          <div class="impact-info">
+            <div class="impact-label">Files Protected</div>
+            <div id="files-protected" class="impact-value">0</div>
+            <div class="impact-description">Files safely backed up</div>
           </div>
         </div>
-        
-        <div class="earnings-card">
-          <div class="earnings-icon">⚡</div>
-          <div class="earnings-info">
-            <div class="earnings-label">Bandwidth Rewards</div>
-            <div id="bandwidth-rewards" class="earnings-value">0 CPH</div>
-            <div class="earnings-rate">0.8 CPH/KB served</div>
+
+        <div class="impact-card">
+          <div class="impact-icon">🌐</div>
+          <div class="impact-info">
+            <div class="impact-label">Data Served</div>
+            <div id="data-served" class="impact-value">0 KB</div>
+            <div class="impact-description">Helped friends access data</div>
           </div>
         </div>
-        
-        <div class="earnings-card">
-          <div class="earnings-icon">🎯</div>
-          <div class="earnings-info">
-            <div class="earnings-label">Reliability Bonus</div>
-            <div id="reliability-bonus" class="earnings-value">100%</div>
-            <div class="earnings-rate">Based on uptime</div>
+
+        <div class="impact-card">
+          <div class="impact-icon">⚡</div>
+          <div class="impact-info">
+            <div class="impact-label">Uptime</div>
+            <div id="uptime-percentage" class="impact-value">100%</div>
+            <div class="impact-description">Reliability to community</div>
           </div>
         </div>
-        
-        <div class="earnings-card">
-          <div class="earnings-icon">🏆</div>
-          <div class="earnings-info">
-            <div class="earnings-label">Pending Payout</div>
-            <div id="pending-payout" class="earnings-value">0 CPH</div>
-            <div class="earnings-actions">
-              <button id="claim-earnings-btn" class="btn btn-sm btn-success" disabled>Claim</button>
-            </div>
+
+        <div class="impact-card">
+          <div class="impact-icon">🤝</div>
+          <div class="impact-info">
+            <div class="impact-label">Network Strength</div>
+            <div id="network-contribution" class="impact-value">Contributing</div>
+            <div class="impact-description">Making P2P stronger</div>
           </div>
         </div>
       </div>

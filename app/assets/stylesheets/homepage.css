@@ -127,22 +127,15 @@
   margin-top: 0;
 }
 
+/* .welcome-hero .btn-large uses .btn-xl and .btn-glass utility classes from design-system.css */
 .welcome-hero .btn-large {
   background: rgba(255, 255, 255, 0.25);
   color: white;
-  padding: 18px 36px;
-  font-size: 1.25em;
-  font-weight: 600;
-  border-radius: 16px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
-  transition: all 0.3s ease;
-  border: 1px solid rgba(255, 255, 255, 0.3);
   backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 .welcome-hero .btn-large:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
   background: rgba(255, 255, 255, 0.35);
 }
 

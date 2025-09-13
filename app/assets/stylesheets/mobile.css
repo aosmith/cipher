@@ -245,15 +245,17 @@
   /* File upload on mobile */
   .file-upload-area {
     padding: 24px 16px;
-    border: 2px dashed #d1d5db;
+    border: 2px dashed #e2e8f0;
     border-radius: 12px;
     text-align: center;
-    background: #f9fafb;
+    background: #f8f9fa;
+    color: #1e293b;
     min-height: 120px;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
+    filter: none;
   }
 
   /* Mobile-friendly tables */
