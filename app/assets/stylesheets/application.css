@@ -9,6 +9,9 @@
  * Consider organizing styles into separate files for maintainability.
  */
 
+/* Import Design System First */
+@import url("design-system.css");
+
 /* Feed Page Styles */
 
 /* Custom scrollbar for webkit browsers */
@@ -491,40 +494,9 @@ body {
   font-size: 0.9em;
 }
 
-/* Buttons */
-.btn {
-  padding: 10px 20px;
-  text-decoration: none;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  display: inline-block;
-  font-size: 14px;
-  font-weight: 500;
-  text-align: center;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
-  color: white;
-}
-
-.btn-secondary {
-  background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
-  color: white;
-}
-
+/* Button overrides for specific use cases */
 .btn-large {
-  padding: 16px 32px;
-  font-size: 1.2em;
-  border-radius: 12px;
+  /* Uses design system .btn-xl class instead */
 }
 
 /* Status Indicators */
