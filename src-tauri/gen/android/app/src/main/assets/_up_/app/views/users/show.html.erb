@@ -22,6 +22,9 @@
 
     <div class="profile-actions">
       <%= link_to "💬 New Post", new_post_path, class: "btn btn-primary" %>
+      <% if current_user_session && @user != current_user_session %>
+        <%= link_to "📩 Send Message", user_message_path(@user), class: "btn btn-outline" %>
+      <% end %>
     </div>
 
     <div class="key-info">
@@ -36,6 +39,20 @@
         </div>
       </div>
     </div>
+
+    <% if current_user_session == @user %>
+      <div class="backup-section">
+        <h3>💾 Account Backup</h3>
+        <div class="backup-info">
+          <p><strong>Your account can be restored with just:</strong></p>
+          <ul>
+            <li>Username: <code><%= @user.username %></code></li>
+            <li>Your master password</li>
+          </ul>
+          <%= link_to "Full Backup Guide", export_keys_users_path, class: "btn btn-outline" %>
+        </div>
+      </div>
+    <% end %>
 
     <div class="posts-section">
       <h3>📝 Recent Posts</h3>
@@ -64,10 +81,11 @@
                     <% post.attachments.each do |attachment| %>
                       <% if attachment.is_image? %>
                         <div class="attachment-preview image-preview">
-                          <div class="encrypted-image" 
-                               data-attachment-url="<%= post_attachment_path(post, attachment) %>"
-                               data-filename="<%= attachment.filename %>"
-                               data-filesize="<%= attachment.human_file_size %>">
+                          <div data-controller="image-decryption"
+                               data-image-decryption-attachment-url-value="<%= post_attachment_path(post, attachment) %>"
+                               data-image-decryption-filename-value="<%= attachment.filename %>"
+                               data-image-decryption-filesize-value="<%= attachment.human_file_size %>"
+                               data-image-decryption-content-type-value="<%= attachment.content_type %>">
                             <div class="loading-placeholder">
                               <span class="loading-icon">🔓</span>
                               <span class="loading-text">Decrypting image...</span>

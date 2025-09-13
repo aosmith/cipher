@@ -69,9 +69,72 @@
   top: 30px;
 }
 
-/* Hide web navigation bar in desktop app */
+/* Show web header on all platforms */
+.app-header {
+  display: block !important;
+}
+
+/* Keep web header visible on desktop apps too */
 .desktop-app .app-header {
+  display: block !important;
+}
+
+/* Web app specific styles */
+.web-app .app-header {
+  display: block !important;
+}
+
+.web-app .mobile-header-container {
   display: none;
+}
+
+/* Show web-only content by default for web browsers */
+.web-only {
+  display: block !important;
+}
+
+.web-app .web-only {
+  display: block !important;
+}
+
+/* Override for web header container specifically */
+.header-container.web-only {
+  display: flex !important;
+}
+
+.web-app .header-container.web-only {
+  display: flex !important;
+}
+
+/* Hide web-only content in mobile apps and desktop apps */
+.mobile-app .web-only,
+.desktop-app .web-only {
+  display: none !important;
+}
+
+/* Exception: Don't hide web header in mobile apps at larger screen sizes */
+.mobile-app .header-container.web-only {
+  display: flex !important;
+}
+
+/* Mobile responsive behavior - keep web header always visible */
+@media (max-width: 768px) {
+  .mobile-header-container {
+    display: none !important;
+  }
+  
+  .web-app .mobile-header-container {
+    display: none !important;
+  }
+  
+  /* Keep web header visible on mobile screens */
+  .app-header {
+    display: block !important;
+  }
+  
+  .header-container {
+    display: flex !important;
+  }
 }
 
 /* Remove padding since no header */
@@ -452,10 +515,18 @@
   padding: 20px 16px;
 }
 
+/* Hide mobile header everywhere - use web header consistently */
 .mobile-header-container {
-  display: flex;
+  display: none !important;
   justify-content: space-between;
   align-items: center;
+}
+
+/* Keep mobile header hidden on all platforms */
+.mobile-app .mobile-header-container,
+.platform-ios .mobile-header-container,
+.platform-android .mobile-header-container {
+  display: none !important;
 }
 
 .mobile-logo {

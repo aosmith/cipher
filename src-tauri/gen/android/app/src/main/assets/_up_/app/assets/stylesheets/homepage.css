@@ -52,12 +52,20 @@
   color: #2d3748;
   font-size: 1.3em;
   font-weight: 600;
+  text-align: center !important;
 }
 
 .feature p {
   color: #4a5568;
   line-height: 1.6;
   margin: 0;
+  text-align: center !important;
+}
+
+/* Extra specific rule to force centering */
+.features .feature h3,
+.features .feature p {
+  text-align: center !important;
 }
 
 /* Modern Welcome Hero Section */
@@ -832,4 +840,14 @@
     text-align: left;
     flex-direction: row;
   }
+}
+
+/* FINAL OVERRIDE - Force center feature text */
+div.features div.feature h3,
+div.features div.feature p,
+.features .feature h3,
+.features .feature p,
+.feature h3,
+.feature p {
+  text-align: center !important;
 }

@@ -1,8 +1,13 @@
 <div class="container">
   <% if @current_user %>
     <div class="dashboard-welcome">
-      <h2>Your Cipher Dashboard</h2>
-      <p>Manage your encrypted communications and network connections.</p>
+      <div class="welcome-header">
+        <h1>Cipher Social Network</h1>
+        <h2>Your Cipher Dashboard</h2>
+      </div>
+      <div class="welcome-description">
+        <p>Manage your encrypted communications and network connections.</p>
+      </div>
     </div>
     <section class="status-section">
       <h2>🌐 Network Status</h2>
@@ -17,9 +22,26 @@
 
     <section class="status-section">
       <h2>💬 Messages & Posts</h2>
-      <div class="message-actions">
-        <%= link_to "📝 Create Post", new_post_path, class: "btn btn-primary" %>
-        <%= link_to "📋 View All Posts", posts_path, class: "btn btn-secondary" %>
+      <div class="quick-post-form">
+        <%= form_with model: Post.new, url: posts_path, multipart: true, class: "inline-post-form" do |form| %>
+          <div class="form-group">
+            <%= form.text_area :content, placeholder: "What's on your mind?", rows: 3, class: "form-control" %>
+          </div>
+          <div class="form-group">
+            <label for="attachments">Attachments</label>
+            <input type="file" 
+                   id="attachments"
+                   name="attachments[]" 
+                   class="file-input-visible" 
+                   multiple 
+                   accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
+                   style="display: block; width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+          <div class="form-buttons">
+            <%= form.submit "📤 Post Securely", class: "btn btn-primary" %>
+            <%= link_to "📋 View All Posts", posts_path, class: "btn btn-secondary" %>
+          </div>
+        <% end %>
       </div>
       
       <div id="message-list" class="message-list">
@@ -48,10 +70,11 @@
                     <% post.attachments.each do |attachment| %>
                       <% if attachment.is_image? %>
                         <div class="attachment-preview image-preview">
-                          <div class="encrypted-image" 
-                               data-attachment-url="<%= post_attachment_path(post, attachment) %>"
-                               data-filename="<%= attachment.filename %>"
-                               data-filesize="<%= attachment.human_file_size %>">
+                          <div data-controller="image-decryption"
+                               data-image-decryption-attachment-url-value="<%= post_attachment_path(post, attachment) %>"
+                               data-image-decryption-filename-value="<%= attachment.filename %>"
+                               data-image-decryption-filesize-value="<%= attachment.human_file_size %>"
+                               data-image-decryption-content-type-value="<%= attachment.content_type %>">
                             <div class="loading-placeholder">
                               <span class="loading-icon">🔓</span>
                               <span class="loading-text">Decrypting image...</span>
@@ -98,7 +121,7 @@
   <% else %>
     <div class="welcome-hero">
       <h2>Welcome to Cipher</h2>
-      <p>A decentralized, encrypted peer-to-peer social network for private communication.</p>
+      <p>Encrypted peer-to-peer messaging without servers.</p>
       
       <div class="getting-started">
         <%= link_to "Create Your Identity", new_user_path, class: "btn btn-primary btn-large" %>
@@ -108,22 +131,22 @@
     <div class="features">
       <div class="feature">
         <h3>🔐 End-to-End Encryption</h3>
-        <p>All messages and media are encrypted before transmission, ensuring only you and your recipients can read them.</p>
+        <p>Messages are encrypted before sending. Only you and your recipients can read them.</p>
       </div>
       
       <div class="feature">
         <h3>🌐 Peer-to-Peer</h3>
-        <p>Direct connections between users without relying on centralized servers or intermediaries.</p>
+        <p>Direct connections between users. No servers required.</p>
       </div>
       
       <div class="feature">
         <h3>🔑 Self-Sovereign Identity</h3>
-        <p>You own and control your digital identity completely, with no dependence on external authorities.</p>
+        <p>You control your identity. No external authorities involved.</p>
       </div>
       
       <div class="feature">
         <h3>📱 Decentralized</h3>
-        <p>No central authority controls the network - your communications remain independent and resilient.</p>
+        <p>No central authority. Your communications stay independent.</p>
       </div>
     </div>
 
@@ -132,11 +155,11 @@
       <div class="token-content">
         <!-- CPH Token Hero Well -->
         <div class="cph-hero-well">
-          <h2>💰 Cipher Token (CPH)</h2>
+          <h2>🛡️ Cipher Token (CPH)</h2>
           <div class="token-intro">
             <p class="token-lead">
-              A decentralized economy that rewards privacy-respecting behavior. 
-              Earn tokens by helping secure the network, spend them to access content.
+              A lightweight system to prevent network abuse. 
+              Contribute storage to receive tokens, use tokens for content access.
             </p>
           </div>
         </div>
@@ -145,12 +168,12 @@
           <div class="token-section">
             <div class="token-icon">🏠</div>
             <div class="token-info">
-              <h3>Earn by Hosting</h3>
-              <p>Provide secure storage for encrypted files and earn CPH tokens. Your device becomes part of a distributed network that keeps data safe and accessible.</p>
+              <h3>Contribute by Hosting</h3>
+              <p>Provide secure storage for encrypted files and receive CPH tokens for abuse prevention. Your device becomes part of a distributed network.
               <ul class="token-benefits">
-                <li>Earn 80% of storage fees</li>
-                <li>Passive income from your unused storage</li>
-                <li>Help strengthen network decentralization</li>
+                <li>Receive tokens for network participation</li>
+                <li>Help prevent network abuse</li>
+                <li>Support system sustainability</li>
               </ul>
             </div>
           </div>
@@ -158,12 +181,12 @@
           <div class="token-section">
             <div class="token-icon">👀</div>
             <div class="token-info">
-              <h3>Spend for Content</h3>
-              <p>Access files and media using CPH tokens at a fair rate of 1 CPH per KB. Only pay for what you actually download—no subscriptions or hidden fees.</p>
+              <h3>Access Content</h3>
+              <p>Access files and media using CPH tokens to prevent abuse at 1 CPH per KB. Simple usage-based access with no subscriptions.
               <ul class="token-benefits">
                 <li>1 CPH = 1 KB of data</li>
-                <li>Pay-per-use, no monthly fees</li>
-                <li>Direct payments to content creators</li>
+                <li>Usage-based access control</li>
+                <li>Prevents spam and abuse</li>
               </ul>
             </div>
           </div>
@@ -173,10 +196,10 @@
           <div class="privacy-badge">
             <div class="privacy-icon">🛡️</div>
             <div class="privacy-text">
-              <h4>Privacy-First Economy</h4>
+              <h4>Abuse Prevention System</h4>
               <p>
-                <strong>Your financial privacy is protected.</strong> Token transactions are recorded on-chain for transparency, 
-                but your file contents, viewing habits, and personal data remain completely private and encrypted.
+                <strong>Simple usage tracking.</strong> Token transactions prevent spam and abuse, 
+                while your file contents, viewing habits, and personal data remain completely private and encrypted.
               </p>
             </div>
           </div>
@@ -184,7 +207,7 @@
         
         <div class="token-getting-started">
           <h3>Ready to Join the Network?</h3>
-          <p>Start earning CPH tokens by contributing to the decentralized storage network, or begin exploring content with our fair pay-per-use model.</p>
+          <p>Start contributing to the decentralized storage network to receive CPH tokens, or begin exploring content with our fair usage-based access model.</p>
           <div class="token-actions">
             <%= link_to "Start Local Hosting", local_hosting_users_path, class: "btn btn-primary-token" %>
             <%= link_to "Become a Network Host", host_dashboard_users_path, class: "btn btn-secondary-token" %>
@@ -200,8 +223,7 @@
         <h2>🛡️ Our Mission</h2>
         <div class="mission-text">
           <p class="mission-lead">
-            In a world where your digital conversations are monitored, stored, and monetized, 
-            Cipher offers a different path forward.
+            Private messaging without surveillance or data collection.
           </p>
           
           <div class="mission-principles">
@@ -209,7 +231,7 @@
               <div class="principle-icon">🚫</div>
               <div class="principle-content">
                 <h3>No Servers, No Surveillance</h3>
-                <p>Your messages travel directly between you and your friends. No corporate servers storing your private conversations.</p>
+                <p>Messages go directly between users. No servers store your conversations.</p>
               </div>
             </div>
             
@@ -217,7 +239,7 @@
               <div class="principle-icon">🔒</div>
               <div class="principle-content">
                 <h3>No Data Harvesting</h3>
-                <p>We can't read your messages, track your behavior, or build profiles about you. Your data stays yours.</p>
+                <p>We can't read your messages or track you. Your data stays yours.</p>
               </div>
             </div>
             
@@ -225,7 +247,7 @@
               <div class="principle-icon">📖</div>
               <div class="principle-content">
                 <h3>Open Source Transparency</h3>
-                <p>Every line of code is public. Audit it, fork it, improve it. Trust through transparency, not promises.</p>
+                <p>All code is public. Audit it, fork it, improve it.</p>
               </div>
             </div>
             
@@ -233,15 +255,15 @@
               <div class="principle-icon">❤️</div>
               <div class="principle-content">
                 <h3>Connect with Loved Ones</h3>
-                <p>Share moments, memories, and files with the people who matter most, knowing your privacy is protected.</p>
+                <p>Share files and messages privately with friends and family.</p>
               </div>
             </div>
           </div>
           
           <div class="mission-call-to-action">
             <p class="mission-cta-text">
-              <strong>Take back control of your digital life.</strong> 
-              Join a community that believes privacy isn't a luxury—it's a fundamental right.
+              <strong>Private messaging by design.</strong> 
+              No tracking, no data collection, no surveillance.
             </p>
             <div class="mission-links">
               <a href="https://github.com/anthropics/cipher" target="_blank" class="btn btn-outline">
@@ -336,8 +358,8 @@
 <style>
 .message-actions {
   display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: var(--content-spacing-sm);
+  margin-bottom: var(--content-spacing-md);
   flex-wrap: wrap;
 }
 
@@ -345,23 +367,82 @@
   font-size: 0.95em;
 }
 
+.form-buttons {
+  display: flex;
+  gap: var(--content-spacing-sm);
+  margin-top: var(--content-spacing-sm);
+  flex-wrap: wrap;
+}
+
+.form-buttons .btn {
+  font-size: 0.95em;
+}
+
+/* Dashboard Welcome Section */
+.dashboard-welcome {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: var(--content-spacing-xl);
+  margin-bottom: var(--section-spacing);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.welcome-header {
+  text-align: center;
+  margin-bottom: var(--content-spacing-lg);
+}
+
+.welcome-header h1 {
+  color: #2d3748;
+  font-size: 2.2em;
+  font-weight: 700;
+  margin: 0 0 var(--content-spacing-sm) 0;
+  letter-spacing: -0.5px;
+  line-height: var(--line-height-tight);
+}
+
+.welcome-header h2 {
+  color: #4a5568;
+  font-size: 1.4em;
+  font-weight: 500;
+  margin: 0;
+  line-height: var(--line-height-tight);
+}
+
+.welcome-description {
+  text-align: center;
+  margin-top: var(--content-spacing-md);
+}
+
+.welcome-description p {
+  color: #718096;
+  font-size: 1.1em;
+  line-height: var(--line-height-normal);
+  margin: 0;
+  max-width: 500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* Message header layout */
 .message-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 15px;
+  margin-bottom: var(--content-spacing-sm);
 }
 
 .message-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--content-spacing-xs);
 }
 
 .message-header .message-actions {
   margin-bottom: 0;
-  gap: 8px;
+  gap: var(--content-spacing-xs);
 }
 
 .btn-delete {
@@ -389,11 +470,20 @@
   .message-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
+    gap: var(--content-spacing-sm);
   }
   
   .message-header .message-actions {
     align-self: flex-end;
+  }
+  
+  .dashboard-welcome {
+    padding: var(--content-spacing-md);
+    margin-bottom: var(--content-spacing-lg);
+  }
+  
+  .welcome-header {
+    margin-bottom: var(--content-spacing-md);
   }
 }
 </style>

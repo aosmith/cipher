@@ -15,7 +15,7 @@
 .file-upload-area {
   border: 2px dashed #ddd;
   border-radius: 12px;
-  padding: 20px;
+  padding: var(--content-spacing-md);
   text-align: center;
   background: #fafafa;
   transition: all 0.3s ease;
@@ -29,23 +29,25 @@
 }
 
 .file-upload-prompt {
-  padding: 20px;
+  padding: var(--content-spacing-md);
 }
 
 .upload-icon {
   font-size: 3em;
-  margin-bottom: 10px;
+  margin-bottom: var(--content-spacing-sm);
   opacity: 0.6;
 }
 
 .file-upload-prompt p {
-  margin: 8px 0;
+  margin: var(--content-spacing-xs) 0;
   color: #666;
+  line-height: var(--line-height-normal);
 }
 
 .upload-hint {
   font-size: 0.9em;
   opacity: 0.8;
+  line-height: var(--line-height-normal);
 }
 
 .file-input {
@@ -59,17 +61,17 @@
 }
 
 .file-previews {
-  margin-top: 20px;
+  margin-top: var(--content-spacing-md);
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 15px;
+  gap: var(--content-spacing-sm);
 }
 
 .file-preview {
   position: relative;
   border: 1px solid #ddd;
   border-radius: 8px;
-  padding: 10px;
+  padding: var(--content-spacing-sm);
   background: white;
   text-align: center;
 }
@@ -83,15 +85,17 @@
 }
 
 .file-preview-info {
-  margin-top: 8px;
+  margin-top: var(--content-spacing-xs);
   font-size: 0.8em;
   color: #666;
+  line-height: var(--line-height-normal);
 }
 
 .file-preview-name {
   font-weight: 500;
-  margin-bottom: 4px;
+  margin-bottom: var(--content-spacing-xs);
   word-break: break-word;
+  line-height: var(--line-height-normal);
 }
 
 .file-preview-size {
@@ -170,6 +174,174 @@
   gap: 20px;
   max-width: 800px;
   margin: 0 auto;
+}
+
+.posts-list {
+  max-width: 800px;
+  margin: 0 auto;
+  gap: 20px;
+}
+
+.posts-list .message-item {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.posts-list .message-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+}
+
+.posts-list .message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.posts-list .author {
+  color: #2d3748;
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.posts-list .timestamp {
+  color: #718096;
+  font-size: 0.9em;
+}
+
+.posts-list .message-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.posts-list .message-content {
+  margin: 15px 0;
+  line-height: 1.6;
+  color: #4a5568;
+}
+
+.posts-list .post-content-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.posts-list .post-content-link:hover {
+  color: #2d3748;
+}
+
+.posts-list .attachments-section {
+  margin: 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.posts-list .attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: #f7fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.posts-list .attachment-link {
+  text-decoration: none;
+  color: #3182ce;
+}
+
+.posts-list .attachment-link:hover {
+  text-decoration: underline;
+}
+
+/* Individual Post Viewer */
+.post-viewer {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.post-viewer .message-item {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: 30px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  margin-bottom: 30px;
+}
+
+.post-viewer .message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.post-viewer .author {
+  color: #2d3748;
+  font-size: 1.2em;
+  font-weight: 600;
+}
+
+.post-viewer .timestamp {
+  color: #718096;
+  font-size: 1em;
+}
+
+.post-viewer .message-content {
+  font-size: 1.1em;
+  line-height: 1.7;
+  color: #4a5568;
+  margin: 20px 0;
+}
+
+.post-viewer .attachments-section {
+  margin: 25px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.post-viewer .attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px;
+  background: #f7fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.back-navigation {
+  text-align: left;
+  margin-top: 20px;
+}
+
+/* Delete Form Styling */
+.delete-form {
+  display: inline-block;
+  margin: 0;
+}
+
+.delete-form input[type="submit"] {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
 }
 
 .post-card {

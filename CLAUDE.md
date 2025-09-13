@@ -293,3 +293,4 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize Removing a broken test is not fixing it
 - memorize removing failing tests is not fixing them.  Fix the problem not the test unless it is directly asked for.
 - memorize when I say compile everything I mean all platforms you can
+- memorize we dont need ssl bewteen the user and the local server

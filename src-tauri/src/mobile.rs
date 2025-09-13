@@ -15,8 +15,9 @@ pub fn get_platform() -> String {
 #[tauri::mobile_entry_point]
 pub fn main() {
     tauri::Builder::default()
-        .setup(|app| {
-            // Mobile-specific setup with embedded Rails server
+        .plugin(tauri_plugin_shell::init())
+        .setup(|app: &mut tauri::App<tauri::Wry>| {
+            // Start bundled Rails server for mobile platforms
             let resource_dir = app.path().resource_dir()
                 .expect("failed to resolve resource directory");
             
@@ -29,30 +30,32 @@ pub fn main() {
             };
             
             println!("Cipher mobile app started for platform: {}", platform);
-            println!("Resource directory: {:?}", resource_dir);
-            println!("Starting embedded Rails server...");
+            println!("Mobile app resource directory: {:?}", resource_dir);
             
-            // Start embedded Rails server for mobile (localhost-only for security)
+            // Start Rails server in bundled directory (localhost-only for security)
             std::thread::spawn(move || {
-                let rails_command = std::process::Command::new("ruby")
-                    .args(&["bin/rails", "server", "-p", "3001", "-b", "127.0.0.1", "-e", platform])
-                    .current_dir(&resource_dir)
-                    .spawn();
+                let rails_command = if cfg!(target_os = "windows") {
+                    std::process::Command::new("cmd")
+                        .args(&["/C", "ruby", "bin/rails", "server", "-p", "3001", "-b", "127.0.0.1", "-e", platform])
+                        .current_dir(&resource_dir)
+                        .spawn()
+                } else {
+                    std::process::Command::new("ruby")
+                        .args(&["bin/rails", "server", "-p", "3001", "-b", "127.0.0.1", "-e", platform])
+                        .current_dir(&resource_dir)
+                        .spawn()
+                };
                 
                 match rails_command {
                     Ok(child) => {
-                        println!("Embedded Rails server started successfully for {}", platform);
+                        println!("Rails server started successfully for {}", platform);
                         let _ = child.wait_with_output();
                     }
                     Err(e) => {
-                        println!("Failed to start embedded Rails server for {}: {}", platform, e);
-                        println!("Falling back to static assets only");
+                        println!("Failed to start Rails server for {}: {}", platform, e);
                     }
                 }
             });
-            
-            // Give Rails a moment to start
-            std::thread::sleep(std::time::Duration::from_secs(3));
             
             Ok(())
         })
