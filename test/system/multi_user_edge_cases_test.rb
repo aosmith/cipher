@@ -384,13 +384,14 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
     many_friends = 5.times.map do |i|
       friend = User.create!(
         username: "friend#{i}",
+        email: "friend#{i}@example.com",
         display_name: "Friend #{i}",
         public_key: "friend_key_#{i}"
       )
       
       # Make Alice friends with everyone
-      @alice.friendships.create!(friend: friend)
-      friend.friendships.create!(friend: @alice)
+      @alice.friendships.create!(requester: @alice, addressee: friend, status: 'accepted')
+      friend.friendships.create!(requester: friend, addressee: @alice, status: 'accepted')
       
       friend
     end

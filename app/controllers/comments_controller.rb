@@ -15,12 +15,12 @@ class CommentsController < ApplicationController
 
   def destroy
     @comment = @post.comments.find(params[:id])
-    
+
     if @comment.user == current_user_session
       @comment.destroy
-      redirect_back_or_to(@post, notice: "Comment deleted successfully!")
+      redirect_to feed_path, notice: "Comment deleted successfully!"
     else
-      redirect_back_or_to(@post, alert: "You can only delete your own comments.")
+      redirect_to feed_path, alert: "You can only delete your own comments."
     end
   end
 
@@ -40,11 +40,8 @@ class CommentsController < ApplicationController
     end
   end
 
-  def redirect_back_or_to(fallback_location, options = {})
-    if request.referer && request.referer != request.url
-      redirect_back(fallback_location: fallback_location, **options)
-    else
-      redirect_to fallback_location, **options
-    end
+  def current_user_session
+    return unless session[:user_id]
+    @current_user_session ||= User.find_by(id: session[:user_id])
   end
 end

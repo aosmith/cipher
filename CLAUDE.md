@@ -70,7 +70,7 @@ This is a Rails 8.0.2 application called "Cipher" - an end-to-end encrypted peer
 - `./scripts/prepare-release.sh [version]` - Build all platforms and prepare release files
 - `./scripts/update-release-links.sh [version]` - Update all version numbers and download links
 - **Releases Directory**: `releases/` contains pre-compiled desktop apps for Windows, macOS, and Linux
-- **Current Version**: 0.6.2
+- **Current Version**: 0.6.5
 - See `releases/README.md` for installation instructions and download links
 
 #### Version Management
@@ -294,3 +294,5 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize removing failing tests is not fixing them.  Fix the problem not the test unless it is directly asked for.
 - memorize when I say compile everything I mean all platforms you can
 - memorize we dont need ssl bewteen the user and the local server
+- This is a local only app, so each user runs their own server.  That allows us to skip some security and javascript.  The "server" will always be fast, local, and secure.
+- unless I tell you to stop keep going an try novel approaches until everything is fixed.

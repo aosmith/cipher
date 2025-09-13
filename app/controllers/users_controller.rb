@@ -30,22 +30,22 @@ class UsersController < ApplicationController
       @user.errors.add(:base, "Password and confirmation do not match")
     end
     
-    # Generate cryptographic keys server-side if validation passes
+    # Generate cryptographic keys from username + password (for local-only app)
     if @user.errors.empty?
       begin
-        # Generate a random 32-byte key pair using RbNaCl
-        private_key = RbNaCl::PrivateKey.generate
-        public_key = private_key.public_key
-        
-        # Store ONLY the public key (private key is never stored or transmitted)
-        @user.public_key = Base64.encode64(public_key.to_bytes).strip
-        
-        Rails.logger.info "Generated key pair for user: #{@user.username}"
+        # Derive private key from username + password using same method as authentication
+        private_key = User.derive_private_key_from_credentials(@user.username, password)
+        public_key = User.public_key_from_private_key(private_key)
+
+        # Store the public key (private key is derived on demand)
+        @user.public_key = Base64.strict_encode64(public_key)
+
+        Rails.logger.info "Derived key pair for user: #{@user.username}"
         Rails.logger.info "Public key length: #{@user.public_key.length} characters"
-        # NOTE: Private key is generated but immediately discarded for security
-        
+        # NOTE: Private key can be re-derived from credentials when needed
+
       rescue => e
-        Rails.logger.error "Key generation failed: #{e.message}"
+        Rails.logger.error "Key derivation failed: #{e.message}"
         @user.errors.add(:base, "Key generation failed. Please try again.")
       end
     end
@@ -81,6 +81,34 @@ class UsersController < ApplicationController
     # Local hosting management page
     @current_user = current_user_session
     render 'local_hosting'
+  end
+
+  def p2p_status
+    # API endpoint to get real-time P2P connection status
+    @current_user = current_user_session
+    return render json: { error: 'Unauthorized' }, status: :unauthorized unless @current_user
+
+    # Check ActionCable connection status
+    cable_connected = ActionCable.server.connections.any?
+
+    # Count active peers
+    active_peers = @current_user.peers.where('last_seen > ?', 5.minutes.ago).count
+
+    # Calculate connection status
+    status = if cable_connected && active_peers > 0
+      'Connected'
+    elsif cable_connected
+      'Online (No peers)'
+    else
+      'Disconnected'
+    end
+
+    render json: {
+      p2p_status: status,
+      active_peers: active_peers,
+      cable_connected: cable_connected,
+      last_updated: Time.current.iso8601
+    }
   end
 
   def friends

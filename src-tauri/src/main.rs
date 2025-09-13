@@ -7,7 +7,7 @@ use tauri::Manager;
 #[cfg(not(mobile))]
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_shell::init::<tauri::Wry>())
         .setup(|app| {
             // Start bundled Rails server for all platforms
             let resource_dir = app.path().resource_dir()

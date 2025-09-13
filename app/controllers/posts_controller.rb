@@ -25,7 +25,7 @@ class PostsController < ApplicationController
     end
     
     if @post.save
-      redirect_to root_path, notice: 'Post created successfully!'
+      redirect_to root_path, flash: { success: 'Post created successfully!' }
     else
       # Check if it's a spam prevention error and handle with redirect
       spam_errors = @post.errors.full_messages.select do |msg|

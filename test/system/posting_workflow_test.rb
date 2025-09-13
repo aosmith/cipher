@@ -14,7 +14,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     
     # Go to homepage
     visit root_path
-    assert_text "Cipher Social Network"
+    assert_text "🔐 Cipher"
     
     # Should see post creation form
     assert_selector "form[action='/posts']"
@@ -95,6 +95,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     
     assert_field "post[content]", with: "Original content"
     
+    fill_in "post[content]", with: ""
     fill_in "post[content]", with: "Updated content"
     click_button "Update Post"
     
@@ -237,7 +238,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     assert_no_selector "form[action='/posts']"
     
     # Should see login/signup options instead
-    assert_text "Welcome to Cipher"
+    assert_text "🔐 Cipher"
   end
 
   test "unauthorized user cannot access posts list" do

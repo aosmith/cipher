@@ -2,7 +2,7 @@ require "application_system_test_case"
 
 class AndroidAppTest < ApplicationSystemTestCase
   test "public/index.html exists and contains proper mobile interface" do
-    index_path = Rails.root.join("public", "index.html")
+    index_path = Rails.root.join("public", "mobile-index.html")
     
     assert File.exist?(index_path), "index.html must exist in public directory"
     

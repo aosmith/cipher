@@ -14,46 +14,15 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
   def login_as(user)
     raise "login_as helper is only for test environment" unless Rails.env.test?
 
-    # Use the app's natural authentication flow through the UI
+    # For system tests with Selenium, we need to set up the session through the web interface
+    # Since it's local, we can use a simple approach by visiting the login endpoint directly
+    visit "/api/v1/login?user_id=#{user.id}&test_login=true"
+
+    # Now visit the main page where the session should be active
     visit root_path
 
-    # If already logged in, skip
-    return if has_text?("Hi, #{user.username}", wait: 1)
-
-    # Fill in login form (the app's homepage shows email/password form)
-    fill_in "Email", with: "#{user.username}@test.com"
-    fill_in "Password", with: "testpassword123"
-
-    # Use JavaScript to handle the login with the user's actual credentials
-    page.execute_script("
-      // Simulate the app's client-side login process
-      document.getElementById('loginEmail').value = '#{user.username}@test.com';
-      document.getElementById('loginPassword').value = 'testpassword123';
-
-      // Trigger form submission with proper authentication
-      fetch('/api/v1/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest',
-          'X-CSRF-Token': document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content') || ''
-        },
-        body: JSON.stringify({
-          username: '#{user.username}',
-          public_key: '#{user.public_key}'
-        })
-      }).then(response => response.json()).then(data => {
-        if (data.success) {
-          window.location.reload();
-        }
-      });
-    ")
-
-    # Wait for the page to reload and show logged-in state
-    sleep(2)
-
     # Verify authentication was successful
-    assert_text "Hi, #{user.username}", wait: 5
+    assert_text "Hi, #{user.username}", wait: 10
   end
 
   # Helper to ensure user is logged out

@@ -24,8 +24,7 @@
         "hiddenTitle": true,
         "decorations": true,
         "transparent": false,
-        "skipTaskbar": false,
-        "theme": null
+        "skipTaskbar": false
       }
     ],
     "security": {

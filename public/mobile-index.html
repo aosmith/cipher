@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cipher - Encrypted Social Network</title>
+    <meta name="description" content="End-to-end encrypted P2P social network">
+
+    <link rel="icon" type="image/x-icon" href="/favicon-32x32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #0a0a0a 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            margin: 0;
+        }
+
+        .container {
+            max-width: 400px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            background: linear-gradient(135deg, rgb(59 130 246), rgb(99 102 241));
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            color: white;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: white;
+            text-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.95);
+            margin-bottom: 40px;
+            font-size: 16px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .form-container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px);
+            border-radius: 24px;
+            padding: 40px 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .form-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+            pointer-events: none;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+            position: relative;
+            z-index: 1;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: white;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        input:focus {
+            outline: none;
+            border-color: rgba(255, 255, 255, 0.6);
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 14px;
+            background: rgba(255, 255, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+            position: relative;
+            z-index: 1;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            background: rgba(255, 255, 255, 0.35);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .btn:active {
+            transform: translateY(-1px);
+        }
+
+        .toggle-link {
+            color: rgba(255, 255, 255, 0.8);
+            text-decoration: none;
+            font-weight: 500;
+            position: relative;
+            z-index: 1;
+            transition: color 0.3s ease;
+        }
+
+        .toggle-link:hover {
+            color: white;
+            text-decoration: underline;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .peer-status {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+
+        #loading {
+            display: block;
+        }
+
+        #mainApp {
+            display: none;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Loading Screen -->
+        <div id="loading">
+            <div class="logo">🔐</div>
+            <h1>Cipher</h1>
+            <p class="subtitle">Starting Mobile App...</p>
+            <div class="loading-spinner"></div>
+            <div class="status">
+                <div class="peer-status">
+                    🔐 Starting encrypted server...<br>
+                    📱 Mobile App - Initializing
+                </div>
+            </div>
+        </div>
+
+        <!-- Main App (shown once Rails server is ready) -->
+        <div id="mainApp">
+            <div class="logo">🔐</div>
+            <h1>Cipher</h1>
+            <p class="subtitle">End-to-End Encrypted Social Network</p>
+
+            <div class="form-container">
+                <!-- Login Form -->
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="loginEmail">Email</label>
+                        <input type="email" id="loginEmail" name="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="loginPassword">Password</label>
+                        <input type="password" id="loginPassword" name="password" required>
+                    </div>
+                    <button type="submit" class="btn">Sign In</button>
+                    <div style="text-align: center;">
+                        <a href="#" class="toggle-link" onclick="toggleForm()">Need an account? Sign up</a>
+                    </div>
+                </form>
+
+                <!-- Register Form -->
+                <form id="registerForm" class="hidden">
+                    <div class="form-group">
+                        <label for="registerEmail">Email</label>
+                        <input type="email" id="registerEmail" name="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="registerPassword">Password</label>
+                        <input type="password" id="registerPassword" name="password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="confirmPassword">Confirm Password</label>
+                        <input type="password" id="confirmPassword" name="password_confirmation" required>
+                    </div>
+                    <button type="submit" class="btn">Create Account</button>
+                    <div style="text-align: center;">
+                        <a href="#" class="toggle-link" onclick="toggleForm()">Already have an account? Sign in</a>
+                    </div>
+                </form>
+            </div>
+
+            <div class="status">
+                <div class="peer-status">
+                    📱 Mobile App - Online<br>
+                    🔒 Local Encryption Active
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check if we're in mobile app or web browser
+        const isMobileApp = window.__TAURI__ !== undefined;
+        let railsServerReady = false;
+
+        // Mobile app functionality
+        function toggleForm() {
+            const loginForm = document.getElementById('loginForm');
+            const registerForm = document.getElementById('registerForm');
+
+            loginForm.classList.toggle('hidden');
+            registerForm.classList.toggle('hidden');
+        }
+
+        function showMainApp() {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('mainApp').style.display = 'block';
+        }
+
+        function checkRailsServer() {
+            if (isMobileApp) {
+                // In mobile app, check if Rails server is ready
+                fetch('/up')
+                    .then(response => {
+                        if (response.ok) {
+                            railsServerReady = true;
+                            // Rails is ready, redirect to Rails routes
+                            window.location.href = '/';
+                        } else {
+                            // Rails not ready yet, show main app UI
+                            setTimeout(checkRailsServer, 1000);
+                        }
+                    })
+                    .catch(() => {
+                        // Rails not ready, show main app interface or retry
+                        if (!railsServerReady) {
+                            showMainApp();
+                        }
+                        setTimeout(checkRailsServer, 2000);
+                    });
+            } else {
+                // In web browser, redirect to Rails immediately
+                window.location.href = '/';
+            }
+        }
+
+        // Form handlers that store to localStorage temporarily
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            // Store credentials temporarily for mobile app
+            localStorage.setItem('tempLogin', JSON.stringify({ email, password }));
+
+            if (railsServerReady) {
+                window.location.href = '/users/import_keys';
+            } else {
+                alert('Server is starting up, please wait...');
+            }
+        });
+
+        document.getElementById('registerForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+
+            // Store credentials temporarily for mobile app
+            localStorage.setItem('tempRegister', JSON.stringify({ email, password }));
+
+            if (railsServerReady) {
+                window.location.href = '/users/new';
+            } else {
+                alert('Server is starting up, please wait...');
+            }
+        });
+
+        // Start checking for Rails server
+        if (isMobileApp) {
+            setTimeout(checkRailsServer, 1000);
+        } else {
+            // For web browsers, show a link to the Rails app instead of auto-redirect
+            showMainApp();
+            document.querySelector('.subtitle').innerHTML = 'Web App - <a href="/" style="color: white;">Click here to access Cipher</a>';
+        }
+    </script>
+</body>
+</html>

@@ -125,25 +125,25 @@
 
 .encryption-info {
   background: rgba(255, 255, 255, 0.9);
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 20px;
-  margin: 20px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-xl);
+  margin: var(--spacing-xl) 0;
 }
 
 .encryption-info h3 {
   margin-top: 0;
-  color: #2d3748;
+  color: var(--color-text-primary);
 }
 
 .encryption-info ul {
   margin: 0;
-  padding-left: 20px;
+  padding-left: var(--spacing-xl);
 }
 
 .encryption-info li {
-  margin: 8px 0;
-  color: #4a5568;
+  margin: var(--spacing-sm) 0;
+  color: var(--color-text-secondary);
 }
 
 .supported-formats {
@@ -463,27 +463,7 @@
   font-weight: 500;
 }
 
-.empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: #718096;
-}
-
-.empty-icon {
-  font-size: 4em;
-  margin-bottom: 20px;
-  opacity: 0.6;
-}
-
-.empty-state h2 {
-  color: #2d3748;
-  margin-bottom: 10px;
-}
-
-.empty-state p {
-  margin-bottom: 30px;
-  font-size: 1.1em;
-}
+/* Empty state moved to design-system.css */
 
 /* Post Edit Form */
 .existing-attachments {
@@ -540,9 +520,9 @@
 
 .form-actions {
   display: flex;
-  gap: 15px;
+  gap: var(--spacing-md);
   flex-wrap: wrap;
-  margin-top: 30px;
+  margin-top: var(--spacing-2xl);
 }
 
 /* Attachment Viewer */
@@ -820,13 +800,13 @@
 /* Message Actions (Dashboard Integration) */
 .message-actions {
   display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
   flex-wrap: wrap;
 }
 
 .message-actions .btn {
-  font-size: 0.95em;
+  font-size: var(--font-size-sm);
 }
 
 /* Responsive Design */

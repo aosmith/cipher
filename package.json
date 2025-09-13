@@ -1,6 +1,6 @@
 {
   "name": "cipher-desktop",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "Cipher - End-to-End Encrypted P2P Social Network Desktop App",
   "main": "index.js",
   "scripts": {
@@ -31,7 +31,7 @@
   "author": "Cipher Team",
   "license": "MIT",
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.8.4"
   },
   "repository": {
     "type": "git",

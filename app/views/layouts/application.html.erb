@@ -236,6 +236,22 @@
       
       // Make notification available globally
       window.showNotification = showNotification;
+
+      // Auto-dismiss flash messages after 5 seconds
+      document.addEventListener('DOMContentLoaded', function() {
+        const flashMessages = document.querySelectorAll('.flash-message');
+        flashMessages.forEach(function(message) {
+          setTimeout(function() {
+            if (message.parentNode) {
+              message.style.opacity = '0';
+              message.style.transform = 'translateX(100%)';
+              setTimeout(function() {
+                message.remove();
+              }, 500);
+            }
+          }, 5000);
+        });
+      });
     </script>
     
     <!-- Minimal desktop app JavaScript -->

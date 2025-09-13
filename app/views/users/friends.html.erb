@@ -1,9 +1,18 @@
 <% content_for :title, "Friends - Cipher" %>
 
+<% unless @current_user %>
+  <div class="flash-messages">
+    <div class="flash-message flash-error">
+      Please log in to access the friends page.
+    </div>
+  </div>
+  <% return %>
+<% end %>
+
 <div class="friends-page">
-  <div class="page-header">
-    <h1>👥 Friends</h1>
-    <p class="page-subtitle">Manage your connections for secure file sharing</p>
+  <div class="welcome-hero">
+    <h2>👥 Friends</h2>
+    <p>Manage your connections for secure file sharing</p>
   </div>
 
   <!-- Add Friend Section -->
@@ -12,15 +21,16 @@
       <h2>Add Friend</h2>
     </div>
     <div class="card-body">
-      <form id="add-friend-form" class="add-friend-form">
+      <%= form_tag '/api/v1/friends/send_request', method: :post, class: "add-friend-form" do %>
         <div class="form-group">
-          <label for="friend-username">Username:</label>
+          <label for="username" class="form-label">Username:</label>
           <div class="input-group">
-            <input type="text" id="friend-username" name="username" placeholder="Enter username" class="form-input" required>
-            <button type="submit" class="btn btn-primary">Send Request</button>
+            <%= text_field_tag :username, "", placeholder: "Enter username", class: "form-control", required: true %>
+            <%= submit_tag "Send Request", class: "btn btn-primary" %>
           </div>
+          <small class="form-help">Enter the exact username of the person you want to add as a friend</small>
         </div>
-      </form>
+      <% end %>
     </div>
   </div>
 
@@ -33,14 +43,67 @@
       <div class="requests-section">
         <h3>Received Requests</h3>
         <div id="received-requests" class="requests-list">
-          <!-- Populated by JavaScript -->
+          <% if @current_user.pending_friend_requests.any? %>
+            <% @current_user.pending_friend_requests.each do |friendship| %>
+              <div class="request-item">
+                <div class="user-avatar"><%= friendship.requester.username[0..1].upcase %></div>
+                <div class="user-info">
+                  <div class="user-name"><%= friendship.requester.username %></div>
+                  <div class="user-details">
+                    <%= friendship.requester.display_name if friendship.requester.display_name.present? %>
+                    • Requested <%= time_ago_in_words(friendship.created_at) %> ago
+                  </div>
+                </div>
+                <div class="user-actions">
+                  <%= form_tag '/api/v1/friends/respond_to_request', method: :post, style: 'display: inline;' do %>
+                    <%= hidden_field_tag :friendship_id, friendship.id %>
+                    <%= hidden_field_tag :action_type, 'accept' %>
+                    <%= submit_tag "Accept", class: "btn btn-success btn-sm" %>
+                  <% end %>
+                  <%= form_tag '/api/v1/friends/respond_to_request', method: :post, style: 'display: inline;' do %>
+                    <%= hidden_field_tag :friendship_id, friendship.id %>
+                    <%= hidden_field_tag :action_type, 'decline' %>
+                    <%= submit_tag "Decline", class: "btn btn-outline btn-sm" %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          <% else %>
+            <div class="empty-state">
+              <div class="empty-icon">📭</div>
+              <p>No pending requests</p>
+            </div>
+          <% end %>
         </div>
       </div>
-      
+
       <div class="requests-section">
         <h3>Sent Requests</h3>
         <div id="sent-requests" class="requests-list">
-          <!-- Populated by JavaScript -->
+          <% if @current_user.sent_friend_requests.any? %>
+            <% @current_user.sent_friend_requests.each do |friendship| %>
+              <div class="request-item">
+                <div class="user-avatar"><%= friendship.addressee.username[0..1].upcase %></div>
+                <div class="user-info">
+                  <div class="user-name"><%= friendship.addressee.username %></div>
+                  <div class="user-details">
+                    <%= friendship.addressee.display_name if friendship.addressee.display_name.present? %>
+                    • Sent <%= time_ago_in_words(friendship.created_at) %> ago
+                  </div>
+                </div>
+                <div class="user-actions">
+                  <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;', data: { confirm: 'Cancel this friend request?' } do %>
+                    <%= submit_tag "Cancel", class: "btn btn-secondary btn-sm" %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          <% else %>
+            <div class="empty-state">
+              <div class="empty-icon">⏳</div>
+              <p>No sent requests</p>
+            </div>
+          <% end %>
         </div>
       </div>
     </div>
@@ -49,558 +112,48 @@
   <!-- Friends List Section -->
   <div class="card">
     <div class="card-header">
-      <h2>Your Friends (<span id="friends-count">0</span>)</h2>
+      <h2>Your Friends (<span id="friends-count"><%= @current_user.friends.count %></span>)</h2>
     </div>
     <div class="card-body">
       <div id="friends-list" class="friends-list">
-        <!-- Populated by JavaScript -->
+        <% if @current_user.friends.any? %>
+          <% @current_user.friends.each do |friend| %>
+            <div class="friend-item">
+              <div class="user-avatar"><%= friend.username[0..1].upcase %></div>
+              <div class="user-info">
+                <div class="user-name"><%= friend.username %></div>
+                <div class="user-details">
+                  <%= friend.display_name if friend.display_name.present? %>
+                  • Friends since <%= friend.created_at.strftime('%B %Y') %>
+                </div>
+              </div>
+              <div class="user-actions">
+                <%= link_to "/messages/#{friend.id}", class: "btn btn-outline btn-sm" do %>
+                  💬 Message
+                <% end %>
+                <% if @current_user.connected_to?(friend) %>
+                  <span class="btn btn-success btn-sm" disabled>🟢 Connected</span>
+                <% else %>
+                  <%= form_tag "/api/v1/p2p/establish/#{friend.id}", method: :post, style: 'display: inline;' do %>
+                    <%= submit_tag "🔗 Connect", class: "btn btn-primary btn-sm" %>
+                  <% end %>
+                <% end %>
+                <% friendship = @current_user.friendships.find_by("(requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)", @current_user.id, friend.id, friend.id, @current_user.id) %>
+                <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;', data: { confirm: 'Remove this friend?' } do %>
+                  <%= submit_tag "Remove", class: "btn btn-danger btn-sm" %>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        <% else %>
+          <div class="empty-state">
+            <div class="empty-icon">👥</div>
+            <p>No friends yet</p>
+            <small>Add friends to start sharing files securely</small>
+          </div>
+        <% end %>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Friend Selector Container (hidden by default) -->
-<div id="friend-selector-container"></div>
-
-<style>
-.friends-page {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 20px;
-}
-
-.page-header {
-  text-align: center;
-  margin-bottom: 30px;
-}
-
-.page-header h1 {
-  font-size: 2.5rem;
-  margin-bottom: 10px;
-  color: var(--primary-color, #3b82f6);
-}
-
-.page-subtitle {
-  font-size: 1.1rem;
-  color: var(--text-secondary, #6b7280);
-  margin: 0;
-}
-
-.card {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  margin-bottom: 20px;
-  overflow: hidden;
-}
-
-.card-header {
-  background: var(--bg-secondary, #f8f9fa);
-  padding: 20px;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
-}
-
-.card-header h2 {
-  margin: 0;
-  font-size: 1.3rem;
-}
-
-.card-body {
-  padding: 20px;
-}
-
-.add-friend-form {
-  max-width: 400px;
-}
-
-.form-group {
-  margin-bottom: 15px;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 5px;
-  font-weight: 500;
-}
-
-.input-group {
-  display: flex;
-  gap: 10px;
-}
-
-.form-input {
-  flex: 1;
-  padding: 10px;
-  border: 1px solid var(--border-color, #d1d5db);
-  border-radius: 6px;
-  font-size: 1rem;
-}
-
-.btn {
-  padding: 10px 20px;
-  border-radius: 6px;
-  font-weight: 500;
-  text-decoration: none;
-  border: none;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.btn-primary {
-  background: var(--primary-color, #3b82f6);
-  color: white;
-}
-
-.btn-primary:hover {
-  background: var(--primary-dark, #2563eb);
-}
-
-.btn-secondary {
-  background: var(--secondary-color, #6b7280);
-  color: white;
-}
-
-.btn-outline {
-  background: transparent;
-  color: var(--primary-color, #3b82f6);
-  border: 1px solid var(--primary-color, #3b82f6);
-}
-
-.btn-success {
-  background: var(--success-color, #10b981);
-  color: white;
-}
-
-.btn-danger {
-  background: var(--danger-color, #ef4444);
-  color: white;
-}
-
-.btn-sm {
-  padding: 6px 12px;
-  font-size: 0.875rem;
-}
-
-.requests-section {
-  margin-bottom: 25px;
-}
-
-.requests-section h3 {
-  font-size: 1.1rem;
-  margin-bottom: 15px;
-  color: var(--text-secondary, #6b7280);
-}
-
-.requests-list,
-.friends-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.request-item,
-.friend-item {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding: 15px;
-  background: var(--bg-secondary, #f8f9fa);
-  border-radius: 8px;
-  border: 1px solid var(--border-color, #e5e7eb);
-}
-
-.user-avatar {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  background: var(--primary-color, #3b82f6);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 600;
-  font-size: 18px;
-}
-
-.user-info {
-  flex: 1;
-}
-
-.user-name {
-  font-weight: 500;
-  margin-bottom: 3px;
-}
-
-.user-details {
-  font-size: 0.875rem;
-  color: var(--text-secondary, #6b7280);
-}
-
-.user-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 40px 20px;
-  color: var(--text-secondary, #6b7280);
-}
-
-.empty-icon {
-  font-size: 2rem;
-  margin-bottom: 10px;
-}
-
-.notification {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  padding: 12px 16px;
-  border-radius: 8px;
-  color: white;
-  z-index: 10000;
-  max-width: 350px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.notification.success {
-  background: var(--success-color, #10b981);
-}
-
-.notification.error {
-  background: var(--danger-color, #ef4444);
-}
-
-.notification.info {
-  background: var(--primary-color, #3b82f6);
-}
-
-@media (max-width: 640px) {
-  .friends-page {
-    padding: 15px;
-  }
-  
-  .input-group {
-    flex-direction: column;
-  }
-  
-  .request-item,
-  .friend-item {
-    flex-direction: column;
-    text-align: center;
-  }
-  
-  .user-actions {
-    justify-content: center;
-  }
-}
-</style>
-
-<script type="module">
-import FriendSelector from 'friend_selector';
-
-class FriendsManager {
-  constructor() {
-    this.friends = [];
-    this.requests = { received: [], sent: [] };
-    
-    this.init();
-  }
-
-  async init() {
-    await this.loadFriends();
-    await this.loadRequests();
-    this.bindEvents();
-  }
-
-  async loadFriends() {
-    try {
-      const response = await fetch('/api/v1/friends', {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      });
-      
-      if (response.ok) {
-        this.friends = await response.json();
-        this.renderFriends();
-      }
-    } catch (error) {
-      console.error('Failed to load friends:', error);
-    }
-  }
-
-  async loadRequests() {
-    try {
-      const response = await fetch('/api/v1/friends/requests', {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      });
-      
-      if (response.ok) {
-        this.requests = await response.json();
-        this.renderRequests();
-      }
-    } catch (error) {
-      console.error('Failed to load requests:', error);
-    }
-  }
-
-  renderFriends() {
-    const container = document.getElementById('friends-list');
-    const countElement = document.getElementById('friends-count');
-    
-    countElement.textContent = this.friends.length;
-
-    if (this.friends.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">👥</div>
-          <p>No friends yet</p>
-          <small>Add friends to start sharing files securely</small>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = this.friends.map(friend => `
-      <div class="friend-item">
-        <div class="user-avatar">${this.getInitials(friend.username)}</div>
-        <div class="user-info">
-          <div class="user-name">${this.escapeHtml(friend.username)}</div>
-          <div class="user-details">
-            ${friend.display_name ? this.escapeHtml(friend.display_name) : ''}
-            • Friends since ${this.formatDate(friend.created_at)}
-          </div>
-        </div>
-        <div class="user-actions">
-          <a href="/messages/${friend.id}" class="btn btn-outline btn-sm">
-            💬 Message
-          </a>
-          <button class="btn btn-danger btn-sm remove-friend" data-friend-id="${friend.id}">
-            Remove
-          </button>
-        </div>
-      </div>
-    `).join('');
-  }
-
-  renderRequests() {
-    this.renderReceivedRequests();
-    this.renderSentRequests();
-  }
-
-  renderReceivedRequests() {
-    const container = document.getElementById('received-requests');
-    
-    if (this.requests.received.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">📭</div>
-          <p>No pending requests</p>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = this.requests.received.map(request => `
-      <div class="request-item">
-        <div class="user-avatar">${this.getInitials(request.user.username)}</div>
-        <div class="user-info">
-          <div class="user-name">${this.escapeHtml(request.user.username)}</div>
-          <div class="user-details">
-            ${request.user.display_name ? this.escapeHtml(request.user.display_name) : ''}
-            • Requested ${this.formatDate(request.created_at)}
-          </div>
-        </div>
-        <div class="user-actions">
-          <button class="btn btn-success btn-sm accept-request" data-friendship-id="${request.id}">
-            Accept
-          </button>
-          <button class="btn btn-outline btn-sm decline-request" data-friendship-id="${request.id}">
-            Decline
-          </button>
-        </div>
-      </div>
-    `).join('');
-  }
-
-  renderSentRequests() {
-    const container = document.getElementById('sent-requests');
-    
-    if (this.requests.sent.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">⏳</div>
-          <p>No sent requests</p>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = this.requests.sent.map(request => `
-      <div class="request-item">
-        <div class="user-avatar">${this.getInitials(request.user.username)}</div>
-        <div class="user-info">
-          <div class="user-name">${this.escapeHtml(request.user.username)}</div>
-          <div class="user-details">
-            ${request.user.display_name ? this.escapeHtml(request.user.display_name) : ''}
-            • Sent ${this.formatDate(request.created_at)}
-          </div>
-        </div>
-        <div class="user-actions">
-          <button class="btn btn-secondary btn-sm cancel-request" data-friendship-id="${request.id}">
-            Cancel
-          </button>
-        </div>
-      </div>
-    `).join('');
-  }
-
-  bindEvents() {
-    // Add friend form
-    document.getElementById('add-friend-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('friend-username').value.trim();
-      
-      if (username) {
-        await this.sendFriendRequest(username);
-        document.getElementById('friend-username').value = '';
-      }
-    });
-
-    // Accept/decline requests
-    document.addEventListener('click', async (e) => {
-      if (e.target.classList.contains('accept-request')) {
-        const friendshipId = e.target.dataset.friendshipId;
-        await this.respondToRequest(friendshipId, 'accept');
-      }
-      
-      if (e.target.classList.contains('decline-request')) {
-        const friendshipId = e.target.dataset.friendshipId;
-        await this.respondToRequest(friendshipId, 'decline');
-      }
-      
-      if (e.target.classList.contains('cancel-request')) {
-        const friendshipId = e.target.dataset.friendshipId;
-        await this.removeFriendship(friendshipId);
-      }
-      
-      if (e.target.classList.contains('remove-friend')) {
-        const friendshipId = e.target.dataset.friendId;
-        if (confirm('Are you sure you want to remove this friend?')) {
-          await this.removeFriendship(friendshipId);
-        }
-      }
-    });
-  }
-
-  async sendFriendRequest(username) {
-    try {
-      const response = await fetch('/api/v1/friends/send_request', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({ username })
-      });
-
-      const data = await response.json();
-      
-      if (response.ok) {
-        this.showNotification(data.message, 'success');
-        await this.loadRequests();
-      } else {
-        this.showNotification(data.error, 'error');
-      }
-    } catch (error) {
-      console.error('Failed to send friend request:', error);
-      this.showNotification('Failed to send friend request', 'error');
-    }
-  }
-
-  async respondToRequest(friendshipId, actionType) {
-    try {
-      const response = await fetch('/api/v1/friends/respond_to_request', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({ friendship_id: friendshipId, action_type: actionType })
-      });
-
-      const data = await response.json();
-      
-      if (response.ok) {
-        this.showNotification(data.message, 'success');
-        await this.loadFriends();
-        await this.loadRequests();
-      } else {
-        this.showNotification(data.error, 'error');
-      }
-    } catch (error) {
-      console.error('Failed to respond to request:', error);
-      this.showNotification('Failed to respond to request', 'error');
-    }
-  }
-
-  async removeFriendship(friendshipId) {
-    try {
-      const response = await fetch(`/api/v1/friends/${friendshipId}`, {
-        method: 'DELETE',
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest'
-        }
-      });
-
-      const data = await response.json();
-      
-      if (response.ok) {
-        this.showNotification(data.message, 'success');
-        await this.loadFriends();
-        await this.loadRequests();
-      } else {
-        this.showNotification(data.error, 'error');
-      }
-    } catch (error) {
-      console.error('Failed to remove friendship:', error);
-      this.showNotification('Failed to remove friendship', 'error');
-    }
-  }
-
-  showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    notification.textContent = message;
-    
-    document.body.appendChild(notification);
-    
-    setTimeout(() => {
-      notification.remove();
-    }, 5000);
-  }
-
-  getInitials(username) {
-    return username.substring(0, 2).toUpperCase();
-  }
-
-  escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  formatDate(dateString) {
-    const date = new Date(dateString);
-    return date.toLocaleDateString();
-  }
-}
-
-// Initialize friends manager
-document.addEventListener('DOMContentLoaded', () => {
-  new FriendsManager();
-});
-</script>

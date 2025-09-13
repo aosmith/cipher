@@ -84,7 +84,7 @@ class FeedCommentingTest < ApplicationSystemTestCase
     within first('.post') do
       # Click delete button on own comment (should be visible)
       accept_confirm do
-        first("input[type='submit'][value='×']").click
+        first("input[type='submit'][value='×']", wait: 10).click
       end
     end
     

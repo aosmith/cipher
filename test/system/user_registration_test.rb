@@ -18,7 +18,7 @@ class UserRegistrationTest < ApplicationSystemTestCase
     visit new_user_path
     
     # Verify the page loaded correctly
-    assert_selector "h1", text: "Create Your Cipher Identity"
+    assert_selector "h2", text: "Create Your Cipher Identity"
     assert_selector "form.user-form"
     
     # Fill in the form fields

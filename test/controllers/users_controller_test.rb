@@ -21,7 +21,8 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     user_params = {
       user: {
         username: "newuser",
-        display_name: "New User"
+        display_name: "New User",
+        email: "newuser@example.com"
       },
       password: "securepassword123",
       confirm_password: "securepassword123"

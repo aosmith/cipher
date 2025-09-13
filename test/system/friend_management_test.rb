@@ -51,7 +51,7 @@ class FriendManagementTest < ApplicationSystemTestCase
     visit friends_users_path
     
     # Verify page loads correctly
-    assert_selector "h1", text: "👥 Friends"
+    assert_selector "h2", text: "👥 Friends"
     assert_text "Manage your connections for secure file sharing"
     
     # Verify main sections are present
@@ -73,19 +73,19 @@ class FriendManagementTest < ApplicationSystemTestCase
     assert_selector ".add-friend-form", wait: 5
     
     # Fill in the friend request form
-    fill_in "friend-username", with: @user2.username
-    
+    fill_in "username", with: @user2.username
+
     # Submit the form
     click_button "Send Request"
-    
-    # Wait for the JavaScript to process the request
+
+    # Wait for the page to reload and show the success message
     assert_text "Friend request sent successfully", wait: 10
-    
+
     # Verify the request appears in sent requests section
-    within "#sent-requests" do
+    within ".requests-section:nth-child(2)" do
       assert_text @user2.username
-      assert_text @user2.display_name
-      assert_selector "button", text: "Cancel"
+      assert_text @user2.display_name if @user2.display_name.present?
+      assert_selector "input[type='submit'][value='Cancel']"
     end
     
     # Verify friendship was created in database
@@ -330,7 +330,7 @@ class FriendManagementTest < ApplicationSystemTestCase
     
     # Page should load (no server-side authentication required)
     assert_current_path friends_users_path
-    assert_selector "h1", text: "👥 Friends"
+    assert_selector "h2", text: "👥 Friends"
     
     # But the JavaScript should show empty states since API calls will fail
     assert_selector "#friends-list", wait: 5

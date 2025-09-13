@@ -1,22 +1,17 @@
 <div class="container">
   <% if @current_user %>
-    <div class="dashboard-welcome">
-      <div class="welcome-header">
-        <h1>Cipher Social Network</h1>
-        <h2>Your Cipher Dashboard</h2>
-      </div>
-      <div class="welcome-description">
-        <p>Manage your encrypted communications and network connections.</p>
-      </div>
+    <div class="welcome-hero">
+      <h2>Your Cipher Dashboard</h2>
+      <p>Manage your encrypted communications and network connections.</p>
     </div>
     <section class="status-section">
       <h2>🌐 Network Status</h2>
-      <div id="connection-status" class="status-offline">
-        <span class="status-indicator">●</span> Connecting to P2P network...
+      <div class="status-online">
+        <span class="status-indicator">●</span> Local server running
       </div>
-      <div id="peer-list" class="peer-list">
-        <h3>Connected Peers</h3>
-        <div id="connected-peers">No peers connected</div>
+      <div class="peer-list">
+        <h3>P2P Connections</h3>
+        <div id="connected-peers">Direct connections active with <%= @current_user.peers.active.count %> peers</div>
       </div>
     </section>
 
@@ -28,14 +23,14 @@
             <%= form.text_area :content, placeholder: "What's on your mind?", rows: 3, class: "form-control" %>
           </div>
           <div class="form-group">
-            <label for="attachments">Attachments</label>
-            <input type="file" 
+            <label for="attachments" class="form-label">Attachments</label>
+            <input type="file"
                    id="attachments"
-                   name="attachments[]" 
-                   class="file-input-visible" 
-                   multiple 
-                   accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
-                   style="display: block; width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                   name="attachments[]"
+                   class="form-control file-input-visible"
+                   multiple
+                   accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt">
+            <small class="form-help">Select images, videos, documents, or other files to attach</small>
           </div>
           <div class="form-buttons">
             <%= form.submit "📤 Post Securely", class: "btn btn-primary" %>
@@ -120,8 +115,8 @@
     </section>
   <% else %>
     <div class="welcome-hero">
-      <h2>Welcome to Cipher</h2>
-      <p>Encrypted peer-to-peer messaging without servers.</p>
+      <h2>🔐 Cipher</h2>
+      <p>Secure, decentralized communication for the modern web</p>
       
       <div class="getting-started">
         <%= link_to "Create Your Identity", new_user_path, class: "btn btn-primary btn-large" %>
@@ -280,80 +275,7 @@
   <% end %>
 </div>
 
-<% if @current_user %>
-  <script type="module">
-    import CipherSignaling from 'channels/signaling_channel';
-    
-    // Initialize P2P connection
-    const signaling = new CipherSignaling(<%= @current_user.id %>);
-    
-    // Update UI based on connection status
-    signaling.onConnected = function() {
-      document.getElementById('connection-status').className = 'status-online';
-      document.getElementById('connection-status').innerHTML = 
-        '<span class="status-indicator">●</span> Connected to P2P network';
-    };
-    
-    signaling.onDisconnected = function() {
-      document.getElementById('connection-status').className = 'status-offline';
-      document.getElementById('connection-status').innerHTML = 
-        '<span class="status-indicator">●</span> Disconnected from P2P network';
-    };
-  </script>
-<% else %>
-  <script type="module">
-    // Handle wallet connection from token section
-    document.addEventListener('DOMContentLoaded', () => {
-      const connectWalletBtn = document.getElementById('connect-wallet-cta');
-      
-      if (connectWalletBtn) {
-        connectWalletBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          
-          if (typeof window.cipherWallet !== 'undefined') {
-            window.cipherWallet.connectWallet().then(() => {
-              // Show success notification
-              showTokenNotification('Wallet connected successfully! You can now earn and spend CPH tokens.', 'success');
-            }).catch((error) => {
-              showTokenNotification('Failed to connect wallet: ' + error.message, 'error');
-            });
-          } else {
-            showTokenNotification('Please create an account first to connect your wallet.', 'info');
-            setTimeout(() => {
-              window.location.href = '<%= new_user_path %>';
-            }, 2000);
-          }
-        });
-      }
-    });
-    
-    function showTokenNotification(message, type = 'info') {
-      const notification = document.createElement('div');
-      notification.className = `token-notification token-notification-${type}`;
-      notification.textContent = message;
-      notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
-        color: white;
-        padding: 16px 20px;
-        border-radius: 12px;
-        z-index: 10000;
-        max-width: 350px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-        font-weight: 500;
-        backdrop-filter: blur(10px);
-      `;
-      
-      document.body.appendChild(notification);
-      
-      setTimeout(() => {
-        notification.remove();
-      }, 5000);
-    }
-  </script>
-<% end %>
+<!-- JavaScript removed for local-only app simplicity -->
 
 <style>
 .message-actions {
@@ -378,53 +300,7 @@
   font-size: 0.95em;
 }
 
-/* Dashboard Welcome Section */
-.dashboard-welcome {
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
-  padding: var(--content-spacing-xl);
-  margin-bottom: var(--section-spacing);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-.welcome-header {
-  text-align: center;
-  margin-bottom: var(--content-spacing-lg);
-}
-
-.welcome-header h1 {
-  color: #2d3748;
-  font-size: 2.2em;
-  font-weight: 700;
-  margin: 0 0 var(--content-spacing-sm) 0;
-  letter-spacing: -0.5px;
-  line-height: var(--line-height-tight);
-}
-
-.welcome-header h2 {
-  color: #4a5568;
-  font-size: 1.4em;
-  font-weight: 500;
-  margin: 0;
-  line-height: var(--line-height-tight);
-}
-
-.welcome-description {
-  text-align: center;
-  margin-top: var(--content-spacing-md);
-}
-
-.welcome-description p {
-  color: #718096;
-  font-size: 1.1em;
-  line-height: var(--line-height-normal);
-  margin: 0;
-  max-width: 500px;
-  margin-left: auto;
-  margin-right: auto;
-}
+/* Use consistent modern welcome-hero styling from homepage.css */
 
 /* Message header layout */
 .message-header {
@@ -477,13 +353,6 @@
     align-self: flex-end;
   }
   
-  .dashboard-welcome {
-    padding: var(--content-spacing-md);
-    margin-bottom: var(--content-spacing-lg);
-  }
-  
-  .welcome-header {
-    margin-bottom: var(--content-spacing-md);
-  }
+  /* Mobile styles for welcome-hero handled by homepage.css */
 }
 </style>
