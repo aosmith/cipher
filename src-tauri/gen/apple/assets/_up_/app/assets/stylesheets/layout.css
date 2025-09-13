@@ -1,49 +1,4 @@
-/* Page Headers */
-.page-header {
-  text-align: center;
-  margin-bottom: 40px;
-  padding: 30px 20px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(15px);
-  border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-}
-
-.page-header h1 {
-  margin: 0 0 10px 0;
-  color: #2d3748;
-  font-size: 2.2em;
-  font-weight: 700;
-}
-
-.page-header p {
-  margin: 0;
-  color: #4a5568;
-  font-size: 1.1em;
-}
-
-.dashboard-welcome {
-  text-align: center;
-  margin-bottom: 40px;
-  padding: 30px 20px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(15px);
-  border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-}
-
-.dashboard-welcome h2 {
-  margin: 0 0 10px 0;
-  color: #2d3748;
-  font-size: 2em;
-  font-weight: 600;
-}
-
-.dashboard-welcome p {
-  margin: 0;
-  color: #4a5568;
-  font-size: 1.1em;
-}
+/* Page header styles removed - all pages now use welcome-hero from homepage.css for consistency */
 
 /* Application Header */
 .app-header {
@@ -286,20 +241,11 @@
   gap: 12px;
 }
 
-.security-badge,
-.privacy-badge {
-  background: rgba(102, 126, 234, 0.2);
-  color: #e2e8f0;
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  border: 1px solid rgba(102, 126, 234, 0.3);
-}
-
+/* Footer badges now use design system .badge component */
 .privacy-badge {
   background: rgba(72, 187, 120, 0.2);
   border: 1px solid rgba(72, 187, 120, 0.3);
+  color: #bbf7d0;
 }
 
 /* Responsive Design */

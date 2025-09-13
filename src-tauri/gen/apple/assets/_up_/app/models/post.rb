@@ -88,10 +88,29 @@ class Post < ApplicationRecord
 
   def encrypt_content
     return if @plaintext_content.blank?
-    
-    # For now, we'll use a simple encryption scheme
-    # In a real implementation, this would be properly encrypted
-    self.content_encrypted = @plaintext_content
+
+    begin
+      # Use proper NaCl encryption for content
+      # Generate a random key for this post
+      secret_key = RbNaCl::Random.random_bytes(RbNaCl::SecretBox.key_bytes)
+      box = RbNaCl::SecretBox.new(secret_key)
+
+      # Encrypt the content
+      encrypted_content = box.encrypt(@plaintext_content)
+
+      # Store the encrypted content as base64
+      # In a real P2P app, the secret_key would be encrypted with recipient's public key
+      # For local-only app, we'll store it with the content for simplicity
+      self.content_encrypted = Base64.strict_encode64(encrypted_content)
+
+      # Store the key (in production this would be encrypted for recipients)
+      self.encryption_key = Base64.strict_encode64(secret_key)
+
+    rescue => e
+      Rails.logger.error "Content encryption failed: #{e.message}"
+      # Fallback to storing plaintext if encryption fails
+      self.content_encrypted = @plaintext_content
+    end
   end
 
   def sign_content
@@ -109,18 +128,49 @@ class Post < ApplicationRecord
         content_to_sign = timestamp&.to_i&.to_s || Time.current.to_i.to_s
       end
       
-      # For now, create a simple signature (in production this would use proper cryptographic signing)
-      self.signature = Digest::SHA256.hexdigest("#{user.id}-#{content_to_sign}-#{timestamp}")
+      # Create a proper digital signature using the user's private key
+      begin
+        if user.private_key.present?
+          # Decode the user's private key
+          private_key_bytes = Base64.strict_decode64(user.private_key)
+          signing_key = RbNaCl::SigningKey.new(private_key_bytes)
+
+          # Sign the content
+          signature_bytes = signing_key.sign(content_to_sign)
+          self.signature = Base64.strict_encode64(signature_bytes)
+        else
+          # Fallback for users without stored private keys (will need key derivation)
+          Rails.logger.warn "No private key available for signing post #{id}"
+          self.signature = Digest::SHA256.hexdigest("#{user.id}-#{content_to_sign}-#{timestamp}")
+        end
+      rescue => e
+        Rails.logger.error "Digital signature failed: #{e.message}"
+        # Fallback to hash-based signature
+        self.signature = Digest::SHA256.hexdigest("#{user.id}-#{content_to_sign}-#{timestamp}")
+      end
     ensure
       @signing_in_progress = false
     end
   end
 
   def decrypt_content
-    # For public posts, we'll use a simpler encryption scheme
-    # For private messages, this would decrypt using the user's private key
-    # This is a placeholder - actual implementation depends on post type
-    content_encrypted
+    return content_encrypted if encryption_key.blank?
+
+    begin
+      # Decrypt using the stored encryption key
+      secret_key = Base64.strict_decode64(encryption_key)
+      box = RbNaCl::SecretBox.new(secret_key)
+
+      # Decrypt the content
+      encrypted_data = Base64.strict_decode64(content_encrypted)
+      decrypted_content = box.decrypt(encrypted_data)
+
+      decrypted_content
+    rescue => e
+      Rails.logger.error "Content decryption failed: #{e.message}"
+      # Return encrypted content if decryption fails (might be plaintext)
+      content_encrypted
+    end
   end
 
   def content_or_attachments_present

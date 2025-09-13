@@ -1,8 +1,10 @@
 <div class="container">
-  <div class="page-header">
-    <h1>📝 My Posts</h1>
+  <div class="welcome-hero">
+    <h2>📝 My Posts</h2>
     <p>Your encrypted posts and media</p>
-    <%= link_to "Create New Post", new_post_path, class: "btn btn-primary" %>
+    <div class="getting-started">
+      <%= link_to "Create New Post", new_post_path, class: "btn btn-primary btn-large" %>
+    </div>
   </div>
 
   <% if @post&.errors&.any? %>

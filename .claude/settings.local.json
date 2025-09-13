@@ -108,7 +108,10 @@
       "Read(//opt/homebrew/**)",
       "Read(//opt/homebrew/share/**)",
       "Bash(yes)",
-      "Bash(sdkmanager:*)"
+      "Bash(sdkmanager:*)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --target aarch64 --release)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --target aarch64)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []

@@ -3,8 +3,11 @@ require "active_support/core_ext/integer/time"
 Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb.
 
-  # iOS mobile environment - optimized for mobile Tauri app
+  # Android mobile environment - optimized for mobile Tauri app
   # This environment is based on development but with mobile-specific optimizations
+
+  # Do not eager load code on boot.
+  config.eager_load = false
 
   # Enable/disable caching. By default caching is disabled.
   # Run rails dev:cache to toggle caching.
@@ -69,10 +72,14 @@ Rails.application.configure do
   # Uncomment if you wish to allow Action Cable access from any origin.
   # config.action_cable.disable_request_forgery_protection = true
 
-  # iOS mobile app specific configurations
+  # Android mobile app specific configurations
   config.hosts << "localhost"
   config.hosts << "127.0.0.1"
-  config.web_console.permissions = '127.0.0.1'
+  
+  # Configure web console if available (development only)
+  if defined?(Rails::Console)
+    config.web_console.permissions = '127.0.0.1' if Rails.application.config.respond_to?(:web_console)
+  end
   
   # Optimize for mobile performance
   config.logger = ActiveSupport::Logger.new(STDOUT)

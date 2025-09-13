@@ -1,4 +1,6 @@
 class Api::V1::SyncController < ApplicationController
+  # Use null session for API endpoints to prevent CSRF issues while maintaining protection
+  protect_from_forgery with: :null_session
   before_action :require_current_user_session
   
   # GET /api/v1/sync_data - Get data to share with a friend

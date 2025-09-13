@@ -4,14 +4,14 @@ Android mobile application releases for Cipher.
 
 ## Latest Release
 
-- **Version**: v0.7.0
-- **APK**: `Cipher-0.7.0-android.apk` (~10MB)
+- **Version**: v0.6.5
+- **APK**: Build from source using commands below
 - **Minimum Android**: API level 24 (Android 7.0)
 
 ## Installation
 
 ### Option 1: Direct APK Install
-1. Download the `Cipher-0.7.0-android.apk` file
+1. Build the APK using the development instructions below
 2. Enable "Unknown sources" in Android Settings → Security
 3. Open the APK file and tap "Install"
 4. Launch from your app drawer
@@ -40,7 +40,7 @@ cd cipher
 ```
 android/
 ├── latest/                     # Current release
-│   ├── Cipher-0.7.0-android.apk   # Android APK
+│   ├── build-instructions.md      # Android build guide
 │   ├── checksums.txt
 │   └── CHANGELOG.md
 ├── archive/                   # Previous versions

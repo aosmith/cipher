@@ -39,47 +39,85 @@ class Api::V1::FriendsController < ApplicationController
     elsif params[:public_key].present?
       target_user = User.find_by(public_key: params[:public_key])
     else
-      return render json: { error: 'Username or public key required' }, status: 400
+      respond_to do |format|
+        format.json { render json: { error: 'Username or public key required' }, status: 400 }
+        format.html {
+          flash[:error] = 'Username or public key required'
+          redirect_to friends_users_path and return
+        }
+      end
     end
-    
+
     if target_user.nil?
-      return render json: { error: 'User not found' }, status: 404
+      respond_to do |format|
+        format.json { render json: { error: 'User not found' }, status: 404 }
+        format.html {
+          flash[:error] = 'User not found'
+          redirect_to friends_users_path and return
+        }
+      end
     end
-    
+
     if target_user == current_user
-      return render json: { error: "You can't send a friend request to yourself" }, status: 400
+      respond_to do |format|
+        format.json { render json: { error: "You can't send a friend request to yourself" }, status: 400 }
+        format.html {
+          flash[:error] = "You can't send a friend request to yourself"
+          redirect_to friends_users_path and return
+        }
+      end
     end
-    
+
     friendship = current_user.send_friend_request_to(target_user)
-    
+
     if friendship
-      render json: { 
-        message: 'Friend request sent successfully',
-        friendship: {
-          id: friendship.id,
-          status: friendship.status,
-          addressee: {
-            id: target_user.id,
-            username: target_user.username,
-            display_name: target_user.display_name
+      respond_to do |format|
+        format.json {
+          render json: {
+            message: 'Friend request sent successfully',
+            friendship: {
+              id: friendship.id,
+              status: friendship.status,
+              addressee: {
+                id: target_user.id,
+                username: target_user.username,
+                display_name: target_user.display_name
+              }
+            }
           }
         }
-      }
+        format.html {
+          flash[:success] = 'Friend request sent successfully'
+          redirect_to friends_users_path
+        }
+      end
     else
-      render json: { error: 'Friend request could not be sent. You may already be friends or have a pending request.' }, status: 400
+      respond_to do |format|
+        format.json { render json: { error: 'Friend request could not be sent. You may already be friends or have a pending request.' }, status: 400 }
+        format.html {
+          flash[:error] = 'Friend request could not be sent. You may already be friends or have a pending request.'
+          redirect_to friends_users_path
+        }
+      end
     end
   end
 
   def respond_to_request
     friendship_id = params[:friendship_id]
     action = params[:action_type] # 'accept', 'decline', 'block'
-    
+
     friendship = current_user.received_friendships.find_by(id: friendship_id)
-    
+
     if friendship.nil?
-      return render json: { error: 'Friend request not found' }, status: 404
+      respond_to do |format|
+        format.json { render json: { error: 'Friend request not found' }, status: 404 }
+        format.html {
+          flash[:error] = 'Friend request not found'
+          redirect_to friends_users_path and return
+        }
+      end
     end
-    
+
     case action
     when 'accept'
       friendship.accept!
@@ -91,32 +129,59 @@ class Api::V1::FriendsController < ApplicationController
       friendship.block!
       message = 'User blocked'
     else
-      return render json: { error: 'Invalid action' }, status: 400
+      respond_to do |format|
+        format.json { render json: { error: 'Invalid action' }, status: 400 }
+        format.html {
+          flash[:error] = 'Invalid action'
+          redirect_to friends_users_path and return
+        }
+      end
     end
-    
-    render json: { 
-      message: message,
-      friendship: {
-        id: friendship.id,
-        status: friendship.status,
-        requester: {
-          id: friendship.requester.id,
-          username: friendship.requester.username,
-          display_name: friendship.requester.display_name
+
+    respond_to do |format|
+      format.json {
+        render json: {
+          message: message,
+          friendship: {
+            id: friendship.id,
+            status: friendship.status,
+            requester: {
+              id: friendship.requester.id,
+              username: friendship.requester.username,
+              display_name: friendship.requester.display_name
+            }
+          }
         }
       }
-    }
+      format.html {
+        flash[:success] = message
+        redirect_to friends_users_path
+      }
+    end
   end
 
   def destroy
     friendship = Friendship.involving_user(current_user).find_by(id: params[:id])
-    
+
     if friendship.nil?
-      return render json: { error: 'Friendship not found' }, status: 404
+      respond_to do |format|
+        format.json { render json: { error: 'Friendship not found' }, status: 404 }
+        format.html {
+          flash[:error] = 'Friendship not found'
+          redirect_to friends_users_path and return
+        }
+      end
     end
-    
+
     friendship.destroy
-    render json: { message: 'Friendship removed successfully' }
+
+    respond_to do |format|
+      format.json { render json: { message: 'Friendship removed successfully' } }
+      format.html {
+        flash[:success] = 'Friendship removed successfully'
+        redirect_to friends_users_path
+      }
+    end
   end
 
   # Get pending friend requests

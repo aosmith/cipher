@@ -1,15 +1,17 @@
-<%= form_with model: message, url: messages_path, method: :post, local: false, class: "message-form" do |form| %>
+<%= form_with model: message, url: messages_path, method: :post, local: true, class: "message-form" do |form| %>
   <%= hidden_field_tag :user_id, recipient.id %>
-  
-  <div class="message-input-group">
-    <%= form.text_area :content, 
-                       placeholder: "Type your message...", 
-                       class: "message-input",
-                       rows: 1,
-                       required: true,
-                       maxlength: 2000 %>
-    
-    <%= form.submit "Send", class: "message-send-btn" %>
+
+  <div class="form-group">
+    <div class="input-group">
+      <%= form.text_area :content,
+                         placeholder: "Type your message...",
+                         class: "form-control",
+                         rows: 2,
+                         required: true,
+                         maxlength: 2000 %>
+
+      <%= form.submit "Send", class: "btn btn-primary" %>
+    </div>
   </div>
   
   <% if message.errors.any? %>
@@ -21,25 +23,3 @@
   <% end %>
 <% end %>
 
-<script>
-  // Auto-resize textarea and handle Enter to send
-  const textarea = document.querySelector('.message-input');
-  if (textarea) {
-    // Auto-resize
-    textarea.addEventListener('input', function() {
-      this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-    });
-    
-    // Enter to send (Shift+Enter for new line)
-    textarea.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        const form = this.closest('form');
-        if (form && this.value.trim()) {
-          form.requestSubmit();
-        }
-      }
-    });
-  }
-</script>

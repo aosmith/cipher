@@ -19,6 +19,7 @@ Rails.application.routes.draw do
       get :local_hosting
       get :friends
       get :dashboard
+      get :p2p_status
     end
   end
   resources :posts do
@@ -43,6 +44,8 @@ Rails.application.routes.draw do
       post 'sync', to: 'sync#sync_messages'
       post 'verify_identity', to: 'auth#verify_identity'
       post 'login', to: 'auth#login'
+      get 'login', to: 'auth#login'  # For test-only GET login
+      post 'logout', to: 'auth#logout'
       
       # Friend-based sync endpoints
       get 'sync_data', to: 'sync#sync_data', as: :sync_data
@@ -67,7 +70,12 @@ Rails.application.routes.draw do
       
       post 'users/by_public_key', to: 'users#by_public_key'
       get 'users/current_with_private_key', to: 'users#current_user_with_private_key'
-      
+
+      # P2P connections
+      post 'p2p/establish/:friend_id', to: 'p2p_connections#establish'
+      delete 'p2p/disconnect/:friend_id', to: 'p2p_connections#disconnect'
+      get 'p2p/status', to: 'p2p_connections#status'
+
       # Blockchain endpoints
       get 'blockchain/config', to: 'blockchain#config'
       post 'blockchain/calculate_cost', to: 'blockchain#calculate_cost'

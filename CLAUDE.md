@@ -296,3 +296,5 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 - memorize we dont need ssl bewteen the user and the local server
 - This is a local only app, so each user runs their own server.  That allows us to skip some security and javascript.  The "server" will always be fast, local, and secure.
 - unless I tell you to stop keep going an try novel approaches until everything is fixed.
+- when you build the desktop version build ios an mobile
+- the builds that we push commit to the repo should always be production builds that do not create logs.

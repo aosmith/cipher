@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2025_09_12_183237) do
+ActiveRecord::Schema[8.0].define(version: 2025_09_13_121127) do
   create_table "attachment_shares", force: :cascade do |t|
     t.integer "attachment_id", null: false
     t.integer "user_id", null: false
@@ -74,6 +74,18 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_183237) do
     t.index ["sender_id"], name: "index_messages_on_sender_id"
   end
 
+  create_table "p2p_connections", force: :cascade do |t|
+    t.integer "user_id", null: false
+    t.integer "friend_user_id", null: false
+    t.string "status"
+    t.datetime "last_seen"
+    t.string "connection_type"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["friend_user_id"], name: "index_p2p_connections_on_friend_user_id"
+    t.index ["user_id"], name: "index_p2p_connections_on_user_id"
+  end
+
   create_table "peers", force: :cascade do |t|
     t.integer "user_id", null: false
     t.string "address"
@@ -97,6 +109,7 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_183237) do
     t.boolean "is_synced", default: false
     t.datetime "synced_at"
     t.string "content_hash"
+    t.text "encryption_key"
     t.index ["content_hash"], name: "index_posts_on_content_hash"
     t.index ["is_synced"], name: "index_posts_on_is_synced"
     t.index ["original_user_id"], name: "index_posts_on_original_user_id"
@@ -144,6 +157,8 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_12_183237) do
   add_foreign_key "friendships", "users", column: "requester_id"
   add_foreign_key "messages", "users", column: "recipient_id"
   add_foreign_key "messages", "users", column: "sender_id"
+  add_foreign_key "p2p_connections", "users"
+  add_foreign_key "p2p_connections", "users", column: "friend_user_id"
   add_foreign_key "peers", "users"
   add_foreign_key "posts", "users"
   add_foreign_key "posts", "users", column: "original_user_id"

@@ -9,6 +9,9 @@
  * Consider organizing styles into separate files for maintainability.
  */
 
+/* Import Design System First */
+@import url("design-system.css");
+
 /* Feed Page Styles */
 
 /* Custom scrollbar for webkit browsers */
@@ -439,6 +442,132 @@ ul li, ol li {
   font-weight: 600;
 }
 
+/* Flash Messages */
+.flash-messages {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  z-index: 1000;
+  max-width: 400px;
+  pointer-events: none;
+}
+
+.flash-message {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  margin-bottom: 10px;
+  padding: 16px 20px;
+  border-left: 4px solid;
+  animation: flash-slide-in 0.3s ease-out;
+  pointer-events: auto;
+  position: relative;
+}
+
+.flash-message::before {
+  content: '';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  background: no-repeat center;
+  background-size: 16px 16px;
+  opacity: 0.6;
+}
+
+.flash-success {
+  border-left-color: #22c55e;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.flash-success::before {
+  content: '✓';
+  font-size: 16px;
+  font-weight: bold;
+  color: #22c55e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flash-notice {
+  border-left-color: #3b82f6;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.flash-notice::before {
+  content: 'ℹ';
+  font-size: 16px;
+  font-weight: bold;
+  color: #3b82f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flash-error, .flash-alert {
+  border-left-color: #ef4444;
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+.flash-error::before, .flash-alert::before {
+  content: '⚠';
+  font-size: 16px;
+  font-weight: bold;
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flash-warning {
+  border-left-color: #f59e0b;
+  color: #d97706;
+  background: #fffbeb;
+}
+
+.flash-warning::before {
+  content: '⚠';
+  font-size: 16px;
+  font-weight: bold;
+  color: #f59e0b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@keyframes flash-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Auto-dismiss flash messages */
+.flash-message {
+  animation: flash-slide-in 0.3s ease-out, flash-fade-out 0.5s ease-in 4.5s forwards;
+}
+
+@keyframes flash-fade-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   margin: 0;
@@ -491,40 +620,9 @@ body {
   font-size: 0.9em;
 }
 
-/* Buttons */
-.btn {
-  padding: 10px 20px;
-  text-decoration: none;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  display: inline-block;
-  font-size: 14px;
-  font-weight: 500;
-  text-align: center;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
-  color: white;
-}
-
-.btn-secondary {
-  background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
-  color: white;
-}
-
+/* Button overrides for specific use cases */
 .btn-large {
-  padding: 16px 32px;
-  font-size: 1.2em;
-  border-radius: 12px;
+  /* Uses design system .btn-xl class instead */
 }
 
 /* Status Indicators */
@@ -575,7 +673,7 @@ body {
 
 .message-header .author {
   font-weight: 600;
-  color: #667eea;
+  color: #374151;
   font-size: 0.95em;
 }
 

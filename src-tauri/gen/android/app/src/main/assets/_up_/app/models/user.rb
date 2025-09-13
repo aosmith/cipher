@@ -25,6 +25,10 @@ class User < ApplicationRecord
   has_many :attachment_shares, dependent: :destroy
   has_many :accessible_attachments, through: :attachment_shares, source: :attachment
 
+  # P2P Connections
+  has_many :p2p_connections, dependent: :destroy
+  has_many :incoming_p2p_connections, class_name: 'P2pConnection', foreign_key: 'friend_user_id', dependent: :destroy
+
   validates :username, presence: true, 
                       uniqueness: { message: "is already taken. Please choose a different username." }
   validates :public_key, presence: true, 
@@ -113,6 +117,33 @@ class User < ApplicationRecord
     user = find_by(username: username)
     return false unless user
     user.public_key == public_key_base64
+  end
+
+  # Derive private key from username and password (for local-only app)
+  # This is safe because the server is the user's own machine
+  def self.derive_private_key_from_credentials(username, password)
+    # Use PBKDF2 to derive a 32-byte key from username + password
+    # This must match the key derivation used during user creation
+    input = "#{username}:#{password}"
+    iterations = 100000  # High iteration count for security
+
+    # Use PBKDF2 with SHA256
+    derived_key = OpenSSL::PKCS5.pbkdf2_hmac(
+      input,
+      "cipher_salt_#{username}",  # Username-specific salt
+      iterations,
+      32,  # 32 bytes for NaCl private key
+      OpenSSL::Digest::SHA256.new
+    )
+
+    derived_key
+  end
+
+  # Get public key from private key
+  def self.public_key_from_private_key(private_key)
+    # Create NaCl signing key pair from private key
+    signing_key = RbNaCl::SigningKey.new(private_key)
+    signing_key.verify_key.to_bytes
   end
   
   public
@@ -266,10 +297,34 @@ class User < ApplicationRecord
     # Get all unique users this user has messaged or received messages from
     sent_recipients = sent_messages.joins(:recipient).select('users.id, users.username, MAX(messages.created_at) as last_message_at').group('users.id, users.username')
     received_senders = received_messages.joins(:sender).select('users.id, users.username, MAX(messages.created_at) as last_message_at').group('users.id, users.username')
-    
+
     # Combine and get unique conversation partners
     conversation_user_ids = (sent_messages.pluck(:recipient_id) + received_messages.pluck(:sender_id)).uniq
     User.where(id: conversation_user_ids)
+  end
+
+  # P2P Connection Methods
+  def establish_p2p_connection_with(friend_user, connection_type = 'webrtc')
+    return false unless friends_with?(friend_user)
+    P2pConnection.establish_connection(self, friend_user, connection_type)
+  end
+
+  def p2p_connection_with(friend_user)
+    p2p_connections.find_by(friend_user: friend_user) ||
+    incoming_p2p_connections.find_by(user: friend_user)
+  end
+
+  def active_p2p_connections
+    (p2p_connections.active + incoming_p2p_connections.active).uniq
+  end
+
+  def p2p_connection_count
+    active_p2p_connections.count
+  end
+
+  def connected_to?(friend_user)
+    connection = p2p_connection_with(friend_user)
+    connection&.active? || false
   end
 
   private
