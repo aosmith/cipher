@@ -287,7 +287,8 @@
 }
 
 .security-badge,
-.privacy-badge {
+.privacy-badge,
+.b-corp-badge {
   background: rgba(102, 126, 234, 0.2);
   color: #e2e8f0;
   padding: 4px 12px;
@@ -300,6 +301,12 @@
 .privacy-badge {
   background: rgba(72, 187, 120, 0.2);
   border: 1px solid rgba(72, 187, 120, 0.3);
+}
+
+.b-corp-badge {
+  background: rgba(34, 197, 94, 0.2);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #bbf7d0;
 }
 
 /* Responsive Design */
