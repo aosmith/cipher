@@ -19,14 +19,19 @@
             <%= form.text_area :content, placeholder: "What's on your mind?", rows: 3, class: "form-control" %>
           </div>
           <div class="form-group">
-            <label for="attachments" class="form-label">Attachments</label>
+            <div class="drag-drop-area" onclick="document.getElementById('attachments').click()">
+              <div class="drag-drop-icon">📁</div>
+              <div class="drag-drop-text">
+                <strong>Drop files here</strong> or <span class="drag-drop-link">click to browse</span>
+              </div>
+              <div class="drag-drop-hint">Images, videos, documents, and other files</div>
+            </div>
             <input type="file"
                    id="attachments"
                    name="attachments[]"
-                   class="form-control file-input-visible"
+                   style="display: none;"
                    multiple
                    accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt">
-            <small class="form-help">Select images, videos, documents, or other files to attach</small>
           </div>
           <div class="form-buttons">
             <%= form.submit "📤 Post Securely", class: "btn btn-primary" %>

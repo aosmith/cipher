@@ -115,23 +115,23 @@
       
       <!-- Unified header for all platforms -->
       <header class="app-header">
-        <div class="header-container">
-          <div class="header-left">
+        <div class="header-container flex items-center" style="justify-content: space-between;">
+          <div class="header-left flex-start">
             <%= link_to root_path, class: "logo-link" do %>
               <span class="logo">🔐 Cipher</span>
             <% end %>
           </div>
           
-          <div class="header-right">
+          <div class="header-right flex-start">
             <!-- Mobile menu toggle -->
             <input type="checkbox" id="mobile-menu-toggle" class="mobile-menu-toggle">
             <label for="mobile-menu-toggle" class="mobile-menu-button">☰</label>
-            
+
             <% if current_user_session %>
-              <div class="user-nav">
+              <div class="user-nav flex-start flex-nowrap">
                 <span class="user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
                 <span class="peer-count"><%= current_user_session.peers.active.count %> peers</span>
-                <nav class="nav-links">
+                <nav class="nav-links flex-start flex-nowrap">
                   <%= link_to "Feed", feed_path, class: "nav-link" %>
                   <%= link_to "Posts", posts_path, class: "nav-link" %>
                   <%= link_to "Friends", friends_users_path, class: "nav-link" %>
@@ -141,7 +141,7 @@
                 </nav>
               </div>
             <% else %>
-              <nav class="auth-nav">
+              <nav class="auth-nav flex-start flex-nowrap">
                 <%= link_to "Sign In", import_keys_users_path, class: "btn btn-secondary" %>
                 <%= link_to "Create Account", new_user_path, class: "btn btn-primary" %>
               </nav>

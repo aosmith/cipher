@@ -19,10 +19,8 @@
 
   /* Background Colors */
   --color-bg-primary: #ffffff;
-  --color-bg-secondary: #f8fafc;
+  --color-bg-secondary: #f8f9fa;
   --color-bg-card: #ffffff;
-  --color-bg-dark: #1a1a1a;
-  --color-bg-dark-secondary: #2d2d2d;
 
   /* Text Colors */
   --color-text-primary: #1e293b;
@@ -308,6 +306,12 @@ select:disabled {
   opacity: 0.7;
 }
 
+/* File inputs should always have light background */
+input[type="file"]:disabled {
+  background: #f8f9fa !important;
+  color: var(--color-text-primary) !important;
+}
+
 /* Error State */
 .form-control.error,
 .form-group.error input,
@@ -435,7 +439,8 @@ input[type="file"]:focus {
 /* Ensure all file inputs use consistent form styling */
 input[type="file"].form-control,
 input[type="file"].file-input-visible,
-.form-control[type="file"] {
+.form-control[type="file"],
+input[type="file"] {
   width: 100% !important;
   padding: 14px 16px !important;
   border: 2px solid var(--color-border) !important;
@@ -443,6 +448,7 @@ input[type="file"].file-input-visible,
   font-size: var(--font-size-base) !important;
   font-family: inherit !important;
   background: #f8f9fa !important;
+  background-color: #f8f9fa !important;
   color: var(--color-text-primary) !important;
   cursor: pointer !important;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
@@ -455,10 +461,12 @@ input[type="file"].file-input-visible,
 
 input[type="file"].form-control:hover:not(:focus),
 input[type="file"].file-input-visible:hover:not(:focus),
-.form-control[type="file"]:hover:not(:focus) {
+.form-control[type="file"]:hover:not(:focus),
+input[type="file"]:hover:not(:focus) {
   border-color: var(--color-border-hover) !important;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
   background: #f8f9fa !important;
+  background-color: #f8f9fa !important;
   color: var(--color-text-primary) !important;
   filter: none !important;
   -webkit-filter: none !important;
@@ -466,12 +474,14 @@ input[type="file"].file-input-visible:hover:not(:focus),
 
 input[type="file"].form-control:focus,
 input[type="file"].file-input-visible:focus,
-.form-control[type="file"]:focus {
+.form-control[type="file"]:focus,
+input[type="file"]:focus {
   outline: none !important;
   border-color: var(--color-primary) !important;
   box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1) !important;
   transform: translateY(-1px);
   background: #f8f9fa !important;
+  background-color: #f8f9fa !important;
   color: var(--color-text-primary) !important;
   filter: none !important;
   -webkit-filter: none !important;
@@ -772,18 +782,7 @@ input[type="file"].file-input-visible:focus,
 }
 
 /* Dark Mode Support */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg-primary: #1a1a1a;
-    --color-bg-secondary: #2d2d2d;
-    --color-bg-card: #2d2d2d;
-    --color-text-primary: #ffffff;
-    --color-text-secondary: #a1a1aa;
-    --color-text-muted: #71717a;
-    --color-border: #3f3f46;
-    --color-border-hover: #52525b;
-  }
-}
+/* Dark mode removed - using single light theme only */
 
 /* =================================================
    COMMON COMPONENT STYLES
@@ -1071,4 +1070,85 @@ input[type="file"].file-input-visible:focus,
   background: rgba(255, 255, 255, 0.35);
   transform: translateY(-3px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Modern Drag & Drop File Upload */
+.drag-drop-area {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-3xl) var(--spacing-xl);
+  text-align: center;
+  background: #f8fafc;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.drag-drop-area:hover {
+  border-color: var(--color-primary);
+  background: #f1f5f9;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+}
+
+.drag-drop-area:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.drag-drop-icon {
+  font-size: 3rem;
+  margin-bottom: var(--spacing-md);
+  opacity: 0.7;
+  transition: all 0.3s ease;
+}
+
+.drag-drop-area:hover .drag-drop-icon {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.drag-drop-text {
+  font-size: 1.1rem;
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.drag-drop-link {
+  color: var(--color-primary);
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+.drag-drop-hint {
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  margin-top: var(--spacing-sm);
+}
+
+/* Drag over state */
+.drag-drop-area.drag-over {
+  border-color: var(--color-primary);
+  background: rgba(99, 102, 241, 0.05);
+  border-style: solid;
+}
+
+/* FINAL OVERRIDE FOR FILE INPUT BLACK BACKGROUND FIX */
+section.status-section div form div input[type="file"],
+.status-section .form-control[type="file"],
+form input[type="file"].form-control,
+form input[type="file"].file-input-visible,
+div input[type="file"],
+input[type="file"] {
+  background: #f8f9fa !important;
+  background-color: #f8f9fa !important;
+  color: #1e293b !important;
+  filter: none !important;
+  -webkit-filter: none !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  border: 2px solid #e2e8f0 !important;
+  padding: 14px 16px !important;
+  border-radius: 8px !important;
 }
