@@ -362,33 +362,4 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
 
   private
 
-  def login_as(user)
-    # For system tests, we'll use a direct session approach
-    # This simulates the user being logged in without going through the full key derivation
-    visit root_path
-
-    # Use JavaScript to set the session for testing purposes and wait for response
-    result = page.evaluate_script("
-      fetch('/api/v1/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')
-        },
-        body: JSON.stringify({
-          username: '#{user.username}',
-          public_key: '#{user.public_key}'
-        })
-      }).then(response => response.json())
-       .then(data => data)
-       .catch(error => ({ success: false, error: error.message }))
-    ")
-
-    # Wait for login to complete and refresh the page
-    sleep(1)
-    visit root_path
-
-    # Verify we're actually logged in by checking for the user greeting
-    assert_text "Hi, #{user.username}", wait: 5
-  end
 end

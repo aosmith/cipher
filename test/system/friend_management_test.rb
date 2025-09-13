@@ -408,26 +408,4 @@ class FriendManagementTest < ApplicationSystemTestCase
 
   private
 
-  def login_as(user)
-    # Set up user session by visiting a page first and then using JavaScript to log in
-    visit root_path
-    
-    # Use the API login endpoint to establish session
-    page.execute_script("
-      return fetch('/api/v1/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({
-          username: '#{user.username}',
-          public_key: '#{user.public_key}'
-        })
-      }).then(response => response.json());
-    ")
-    
-    # Wait for login to complete
-    sleep(1)
-  end
 end

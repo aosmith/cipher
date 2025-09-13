@@ -43,6 +43,7 @@ Rails.application.routes.draw do
       post 'sync', to: 'sync#sync_messages'
       post 'verify_identity', to: 'auth#verify_identity'
       post 'login', to: 'auth#login'
+      post 'logout', to: 'auth#logout'
       
       # Friend-based sync endpoints
       get 'sync_data', to: 'sync#sync_data', as: :sync_data

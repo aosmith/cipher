@@ -438,27 +438,4 @@ class P2pWebrtcTest < ApplicationSystemTestCase
 
   private
 
-  def login_as(user)
-    # Simple login method for system tests
-    visit root_path
-
-    # Use JavaScript to establish session
-    page.execute_script("
-      fetch('/api/v1/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({
-          username: '#{user.username}',
-          public_key: '#{user.public_key}'
-        })
-      });
-    ")
-
-    # Wait for login and refresh
-    sleep(1)
-    visit root_path
-  end
 end

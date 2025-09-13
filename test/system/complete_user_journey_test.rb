@@ -81,7 +81,7 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
 
     # Step 5: Log back in as Alice
     click_link "Sign Out" if page.has_link?("Sign Out")
-    login_as_user(alice)
+    login_as(alice)
 
     # Step 6: Alice visits the feed and sees Bob's post
     visit feed_path
@@ -145,7 +145,7 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
       public_key: "lone_user_key"
     )
     
-    login_as_user(user)
+    login_as(user)
     visit feed_path
     
     assert_text "Your Feed"
@@ -169,7 +169,7 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
     bob_post = bob.posts.create!(content: "Bob's post")
     charlie_post = charlie.posts.create!(content: "Charlie's post")
     
-    login_as_user(alice)
+    login_as(alice)
     visit feed_path
     
     assert_text "Posts from your 2 friends"
@@ -201,28 +201,4 @@ class CompleteUserJourneyTest < ApplicationSystemTestCase
 
   private
 
-  def login_as_user(user)
-    # For system tests, we'll use a direct session approach
-    # This simulates the user being logged in without going through the full key derivation
-    visit root_path
-    
-    # Use JavaScript to set the session for testing purposes
-    page.execute_script("
-      fetch('/api/v1/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')
-        },
-        body: JSON.stringify({
-          username: '#{user.username}',
-          public_key: '#{user.public_key}'
-        })
-      });
-    ")
-    
-    # Wait for the login to complete and refresh the page
-    sleep 0.5
-    visit root_path
-  end
 end

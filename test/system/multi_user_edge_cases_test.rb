@@ -543,24 +543,4 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
 
   private
 
-  def login_as(user)
-    # For system tests, use API-based login
-    visit root_path
-    
-    page.execute_script("
-      fetch('/api/v1/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')
-        },
-        body: JSON.stringify({
-          username: '#{user.username}',
-          public_key: '#{user.public_key}'
-        })
-      });
-    ")
-    
-    sleep 0.5
-  end
 end

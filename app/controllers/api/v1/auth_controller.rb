@@ -23,12 +23,16 @@ class Api::V1::AuthController < ApplicationController
   end
   
   def login
-    # Support both test-style (user_id) and production-style (username/public_key) login
-    if params[:user_id] && Rails.env.test?
-      # Test environment: simple user_id login
+    # SECURITY: Only allow user_id login in test environment
+    if params[:user_id].present? && Rails.env.test?
+      # Test environment only: simple user_id login for system tests
       user = User.find(params[:user_id])
       session[:user_id] = user.id
       render json: { success: true, user_id: user.id, username: user.username }
+      return
+    elsif params[:user_id].present? && !Rails.env.test?
+      # SECURITY: Block user_id login in non-test environments
+      render json: { success: false, error: 'Invalid authentication method' }, status: 400
       return
     end
     
@@ -52,6 +56,14 @@ class Api::V1::AuthController < ApplicationController
     end
   rescue => e
     Rails.logger.error "Login error: #{e.message}"
+    render json: { success: false, error: 'Server error' }, status: 500
+  end
+
+  def logout
+    session[:user_id] = nil
+    render json: { success: true }
+  rescue => e
+    Rails.logger.error "Logout error: #{e.message}"
     render json: { success: false, error: 'Server error' }, status: 500
   end
 end
