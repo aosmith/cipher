@@ -84,7 +84,7 @@ class FeedCommentingTest < ApplicationSystemTestCase
     within first('.post') do
       # Click delete button on own comment (should be visible)
       accept_confirm do
-        first("input[value='×']").click
+        first("input[type='submit'][value='×']").click
       end
     end
     
@@ -133,8 +133,8 @@ class FeedCommentingTest < ApplicationSystemTestCase
     assert_text @alice.username
     assert_text "5 minutes ago"
     
-    # Check avatar is present (first letter of username)
-    assert_selector ".w-8.h-8", text: @alice.username.first.upcase
+    # Check comment author is present
+    assert_selector ".comment-author", text: @alice.username
   end
 
   test "user sees empty feed when no friends" do

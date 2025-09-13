@@ -38,7 +38,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       visit root_path
       
       # Alice starts local hosting to make her content available
-      click_on "🌐 Local Hosting"
+      click_on "Local Hosting"
       
       # Wait for hosting to be enabled
       assert_text "🟢 Hosting Active", wait: 5
@@ -59,7 +59,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       visit root_path
       
       # Bob also starts local hosting
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       assert_text "Bob's original post"
       
@@ -105,7 +105,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -118,7 +118,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @charlie
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       # Charlie should NOT see Alice in available friends
@@ -145,7 +145,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -158,7 +158,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting" 
+      click_on "Local Hosting" 
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -186,6 +186,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
   test "sync content validates security and prevents malicious data" do
     # Create a malicious user who somehow gets Alice's friend data
     malicious_user = User.create!(
+      username: "malicious_user",
       email: "malicious@evil.com",
       name: "Malicious User",
       public_key: "fake_public_key_123"
@@ -195,7 +196,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -264,7 +265,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -276,7 +277,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -313,7 +314,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
     end
 
@@ -321,7 +322,7 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
     end
 
@@ -365,9 +366,9 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
     # For system tests, we'll use a direct session approach
     # This simulates the user being logged in without going through the full key derivation
     visit root_path
-    
-    # Use JavaScript to set the session for testing purposes
-    page.execute_script("
+
+    # Use JavaScript to set the session for testing purposes and wait for response
+    result = page.evaluate_script("
       fetch('/api/v1/login', {
         method: 'POST',
         headers: {
@@ -378,10 +379,16 @@ class FriendBasedSyncTest < ApplicationSystemTestCase
           username: '#{user.username}',
           public_key: '#{user.public_key}'
         })
-      });
+      }).then(response => response.json())
+       .then(data => data)
+       .catch(error => ({ success: false, error: error.message }))
     ")
-    
-    # Wait for login to complete
-    sleep 0.5
+
+    # Wait for login to complete and refresh the page
+    sleep(1)
+    visit root_path
+
+    # Verify we're actually logged in by checking for the user greeting
+    assert_text "Hi, #{user.username}", wait: 5
   end
 end

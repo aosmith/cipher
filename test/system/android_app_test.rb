@@ -124,9 +124,19 @@ class AndroidAppTest < ApplicationSystemTestCase
     assert_text "Cipher"
     assert_text "End-to-End Encrypted"
     
-    # Verify forms are present
+    # Verify forms are present - wait a moment for JavaScript to initialize
+    sleep(0.5)
     assert_selector "#loginForm"
-    assert_selector "#registerForm.hidden"  # Should start hidden
+
+    # The registerForm should start hidden unless someone is already logged in
+    if has_selector?("#registerForm.hidden")
+      assert_selector "#registerForm.hidden"  # Should start hidden
+    else
+      # If not hidden, it means someone is logged in - clear localStorage and reload
+      page.execute_script("localStorage.clear(); location.reload();")
+      sleep(0.5)
+      assert_selector "#registerForm.hidden"
+    end
     
     # Test form toggle
     click_link "Need an account? Sign up"

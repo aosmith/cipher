@@ -38,8 +38,8 @@ class P2pSimpleTest < ApplicationSystemTestCase
       assert_text "Hi, alice_webrtc"
       
       # Navigate to hosting page which should initialize WebRTC
-      click_on "💾 Local Hosting"
-      assert_text "💾 Local Hosting"
+      click_on "Local Hosting"
+      assert_text "Local Hosting"
       
       # Wait for WebRTC infrastructure to load
       sleep 2
@@ -108,7 +108,7 @@ class P2pSimpleTest < ApplicationSystemTestCase
       visit local_hosting_users_path
       
       # Verify hosting page loads correctly
-      assert_text "💾 Local Hosting"
+      assert_text "Local Hosting"
       assert_text "Hosting Status"
       
       # Check that hosting interface elements are present

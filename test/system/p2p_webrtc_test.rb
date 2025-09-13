@@ -439,9 +439,9 @@ class P2pWebrtcTest < ApplicationSystemTestCase
   private
 
   def login_as(user)
-    # For system tests, we'll use the API login endpoint
+    # Simple login method for system tests
     visit root_path
-    
+
     # Use JavaScript to establish session
     page.execute_script("
       fetch('/api/v1/login', {
@@ -456,8 +456,8 @@ class P2pWebrtcTest < ApplicationSystemTestCase
         })
       });
     ")
-    
-    # Wait for login to complete
+
+    # Wait for login and refresh
     sleep(1)
     visit root_path
   end

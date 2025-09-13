@@ -31,7 +31,7 @@ class P2PConnectivityTest < ApplicationSystemTestCase
       visit local_hosting_users_path
       
       # Wait for page to load and WebRTC to initialize
-      assert_text "💾 Local Hosting"
+      assert_text "Local Hosting"
       
       # Enable P2P hosting
       click_button "Start Local Hosting" if page.has_button?("Start Local Hosting")
@@ -53,7 +53,7 @@ class P2PConnectivityTest < ApplicationSystemTestCase
       login_user(@bob)
       visit local_hosting_users_path
       
-      assert_text "💾 Local Hosting"
+      assert_text "Local Hosting"
       
       # Enable P2P hosting for Bob as well
       click_button "Start Local Hosting" if page.has_button?("Start Local Hosting")

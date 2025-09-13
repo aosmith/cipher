@@ -45,7 +45,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -59,7 +59,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -73,7 +73,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @charlie
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -129,7 +129,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -141,7 +141,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -171,7 +171,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -203,7 +203,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -215,7 +215,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -276,7 +276,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -288,7 +288,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -321,7 +321,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -334,7 +334,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -365,7 +365,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @charlie
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       # Charlie should also handle the network partition gracefully
@@ -399,7 +399,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       within "[data-friend-sync]" do
@@ -416,7 +416,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
         login_as friend
         visit root_path
         
-        click_on "💾 Local Hosting"
+        click_on "Local Hosting"
         assert_text "🟢 Hosting Active", wait: 5
         
         within "[data-friend-sync]" do
@@ -471,7 +471,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @alice
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       # Alice creates a post
@@ -489,7 +489,7 @@ class MultiUserEdgeCasesTest < ApplicationSystemTestCase
       login_as @bob
       visit root_path
       
-      click_on "💾 Local Hosting"
+      click_on "Local Hosting"
       assert_text "🟢 Hosting Active", wait: 5
       
       # Bob creates similar content at the same time
