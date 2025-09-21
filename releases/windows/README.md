@@ -4,8 +4,8 @@ Windows desktop application releases for Cipher.
 
 ## Latest Release
 
-- **Version**: v0.6.5v0.6.2v0.6.1v0.6.1
-- **File**: `Cipher_v0.6.1_x64.msi`
+- **Download**: [GitHub Releases (Windows `.msi`)](https://github.com/aosmith/cipher/releases/latest)
+- **Installer**: `Cipher_<version>_x64.msi`
 - **Size**: ~12MB
 - **Requirements**: Windows 10+ (64-bit)
 
@@ -21,7 +21,7 @@ Windows desktop application releases for Cipher.
 ```
 windows/
 ├── latest/                 # Current release
-│   ├── Cipher_v0.6.1_x64.msi
+│   ├── Cipher_<version>_x64.msi
 │   ├── checksums.txt
 │   └── CHANGELOG.md
 ├── archive/               # Previous versions

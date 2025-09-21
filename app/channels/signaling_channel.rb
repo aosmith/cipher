@@ -18,9 +18,9 @@ class SignalingChannel < ApplicationCable::Channel
   def send_offer(data)
     recipient_id = data['recipient_id']
     recipient = User.find_by(id: recipient_id)
-    
-    return unless recipient && valid_peer?(recipient)
-    
+
+    return unless recipient && allow_friend_connection?(recipient)
+
     ActionCable.server.broadcast("signaling_#{recipient_id}", {
       type: 'offer',
       sender_id: @user.id,
@@ -34,9 +34,9 @@ class SignalingChannel < ApplicationCable::Channel
   def send_answer(data)
     sender_id = data['sender_id']
     sender = User.find_by(id: sender_id)
-    
-    return unless sender && valid_peer?(sender)
-    
+
+    return unless sender && allow_friend_connection?(sender)
+
     ActionCable.server.broadcast("signaling_#{sender_id}", {
       type: 'answer',
       sender_id: @user.id,
@@ -50,9 +50,9 @@ class SignalingChannel < ApplicationCable::Channel
   def send_ice_candidate(data)
     recipient_id = data['recipient_id']
     recipient = User.find_by(id: recipient_id)
-    
-    return unless recipient && valid_peer?(recipient)
-    
+
+    return unless recipient && allow_friend_connection?(recipient)
+
     ActionCable.server.broadcast("signaling_#{recipient_id}", {
       type: 'ice_candidate',
       sender_id: @user.id,
@@ -63,18 +63,18 @@ class SignalingChannel < ApplicationCable::Channel
 
   # Peer discovery - request list of available peers
   def discover_peers(data)
-    active_peers = @user.peers.active.includes(:user)
-    
+    friend_contacts = @user.friends.map do |friend|
+      next unless allow_friend_connection?(friend)
+
+      peer_record = @user.peers.find_by(public_key: friend.public_key)
+      next unless peer_record&.online?
+
+      peer_record.connection_profile_for(friend)
+    end.compact
+
     transmit({
       type: 'peer_list',
-      peers: active_peers.map do |peer|
-        {
-          id: peer.user.id,
-          username: peer.user.username,
-          public_key: peer.user.public_key,
-          last_seen: peer.last_seen
-        }
-      end
+      peers: friend_contacts
     })
   end
 
@@ -105,9 +105,10 @@ class SignalingChannel < ApplicationCable::Channel
     User.find_by(id: user_id) if user_id
   end
 
-  def valid_peer?(peer_user)
-    # Add any validation logic for peers
-    # For example: mutual following, whitelist, etc.
+  def allow_friend_connection?(peer_user, connection_type: 'webrtc')
+    return false unless friend_authorizer.allow?(peer_user)
+
+    friend_authorizer.ensure_connections!(peer_user, connection_type: connection_type)
     true
   end
 
@@ -123,5 +124,9 @@ class SignalingChannel < ApplicationCable::Channel
       public_key: @user.public_key,
       timestamp: Time.current.to_i
     })
+  end
+
+  def friend_authorizer
+    @friend_authorizer ||= FriendPeerAuthorizer.new(@user)
   end
 end

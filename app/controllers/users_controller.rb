@@ -114,6 +114,10 @@ class UsersController < ApplicationController
   def friends
     # Friend management page
     @current_user = current_user_session
+    unless @current_user
+      require_user_session
+      return
+    end
     render 'friends'
   end
 

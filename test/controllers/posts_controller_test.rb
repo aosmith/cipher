@@ -17,43 +17,43 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should redirect to root when not logged in for index" do
     get posts_path
     assert_redirected_to root_path
-    assert_equal "Please create an account first", flash[:alert]
+    assert_equal "Session expired. Please sign in again.", flash[:alert]
   end
 
   test "should redirect to root when not logged in for new" do
     get new_post_path
     assert_redirected_to root_path
-    assert_equal "Please create an account first", flash[:alert]
+    assert_equal "Session expired. Please sign in again.", flash[:alert]
   end
 
   test "should redirect to root when not logged in for create" do
     post posts_path, params: { post: { content: "New post" } }
     assert_redirected_to root_path
-    assert_equal "Please create an account first", flash[:alert]
+    assert_equal "Session expired. Please sign in again.", flash[:alert]
   end
 
   test "should redirect to root when not logged in for show" do
     get post_path(@post)
     assert_redirected_to root_path
-    assert_equal "Please create an account first", flash[:alert]
+    assert_equal "Session expired. Please sign in again.", flash[:alert]
   end
 
   test "should redirect to root when not logged in for edit" do
     get edit_post_path(@post)
     assert_redirected_to root_path
-    assert_equal "Please create an account first", flash[:alert]
+    assert_equal "Session expired. Please sign in again.", flash[:alert]
   end
 
   test "should redirect to root when not logged in for update" do
     patch post_path(@post), params: { post: { content: "Updated content" } }
     assert_redirected_to root_path
-    assert_equal "Please create an account first", flash[:alert]
+    assert_equal "Session expired. Please sign in again.", flash[:alert]
   end
 
   test "should redirect to root when not logged in for destroy" do
     delete post_path(@post)
     assert_redirected_to root_path
-    assert_equal "Please create an account first", flash[:alert]
+    assert_equal "Session expired. Please sign in again.", flash[:alert]
   end
 
   # Test authorized actions

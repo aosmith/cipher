@@ -4,37 +4,30 @@ Linux desktop application releases for Cipher.
 
 ## Latest Release
 
-- **Version**: v0.6.5v0.6.2v0.6.1v0.6.1
-- **DEB Package**: `cipher_v0.6.1_amd64.deb` (~15MB)
-- **AppImage**: `cipher_v0.6.1_amd64.AppImage` (~18MB)
+- **Download**: [GitHub Releases (Linux packages)](https://github.com/aosmith/cipher/releases/latest)
+- **DEB Package**: `cipher_<version>_amd64.deb` (~15MB)
+- **AppImage**: `cipher_<version>_x86_64.AppImage` (~18MB)
 - **Requirements**: Ubuntu 20.04+ / Debian 11+ or equivalent
 
 ## Installation Options
 
 ### DEB Package (Recommended for Ubuntu/Debian)
 
-```bash
-# Download
-wget https://github.com/aosmith/cipher/releases/download/vv0.6.1/cipher_v0.6.1_amd64.deb
-
-# Install
-sudo dpkg -i cipher_v0.6.1_amd64.deb
-
-# Fix dependencies if needed
-sudo apt-get install -f
-```
+1. Download the `.deb` asset from the [latest release](https://github.com/aosmith/cipher/releases/latest)
+2. Install with `sudo dpkg -i cipher_<version>_amd64.deb`
+3. Fix dependencies if needed using `sudo apt-get install -f`
 
 ### AppImage (Universal)
 
 ```bash
-# Download
-wget https://github.com/aosmith/cipher/releases/download/vv0.6.1/cipher_v0.6.1_amd64.AppImage
+# Download the AppImage from the latest release page
+# https://github.com/aosmith/cipher/releases/latest
 
 # Make executable
-chmod +x cipher_v0.6.1_amd64.AppImage
+chmod +x cipher_<version>_x86_64.AppImage
 
 # Run
-./cipher_v0.6.1_amd64.AppImage
+./cipher_<version>_x86_64.AppImage
 ```
 
 ## File Structure
@@ -42,8 +35,8 @@ chmod +x cipher_v0.6.1_amd64.AppImage
 ```
 linux/
 ├── latest/                        # Current release
-│   ├── cipher_v0.6.1_amd64.deb        # DEB package
-│   ├── cipher_v0.6.1_amd64.AppImage   # AppImage
+│   ├── cipher_<version>_amd64.deb        # DEB package
+│   ├── cipher_<version>_x86_64.AppImage   # AppImage
 │   ├── checksums.txt
 │   └── CHANGELOG.md
 ├── archive/                      # Previous versions
@@ -92,7 +85,7 @@ sudo pacman -S webkit2gtk gtk3 libappindicator-gtk3
 **Missing dependencies:**
 ```bash
 # Check missing libraries
-ldd ./cipher_v0.6.1_amd64.AppImage
+ldd ./cipher_<version>_x86_64.AppImage
 
 # Install WebKit2GTK
 sudo apt install libwebkit2gtk-4.0-37

@@ -1,5 +1,5 @@
 class EmailVerificationsController < ApplicationController
-  before_action :require_user
+  before_action :require_user_session
   before_action :find_user_by_email, only: [:verify]
   
   def show

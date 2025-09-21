@@ -6,8 +6,7 @@
 
   <div class="form-container">
     <div class="form-section">
-      <%= form_with model: @post, multipart: true, class: "post-form", 
-                    data: { controller: "post-creation" } do |form| %>
+      <%= form_with model: @post, multipart: true, class: "post-form", local: true do |form| %>
         <% if @post.errors.any? %>
           <div class="error-messages">
             <h3><%= pluralize(@post.errors.count, "error") %> prohibited this post from being saved:</h3>
@@ -27,25 +26,9 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">Media Attachments</label>
-          <div class="file-upload-area" 
-               data-post-creation-target="uploadArea"
-               data-action="drop->post-creation#handleDrop">
-            <div class="file-upload-prompt">
-              <div class="upload-icon">📎</div>
-              <p><strong>Drag & drop files here</strong> or click to browse</p>
-              <p class="upload-hint">Supports images, videos, and other files</p>
-              <input type="file" 
-                     name="attachments[]" 
-                     data-post-creation-target="fileInput"
-                     data-action="change->post-creation#handleFileSelect"
-                     class="file-input" 
-                     multiple 
-                     accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt">
-            </div>
-            
-            <div class="file-previews" data-post-creation-target="previews"></div>
-          </div>
+          <label class="form-label" for="post-attachments">Media Attachments</label>
+          <input type="file" name="attachments[]" id="post-attachments" class="form-control" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt">
+          <p class="form-help">Attach optional media files. Decrypt them on your server after download.</p>
         </div>
 
         <div class="encryption-info">
@@ -98,111 +81,10 @@
   line-height: 1.5;
 }
 
-.file-upload-area {
-  border: 2px dashed #ddd;
-  border-radius: 12px;
-  padding: 20px;
-  text-align: center;
-  background: #fafafa;
-  transition: all 0.3s ease;
-  position: relative;
-}
-
-.file-upload-area:hover,
-.file-upload-area.drag-over {
-  border-color: #667eea;
-  background: #f0f4ff;
-}
-
-.file-upload-prompt {
-  padding: 20px;
-}
-
-.upload-icon {
-  font-size: 3em;
-  margin-bottom: 10px;
-  opacity: 0.6;
-}
-
-.file-upload-prompt p {
-  margin: 8px 0;
-  color: #666;
-}
-
-.upload-hint {
+.form-help {
   font-size: 0.9em;
-  opacity: 0.8;
-}
-
-.file-input {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.file-previews {
-  margin-top: 20px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 15px;
-}
-
-.file-preview {
-  position: relative;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 10px;
-  background: white;
-  text-align: center;
-}
-
-.file-preview img,
-.file-preview video {
-  max-width: 100%;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 4px;
-}
-
-.file-preview-info {
-  margin-top: 8px;
-  font-size: 0.8em;
   color: #666;
-}
-
-.file-preview-name {
-  font-weight: 500;
-  margin-bottom: 4px;
-  word-break: break-word;
-}
-
-.file-preview-size {
-  opacity: 0.8;
-}
-
-.remove-file {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  background: #ff4444;
-  color: white;
-  border: none;
-  border-radius: 50%;
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  font-size: 0.8em;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.remove-file:hover {
-  background: #cc0000;
+  margin-top: 6px;
 }
 
 .encryption-info {
@@ -211,21 +93,6 @@
   border-radius: 8px;
   padding: 20px;
   margin: 20px 0;
-}
-
-.encryption-info h3 {
-  margin-top: 0;
-  color: #2d3748;
-}
-
-.encryption-info ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
-.encryption-info li {
-  margin: 8px 0;
-  color: #4a5568;
 }
 
 .supported-formats {
@@ -250,4 +117,3 @@
   white-space: nowrap;
 }
 </style>
-

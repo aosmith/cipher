@@ -11,15 +11,12 @@
           <%= time_ago_in_words(@post.timestamp) if @post.timestamp %> ago • 🔒 Encrypted
         </div>
         <div class="message-actions">
-          <%= link_to "✏️", edit_post_path(@post), class: "btn btn-sm btn-outline", title: "Edit post" %>
+          <%= link_to "✏️", edit_post_path(@post), class: "btn btn-sm btn-outline", aria: { label: "Edit post" } %>
           <%= button_to "Delete", post_path(@post), 
               method: :delete,
-              class: "btn btn-sm btn-danger", 
-              title: "Delete post",
+              class: "btn btn-sm btn-danger",
               form_class: "delete-form",
-              data: { 
-                confirm: "Are you sure you want to delete this post? This action cannot be undone."
-              } %>
+              aria: { label: "Delete post" } %>
         </div>
       </div>
 

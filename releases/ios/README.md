@@ -4,6 +4,7 @@ iOS mobile application releases for Cipher.
 
 ## Latest Release
 
+- **Download**: [GitHub Releases (iOS builds)](https://github.com/aosmith/cipher/releases/latest)
 - **Version**: v0.7.0
 - **Format**: iOS App (`.ipa` for distribution, Xcode project for development)
 - **Minimum iOS**: 13.0+

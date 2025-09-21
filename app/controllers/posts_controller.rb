@@ -1,5 +1,5 @@
 class PostsController < ApplicationController
-  before_action :require_user
+  before_action :require_user_session
   before_action :set_post, only: [:show, :edit, :update, :destroy]
 
   def index
@@ -25,7 +25,7 @@ class PostsController < ApplicationController
     end
     
     if @post.save
-      redirect_to root_path, flash: { success: 'Post created successfully!' }
+      redirect_to root_path, notice: 'Post created successfully!'
     else
       # Check if it's a spam prevention error and handle with redirect
       spam_errors = @post.errors.full_messages.select do |msg|
@@ -86,12 +86,6 @@ class PostsController < ApplicationController
         file.original_filename,
         file.content_type
       )
-    end
-  end
-
-  def require_user
-    unless current_user_session
-      redirect_to root_path, alert: 'Please create an account first'
     end
   end
 

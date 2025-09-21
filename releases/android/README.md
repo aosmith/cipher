@@ -4,6 +4,7 @@ Android mobile application releases for Cipher.
 
 ## Latest Release
 
+- **Download**: [GitHub Releases (APK / AAB)](https://github.com/aosmith/cipher/releases/latest)
 - **Version**: v0.6.5
 - **APK**: Build from source using commands below
 - **Minimum Android**: API level 24 (Android 7.0)

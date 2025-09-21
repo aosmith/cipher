@@ -64,12 +64,8 @@
     <% end %>
 
     <div class="attachment-actions">
-      <button class="btn btn-primary" onclick="decryptAndView()" disabled>
-        🔓 Decrypt & View
-      </button>
-      <button class="btn btn-secondary" onclick="downloadEncrypted()" disabled>
-        📥 Download Encrypted
-      </button>
+      <p class="attachment-note">Decrypt and view this file on your server host using your personal keys.</p>
+      <p class="attachment-note">Use the download link in your server console to retrieve the encrypted payload.</p>
       <%= link_to "Back to Post", @post, class: "btn btn-outline" %>
     </div>
 
@@ -84,16 +80,3 @@
     </div>
   </div>
 </div>
-
-
-<script>
-function decryptAndView() {
-  // Placeholder for client-side decryption
-  alert('🔧 Decryption functionality would be implemented here using client-side cryptography with your private keys.');
-}
-
-function downloadEncrypted() {
-  // Placeholder for encrypted download
-  alert('🔧 Encrypted download functionality would be implemented here.');
-}
-</script>

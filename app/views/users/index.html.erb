@@ -4,7 +4,7 @@
       <h2>Your Cipher Dashboard</h2>
       <p>Manage your encrypted communications and network connections.</p>
     </div>
-    <section class="status-section">
+    <section class="status-section glass-card glass-card--strong glass-card--shadow-lg">
       <h2>🌐 Network Status</h2>
       <div class="status-online">
         <span class="status-indicator">●</span> Local server running
@@ -15,7 +15,7 @@
       </div>
     </section>
 
-    <section class="status-section">
+    <section class="status-section glass-card glass-card--strong glass-card--shadow-lg">
       <h2>💬 Messages & Posts</h2>
       <div class="quick-post-form">
         <%= form_with model: Post.new, url: posts_path, multipart: true, class: "inline-post-form" do |form| %>
@@ -49,13 +49,12 @@
                   <span class="timestamp"><%= post.timestamp&.strftime("%b %d, %Y at %I:%M %p") %></span>
                 </div>
                 <div class="message-actions">
-                  <%= link_to "🗑️", post_path(post), method: :delete, 
-                      class: "btn-delete", 
-                      title: "Delete post",
-                      data: { 
-                        confirm: "Are you sure you want to delete this post? This action cannot be undone.",
-                        turbo_method: :delete
-                      } %>
+                  <%= button_to "🗑️",
+                                post_path(post),
+                                method: :delete,
+                                form: { class: "inline-form" },
+                                class: "btn-delete",
+                                aria: { label: "Delete post" } %>
                 </div>
               </div>
               <div class="message-content">
@@ -63,43 +62,24 @@
                 <% if post.attachments.any? %>
                   <div class="attachments">
                     <% post.attachments.each do |attachment| %>
-                      <% if attachment.is_image? %>
-                        <div class="attachment-preview image-preview">
-                          <div data-controller="image-decryption"
-                               data-image-decryption-attachment-url-value="<%= post_attachment_path(post, attachment) %>"
-                               data-image-decryption-filename-value="<%= attachment.filename %>"
-                               data-image-decryption-filesize-value="<%= attachment.human_file_size %>"
-                               data-image-decryption-content-type-value="<%= attachment.content_type %>">
-                            <div class="loading-placeholder">
-                              <span class="loading-icon">🔓</span>
-                              <span class="loading-text">Decrypting image...</span>
-                            </div>
-                            <div class="image-overlay" style="display: none;">
-                              <span class="filename"><%= attachment.filename %></span>
-                              <span class="filesize"><%= attachment.human_file_size %></span>
-                            </div>
-                          </div>
-                        </div>
-                      <% elsif attachment.is_video? %>
-                        <div class="attachment-preview video-preview">
-                          <%= link_to post_attachment_path(post, attachment), target: '_blank', class: 'video-link' do %>
-                            <div class="video-thumbnail">
-                              🎥
-                              <div class="video-info">
-                                <span class="filename"><%= attachment.filename %></span>
-                                <span class="filesize"><%= attachment.human_file_size %></span>
-                              </div>
-                            </div>
-                          <% end %>
-                        </div>
-                      <% else %>
-                        <div class="attachment file-attachment">
-                          <%= link_to post_attachment_path(post, attachment), target: '_blank', class: 'file-link' do %>
-                            📎 <%= attachment.filename %> (<%= attachment.human_file_size %>)
-                          <% end %>
-                        </div>
+                    <div class="attachment file-attachment">
+                      <span class="attachment-icon">
+                        <% if attachment.is_image? %>
+                          🖼️
+                        <% elsif attachment.is_video? %>
+                          🎥
+                        <% elsif attachment.is_audio? %>
+                          🎵
+                        <% else %>
+                          📎
+                        <% end %>
+                      </span>
+                      <%= link_to post_attachment_path(post, attachment), target: '_blank', class: 'file-link' do %>
+                        <%= attachment.filename %>
                       <% end %>
-                    <% end %>
+                      <span class="attachment-meta">(<%= attachment.human_file_size %>) – decrypt offline with your keys.</span>
+                    </div>
+                  <% end %>
                   </div>
                 <% end %>
               </div>
@@ -149,7 +129,7 @@
     <section class="token-economy">
       <div class="token-content">
         <!-- CPH Token Hero Well -->
-        <div class="cph-hero-well">
+        <div class="cph-hero-well glass-card glass-card--strong glass-card--shadow-xl">
           <h2>🛡️ Cipher Token (CPH)</h2>
           <div class="token-intro">
             <p class="token-lead">
@@ -160,7 +140,7 @@
         </div>
         
         <div class="token-mechanics">
-          <div class="token-section">
+        <div class="token-section glass-card glass-card--strong glass-card--shadow-lg">
             <div class="token-icon">🏠</div>
             <div class="token-info">
               <h3>Contribute by Hosting</h3>
@@ -173,7 +153,7 @@
             </div>
           </div>
           
-          <div class="token-section">
+          <div class="token-section glass-card glass-card--strong glass-card--shadow-lg">
             <div class="token-icon">👀</div>
             <div class="token-info">
               <h3>Access Content</h3>
@@ -187,7 +167,7 @@
           </div>
         </div>
         
-        <div class="token-privacy-guarantee">
+        <div class="token-privacy-guarantee glass-card glass-card--strong">
           <div class="privacy-badge">
             <div class="privacy-icon">🛡️</div>
             <div class="privacy-text">
@@ -200,7 +180,7 @@
           </div>
         </div>
         
-        <div class="token-getting-started">
+        <div class="token-getting-started glass-card glass-card--strong">
           <h3>Ready to Join the Network?</h3>
           <p>Start contributing to the decentralized storage network to receive CPH tokens, or begin exploring content with our fair usage-based access model.</p>
           <div class="token-actions">
@@ -213,7 +193,7 @@
     </section>
 
     <!-- Mission Statement Section -->
-    <section class="mission-statement">
+    <section class="mission-statement glass-card glass-card--strong glass-card--shadow-xl">
       <div class="mission-content">
         <h2>🛡️ Our Mission</h2>
         <div class="mission-text">
@@ -222,7 +202,7 @@
           </p>
           
           <div class="mission-principles">
-            <div class="principle">
+            <div class="principle glass-card glass-card--soft">
               <div class="principle-icon">🚫</div>
               <div class="principle-content">
                 <h3>No Servers, No Surveillance</h3>
@@ -230,7 +210,7 @@
               </div>
             </div>
             
-            <div class="principle">
+            <div class="principle glass-card glass-card--soft">
               <div class="principle-icon">🔒</div>
               <div class="principle-content">
                 <h3>No Data Harvesting</h3>
@@ -255,7 +235,7 @@
             </div>
           </div>
           
-          <div class="mission-call-to-action">
+          <div class="mission-call-to-action glass-card glass-card--strong glass-card--shadow-lg">
             <p class="mission-cta-text">
               <strong>Private messaging by design.</strong> 
               No tracking, no data collection, no surveillance.

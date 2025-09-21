@@ -1,5 +1,5 @@
 class AttachmentsController < ApplicationController
-  before_action :require_user
+  before_action :require_user_session
   before_action :set_post_and_attachment
 
   def show

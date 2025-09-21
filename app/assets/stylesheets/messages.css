@@ -12,17 +12,17 @@
   align-items: center;
   margin-bottom: 20px;
   padding-bottom: 15px;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .messages-header h1 {
-  color: #2c3e50;
+  color: var(--color-text-secondary);
   margin: 0;
   font-size: 1.8rem;
 }
 
 .unread-badge {
-  background: #e74c3c;
+  background: var(--color-danger-hover);
   color: white;
   padding: 4px 12px;
   border-radius: 20px;
@@ -39,7 +39,7 @@
 }
 
 .conversation-item {
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-bg-secondary);
 }
 
 .conversation-item:last-child {
@@ -56,7 +56,7 @@
 }
 
 .conversation-link:hover {
-  background-color: #f8f9fa;
+  background-color: var(--color-bg-secondary);
 }
 
 .conversation-avatar {
@@ -67,7 +67,7 @@
 .user-initial {
   width: 50px;
   height: 50px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -92,13 +92,13 @@
 .conversation-username {
   font-size: 1.1rem;
   font-weight: 600;
-  color: #2c3e50;
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
 .conversation-time {
   font-size: 0.85rem;
-  color: #7f8c8d;
+  color: var(--color-text-muted);
 }
 
 .conversation-preview {
@@ -109,7 +109,7 @@
 
 .last-message, .no-messages {
   margin: 0;
-  color: #7f8c8d;
+  color: var(--color-text-muted);
   font-size: 0.9rem;
   flex-grow: 1;
   white-space: nowrap;
@@ -119,11 +119,11 @@
 
 .message-sender {
   font-weight: 600;
-  color: #3498db;
+  color: var(--color-secondary);
 }
 
 .unread-count {
-  background: #e74c3c;
+  background: var(--color-danger-hover);
   color: white;
   padding: 2px 8px;
   border-radius: 12px;
@@ -146,7 +146,7 @@
 }
 
 .chat-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
   color: white;
   padding: 16px 20px;
   display: flex;
@@ -196,7 +196,7 @@
 .messages-area {
   flex: 1;
   overflow: hidden;
-  background: #f8f9fa;
+  background: var(--color-bg-secondary);
 }
 
 .messages-list {
@@ -230,7 +230,7 @@
 }
 
 .message-own .message-content {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
   color: white;
 }
 
@@ -272,7 +272,7 @@
 /* Message Input Area */
 .message-input-area {
   background: white;
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--color-border);
   padding: 16px 20px;
 }
 
@@ -291,7 +291,7 @@
 
 .message-input {
   flex: 1;
-  border: 2px solid #e1e5e9;
+  border: 2px solid var(--color-border);
   border-radius: 20px;
   padding: 12px 16px;
   font-size: 1rem;
@@ -304,11 +304,11 @@
 
 .message-input:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--color-primary);
 }
 
 .message-send-btn {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
   color: white;
   border: none;
   border-radius: 20px;
@@ -334,7 +334,7 @@
 }
 
 .error-message {
-  color: #e74c3c;
+  color: var(--color-danger-hover);
   font-size: 0.85rem;
   margin: 0;
   padding: 4px 0;
@@ -344,7 +344,7 @@
 .empty-state {
   text-align: center;
   padding: 60px 20px;
-  color: #7f8c8d;
+  color: var(--color-text-muted);
 }
 
 .empty-state-icon {
@@ -354,7 +354,7 @@
 
 .empty-state h3 {
   margin: 0 0 8px 0;
-  color: #2c3e50;
+  color: var(--color-text-secondary);
 }
 
 .empty-state p {
@@ -373,7 +373,7 @@
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
   color: white;
 }
 
@@ -417,10 +417,10 @@
 }
 
 .messages-list::-webkit-scrollbar-thumb {
-  background: #ccc;
+  background: var(--color-border);
   border-radius: 3px;
 }
 
 .messages-list::-webkit-scrollbar-thumb:hover {
-  background: #999;
+  background: var(--color-text-muted);
 }

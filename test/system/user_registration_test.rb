@@ -48,10 +48,6 @@ class UserRegistrationTest < ApplicationSystemTestCase
   test "password validation errors are displayed" do
     visit new_user_path
     
-    # Test short password - need to bypass HTML validation for server-side validation
-    page.execute_script("document.querySelector('input[name=\"password\"]').removeAttribute('minlength')")
-    page.execute_script("document.querySelector('input[name=\"confirm_password\"]').removeAttribute('minlength')")
-    
     fill_in "Username", with: "testuser456"
     fill_in "Password", with: "short"
     fill_in "Confirm Password", with: "short"
@@ -90,11 +86,6 @@ class UserRegistrationTest < ApplicationSystemTestCase
 
   test "empty fields validation" do
     visit new_user_path
-    
-    # Bypass HTML required validation to test server-side validation
-    page.execute_script("document.querySelector('input[name=\"user[username]\"]').removeAttribute('required')")
-    page.execute_script("document.querySelector('input[name=\"password\"]').removeAttribute('required')")
-    page.execute_script("document.querySelector('input[name=\"confirm_password\"]').removeAttribute('required')")
     
     # Leave fields empty and submit
     click_button "Create Account"

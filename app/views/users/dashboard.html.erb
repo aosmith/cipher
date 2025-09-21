@@ -17,7 +17,7 @@
           <label>Public Key:</label>
           <div class="key-value">
             <code><%= @current_user.public_key %></code>
-            <button onclick="copyToClipboard('<%= @current_user.public_key %>')" class="btn-copy">📋</button>
+            <span class="copy-note">Copy this value directly from your server session when you need to share it.</span>
           </div>
           <small>Share this with others so they can send you encrypted messages</small>
         </div>
@@ -380,17 +380,3 @@
   }
 }
 </style>
-
-<script>
-function copyToClipboard(text) {
-  navigator.clipboard.writeText(text).then(function() {
-    // Show temporary feedback
-    const button = event.target;
-    const original = button.textContent;
-    button.textContent = '✓';
-    setTimeout(() => {
-      button.textContent = original;
-    }, 1000);
-  });
-}
-</script>

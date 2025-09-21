@@ -1,15 +1,29 @@
 # Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
 
-one:
-  user: one
-  friend_user: one
-  status: MyString
-  last_seen: 2025-09-13 19:11:27
-  connection_type: MyString
+alice_to_bob:
+  user: alice
+  friend_user: bob
+  status: connected
+  last_seen: <%= 3.minutes.ago %>
+  connection_type: webrtc
 
-two:
-  user: two
-  friend_user: two
-  status: MyString
-  last_seen: 2025-09-13 19:11:27
-  connection_type: MyString
+bob_to_alice:
+  user: bob
+  friend_user: alice
+  status: connected
+  last_seen: <%= 3.minutes.ago %>
+  connection_type: webrtc
+
+alice_to_charlie:
+  user: alice
+  friend_user: charlie
+  status: connecting
+  last_seen: <%= 10.minutes.ago %>
+  connection_type: datachannel
+
+charlie_to_alice:
+  user: charlie
+  friend_user: alice
+  status: disconnected
+  last_seen: <%= 1.hour.ago %>
+  connection_type: webrtc

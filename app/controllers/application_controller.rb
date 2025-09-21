@@ -18,4 +18,13 @@ class ApplicationController < ActionController::Base
   end
   
   helper_method :current_user_session
+
+  def require_user_session
+    return if current_user_session
+
+    message = 'Session expired. Please sign in again.'
+    session.delete(:user_id)
+    cookies.delete(:test_user_id)
+    redirect_to root_path, alert: message
+  end
 end

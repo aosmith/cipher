@@ -1,12 +1,13 @@
-<div class="container">
-  <div class="welcome-hero">
+<div class="container auth-container">
+  <div class="welcome-hero auth-hero">
     <h2>🔐 Create Your Cipher Identity</h2>
     <p>Create your account with automatic key generation</p>
   </div>
 
-  <div class="form-container">
-    <div class="form-section">
-      <%= form_with model: @user, class: "user-form" do |form| %>
+  <div class="form-container auth-form-grid">
+    <div class="form-section card">
+      <div class="card-body">
+        <%= form_with model: @user, class: "user-form" do |form| %>
         <% if @user.errors.any? %>
           <div class="error-messages">
             <h3><%= pluralize(@user.errors.count, "error") %> prohibited this user from being saved:</h3>
@@ -68,35 +69,35 @@
         <div class="form-actions">
           <%= form.submit "🚀 Create Account", class: "btn btn-primary btn-large" %>
         </div>
-      <% end %>
+        <% end %>
+      </div>
     </div>
 
-    <div class="info-section">
-      <h3>What happens next?</h3>
-      <ol>
-        <li>Your cryptographic key pair is generated automatically</li>
-        <li>Your public key becomes your network identity</li>
-        <li>You can immediately start connecting to other peers</li>
-        <li>All your messages will be end-to-end encrypted</li>
-      </ol>
+    <div class="info-section card">
+      <div class="card-body">
+        <h3>What happens next?</h3>
+        <ol class="info-timeline">
+          <li>Your cryptographic key pair is generated automatically</li>
+          <li>Your public key becomes your network identity</li>
+          <li>You can immediately start connecting to other peers</li>
+          <li>All your messages will be end-to-end encrypted</li>
+        </ol>
 
-      <div class="features-mini">
-        <div class="feature-mini">
-          <strong>🔐 Encrypted</strong><br>
-          All communications are secured
-        </div>
-        <div class="feature-mini">
-          <strong>🌐 Decentralized</strong><br>
-          Direct peer-to-peer connections
-        </div>
-        <div class="feature-mini">
-          <strong>🚀 Simple</strong><br>
-          No complex setup required
+        <div class="features-mini">
+          <div class="feature-mini">
+            <strong>🔐 Encrypted</strong>
+            All communications are secured
+          </div>
+          <div class="feature-mini">
+            <strong>🌐 Decentralized</strong>
+            Direct peer-to-peer connections
+          </div>
+          <div class="feature-mini">
+            <strong>🚀 Simple</strong>
+            No complex setup required
+          </div>
         </div>
       </div>
     </div>
   </div>
 </div>
-
-
-

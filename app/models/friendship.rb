@@ -6,6 +6,8 @@ class Friendship < ApplicationRecord
   validates :requester_id, uniqueness: { scope: :addressee_id }
   validate :not_self_friendship
   
+  after_commit :schedule_mutual_sync_if_accepted, on: [:create, :update]
+  
   scope :accepted, -> { where(status: 'accepted') }
   scope :pending, -> { where(status: 'pending') }
   scope :involving_user, ->(user) { where('requester_id = ? OR addressee_id = ?', user.id, user.id) }
@@ -41,5 +43,12 @@ class Friendship < ApplicationRecord
 
   def not_self_friendship
     errors.add(:addressee, "can't be the same as requester") if requester_id == addressee_id
+  end
+
+  def schedule_mutual_sync_if_accepted
+    status_change = previous_changes['status']
+    return unless status_change && status_change.last == 'accepted'
+
+    MutualFriendSyncService.new(self).schedule_initial_sync
   end
 end

@@ -31,18 +31,3 @@
     </div>
   </div>
 </div>
-
-<script>
-  // Auto-scroll to bottom of messages - minimal JS since it's local
-  const messagesList = document.getElementById('messages-list');
-  if (messagesList) {
-    messagesList.scrollTop = messagesList.scrollHeight;
-  }
-  
-  // Auto-scroll when new messages are added
-  document.addEventListener('turbo:frame-load', () => {
-    if (messagesList) {
-      messagesList.scrollTop = messagesList.scrollHeight;
-    }
-  });
-</script>

@@ -7,9 +7,6 @@
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
-    <% if current_user_session %>
-      <meta name="current-user-id" content="<%= current_user_session.id %>">
-    <% end %>
     
     <!-- Desktop app specific meta tags -->
     <% if Rails.env.desktop? %>
@@ -30,7 +27,6 @@
 
     <%# Includes all stylesheet files in app/assets/stylesheets %>
     <%= stylesheet_link_tag "application", "layout", "desktop", "mobile", "homepage", "posts", "messages", "users", "hosting", "data-turbo-track": "reload" %>
-    <%= javascript_importmap_tags %>
   </head>
 
   <body class="<%= 'env-desktop' if Rails.env.desktop? %> <%= 'env-ios platform-ios' if Rails.env.ios? %> <%= 'env-android platform-android' if Rails.env.android? %> <%= 'env-web' if Rails.env.development? || Rails.env.production? %>">
@@ -61,22 +57,6 @@
               <div class="desktop-user-info">
                 <div class="desktop-username">Hi, <%= current_user_session.username %></div>
                 <div class="desktop-peer-count"><%= current_user_session.peers.active.count %> peers online</div>
-              </div>
-              
-              <div class="desktop-wallet-section">
-                <div id="desktop-wallet-status" class="desktop-wallet-status">
-                  <button id="desktop-connect-wallet-btn" class="desktop-btn primary">Connect Wallet</button>
-                </div>
-                <div id="desktop-wallet-connected" style="display: none;">
-                  <div class="desktop-wallet-info">
-                    <div class="desktop-balance" id="desktop-wallet-balance">0 CPH</div>
-                    <div class="desktop-address" id="desktop-wallet-address"></div>
-                  </div>
-                  <div class="desktop-wallet-actions">
-                    <button id="desktop-deposit-btn" class="desktop-btn">Deposit</button>
-                    <button id="desktop-withdraw-btn" class="desktop-btn">Withdraw</button>
-                  </div>
-                </div>
               </div>
             </div>
             
@@ -217,73 +197,12 @@
       </footer>
     </div>
 
-    <!-- Minimal JavaScript - wallet functionality will be loaded on demand -->
-    <script>
-      // Simple notification system - no complex wallet management
-      function showNotification(message, type = 'info') {
-        const notification = document.createElement('div');
-        notification.className = `notification notification-${type}`;
-        notification.textContent = message;
-        notification.style.cssText = `
-          position: fixed; top: 20px; right: 20px; z-index: 9999;
-          background: ${type === 'success' ? '#48bb78' : type === 'error' ? '#f56565' : type === 'warning' ? '#ed8936' : '#4299e1'};
-          color: white; padding: 12px 16px; border-radius: 8px; max-width: 300px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        `;
-        document.body.appendChild(notification);
-        setTimeout(() => notification.remove(), 5000);
-      }
-      
-      // Make notification available globally
-      window.showNotification = showNotification;
+    <div class="no-js-note">
+      Browser scripting has been removed. Notifications and peer updates are handled by the server process.
+    </div>
 
-      // Auto-dismiss flash messages after 5 seconds
-      document.addEventListener('DOMContentLoaded', function() {
-        const flashMessages = document.querySelectorAll('.flash-message');
-        flashMessages.forEach(function(message) {
-          setTimeout(function() {
-            if (message.parentNode) {
-              message.style.opacity = '0';
-              message.style.transform = 'translateX(100%)';
-              setTimeout(function() {
-                message.remove();
-              }, 500);
-            }
-          }, 5000);
-        });
-      });
-    </script>
-    
-    <!-- Minimal desktop app JavaScript -->
     <% if Rails.env.desktop? %>
-      <script type="module">
-        try {
-          // Import Tauri API for desktop functionality
-          const { appWindow } = await import('@tauri-apps/api/window');
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          
-          // Basic titlebar controls - CSS handles visibility
-          const minimize = document.querySelector('.titlebar-minimize');
-          const maximize = document.querySelector('.titlebar-maximize');
-          const close = document.querySelector('.titlebar-close');
-          
-          minimize?.addEventListener('click', () => appWindow.minimize());
-          maximize?.addEventListener('click', () => appWindow.toggleMaximize());
-          close?.addEventListener('click', () => appWindow.hide());
-          
-          // Handle external links - open in system browser
-          document.addEventListener('click', (e) => {
-            const link = e.target.closest('a');
-            if (link?.href?.startsWith('http') && !link.href.includes('localhost')) {
-              e.preventDefault();
-              invoke('open_external_url', { url: link.href });
-            }
-          });
-          
-        } catch (error) {
-          console.log('Desktop functionality not available:', error.message);
-        }
-      </script>
+      <div class="desktop-js-note">Desktop window controls are managed directly by the host application.</div>
     <% end %>
   </body>
 </html>

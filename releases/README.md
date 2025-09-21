@@ -6,14 +6,16 @@ Pre-compiled desktop applications for Windows, macOS, and Linux.
 
 ## Quick Download
 
-### Latest Version (vv0.6.1)
+### Latest Version
+
+Grab the newest installers from [GitHub Releases](https://github.com/aosmith/cipher/releases/latest).
 
 | Platform | Download | Size | SHA256 |
 |----------|----------|------|---------|
-| **Windows** | [Cipher_v0.6.1_x64.msi](windows/latest/Cipher_v0.6.1_x64.msi) | ~12MB | `placeholder` |
-| **macOS (ARM64)** | [Cipher_v0.6.1_aarch64.dmg](macos/latest/Cipher_v0.6.1_aarch64.dmg) | 2.7MB | `55ae616b236c...` |
-| **Linux (DEB)** | [cipher_v0.6.1_amd64.deb](linux/latest/cipher_v0.6.1_amd64.deb) | ~15MB | `placeholder` |
-| **Linux (AppImage)** | [Cipher_v0.6.1_x86_64.AppImage](linux/latest/Cipher_v0.6.1_x86_64.AppImage) | ~18MB | `placeholder` |
+| **Windows** | [Latest Windows installer](https://github.com/aosmith/cipher/releases/latest) | ~12MB | `placeholder` |
+| **macOS (ARM64)** | [Latest macOS build](https://github.com/aosmith/cipher/releases/latest) | 2.7MB | `55ae616b236c...` |
+| **Linux (DEB)** | [Latest Linux DEB](https://github.com/aosmith/cipher/releases/latest) | ~15MB | `placeholder` |
+| **Linux (AppImage)** | [Latest Linux AppImage](https://github.com/aosmith/cipher/releases/latest) | ~18MB | `placeholder` |
 
 ## Installation Instructions
 
@@ -36,23 +38,18 @@ Pre-compiled desktop applications for Windows, macOS, and Linux.
 ### Linux
 
 #### DEB Package (Ubuntu/Debian)
-```bash
-# Download and install
-wget https://github.com/aosmith/cipher/releases/download/vv0.6.1/cipher_v0.6.1_amd64.deb
-sudo dpkg -i cipher_v0.6.1_amd64.deb
-
-# If dependencies are missing:
-sudo apt-get install -f
-```
+1. Download the `.deb` package from the [latest release](https://github.com/aosmith/cipher/releases/latest)
+2. Install with `sudo dpkg -i cipher_<version>_amd64.deb`
+3. Fix missing dependencies with `sudo apt-get install -f`
 
 #### AppImage (Universal)
 ```bash
 # Download and make executable
-wget https://github.com/aosmith/cipher/releases/download/vv0.6.1/Cipher_v0.6.1_x86_64.AppImage
-chmod +x Cipher_v0.6.1_x86_64.AppImage
+# Get the latest AppImage from https://github.com/aosmith/cipher/releases/latest
+chmod +x Cipher_<version>_x86_64.AppImage
 
 # Run directly
-./Cipher_v0.6.1_x86_64.AppImage
+./Cipher_<version>_x86_64.AppImage
 ```
 
 ## System Requirements
