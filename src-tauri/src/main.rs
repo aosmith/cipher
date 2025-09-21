@@ -8,11 +8,13 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init::<tauri::Wry>())
         .setup(|app| {
-            // Start bundled Rails server for all platforms
+            // Start bundled Rails server for packaged builds only
             let resource_dir = app
                 .path()
                 .resource_dir()
                 .expect("failed to resolve resource directory");
+
+            let rails_entry = resource_dir.join("bin/rails");
 
             let platform = if cfg!(target_os = "android") {
                 "android"
@@ -24,53 +26,60 @@ fn main() {
 
             println!("{} app resource directory: {:?}", platform, resource_dir);
 
-            // Start Rails server in bundled directory (localhost-only for security)
-            std::thread::spawn(move || {
-                let rails_command = if cfg!(target_os = "windows") {
-                    std::process::Command::new("cmd")
-                        .args(&[
-                            "/C",
-                            "ruby",
-                            "bin/rails",
-                            "server",
-                            "-p",
-                            "3001",
-                            "-b",
-                            "127.0.0.1",
-                            "-e",
-                            platform,
-                        ])
-                        .current_dir(&resource_dir)
-                        .spawn()
-                } else {
-                    std::process::Command::new("ruby")
-                        .args(&[
-                            "bin/rails",
-                            "server",
-                            "-p",
-                            "3001",
-                            "-b",
-                            "127.0.0.1",
-                            "-e",
-                            platform,
-                        ])
-                        .current_dir(&resource_dir)
-                        .spawn()
-                };
+            if rails_entry.exists() {
+                // Start Rails server in bundled directory (localhost-only for security)
+                std::thread::spawn(move || {
+                    let rails_command = if cfg!(target_os = "windows") {
+                        std::process::Command::new("cmd")
+                            .args(&[
+                                "/C",
+                                "ruby",
+                                "bin/rails",
+                                "server",
+                                "-p",
+                                "3001",
+                                "-b",
+                                "127.0.0.1",
+                                "-e",
+                                platform,
+                            ])
+                            .current_dir(&resource_dir)
+                            .spawn()
+                    } else {
+                        std::process::Command::new("ruby")
+                            .args(&[
+                                "bin/rails",
+                                "server",
+                                "-p",
+                                "3001",
+                                "-b",
+                                "127.0.0.1",
+                                "-e",
+                                platform,
+                            ])
+                            .current_dir(&resource_dir)
+                            .spawn()
+                    };
 
-                match rails_command {
-                    Ok(child) => {
-                        println!("Rails server started successfully for {}", platform);
-                        let _ = child.wait_with_output();
+                    match rails_command {
+                        Ok(child) => {
+                            println!("Rails server started successfully for {}", platform);
+                            let _ = child.wait_with_output();
+                        }
+                        Err(e) => {
+                            println!("Failed to start Rails server for {}: {}", platform, e);
+                        }
                     }
-                    Err(e) => {
-                        println!("Failed to start Rails server for {}: {}", platform, e);
-                    }
-                }
-            });
+                });
 
-            // Give Rails a moment to start
-            std::thread::sleep(std::time::Duration::from_secs(3));
+                // Give Rails a moment to start
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            } else {
+                println!(
+                    "Skipping bundled Rails launch for {} (bin/rails not present in resources)",
+                    platform
+                );
+            }
 
             Ok(())
         })

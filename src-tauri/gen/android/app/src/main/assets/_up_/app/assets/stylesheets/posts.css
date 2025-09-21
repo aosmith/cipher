@@ -17,7 +17,7 @@
   border-radius: 12px;
   padding: var(--content-spacing-md);
   text-align: center;
-  background: var(--color-bg-secondary);
+  background: var(--surface-glass-soft);
   transition: all 0.3s ease;
   position: relative;
 }
@@ -25,7 +25,7 @@
 .file-upload-area:hover,
 .file-upload-area.drag-over {
   border-color: var(--color-primary);
-  background: rgba(var(--color-primary-rgb), 0.08);
+  background: rgba(var(--color-primary-rgb), 0.12);
 }
 
 .file-upload-prompt {
@@ -72,7 +72,7 @@
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: var(--content-spacing-sm);
-  background: white;
+  background: var(--color-bg-card);
   text-align: center;
 }
 

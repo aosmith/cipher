@@ -73,6 +73,11 @@
   align-items: center;
 }
 
+.theme-toggle-form {
+  display: inline;
+  margin: 0;
+}
+
 .theme-toggle-button {
   display: inline-flex;
   align-items: center;

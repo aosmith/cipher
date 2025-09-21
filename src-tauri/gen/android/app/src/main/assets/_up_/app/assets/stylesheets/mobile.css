@@ -56,18 +56,19 @@
     min-height: 44px;
     padding: 12px 16px;
     border-radius: 8px;
-    border: 2px solid var(--color-border);
-    background: var(--color-bg-card);
+    border: 2px solid var(--input-border);
+    background: var(--input-bg);
     width: 100%;
     box-sizing: border-box;
+    color: var(--color-text-primary);
   }
 
   input:focus,
   textarea:focus,
   select:focus {
     outline: none;
-    border-color: var(--color-secondary);
-    box-shadow: 0 0 0 3px rgba(var(--color-secondary-rgb), 0.1);
+    border-color: var(--color-primary);
+    box-shadow: var(--input-focus-ring);
   }
 }
 

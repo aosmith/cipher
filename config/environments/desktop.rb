@@ -36,6 +36,12 @@ Rails.application.configure do
   config.hosts << "127.0.0.1"
   config.hosts << /.*\.local/
 
+  # Serve assets like development for rapid iteration
+  config.assets.compile = true
+  config.assets.debug = true
+  config.assets.quiet = true
+  config.sass.inline_source_maps = true if config.respond_to?(:sass)
+
   # Desktop app URL helpers
   config.action_mailer.default_url_options = { host: "localhost", port: 3001 }
 

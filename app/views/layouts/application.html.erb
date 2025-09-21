@@ -29,34 +29,36 @@
     <%= stylesheet_link_tag "application", "layout", "desktop", "mobile", "homepage", "posts", "messages", "users", "hosting", "data-turbo-track": "reload" %>
   </head>
 
-  <body data-theme="<%= current_theme %>" class="<%= 'env-desktop' if Rails.env.desktop? %> <%= 'env-ios platform-ios' if Rails.env.ios? %> <%= 'env-android platform-android' if Rails.env.android? %> <%= 'env-web' if Rails.env.development? || Rails.env.production? %>">
-    <!-- Desktop app specific elements -->
-    <% if Rails.env.desktop? %>
-      <div class="desktop-titlebar" data-tauri-drag-region>
-        <div class="desktop-titlebar-title">Cipher</div>
-        <div class="desktop-titlebar-buttons">
-          <button class="titlebar-button titlebar-minimize">−</button>
-          <button class="titlebar-button titlebar-maximize">□</button>
-          <button class="titlebar-button titlebar-close">×</button>
-        </div>
-      </div>
-    <% end %>
-    
+  <% body_classes = [] %>
+  <% if Rails.env.desktop? %>
+    <% body_classes += %w[desktop-app env-desktop platform-macos] %>
+  <% end %>
+  <% if Rails.env.ios? %>
+    <% body_classes += %w[mobile-app env-ios platform-ios] %>
+  <% end %>
+  <% if Rails.env.android? %>
+    <% body_classes += %w[mobile-app env-android platform-android] %>
+  <% end %>
+  <% if Rails.env.development? || Rails.env.production? %>
+    <% body_classes << 'env-web' %>
+  <% end %>
+  <body data-theme="<%= current_theme %>" class="<%= body_classes.join(' ') %>">
     <div class="app-wrapper">
       <!-- Desktop native sidebar -->
       <% if Rails.env.desktop? %>
         <div class="desktop-sidebar">
-          <div class="desktop-sidebar-header">
-            <%= link_to root_path, class: "desktop-logo" do %>
-              🔐 Cipher
-            <% end %>
-          </div>
+        <div class="desktop-sidebar-header">
+          <%= link_to root_path, class: "desktop-logo" do %>
+            🔐 Cipher
+          <% end %>
+        </div>
           
           <% if current_user_session %>
             <div class="desktop-user-section">
               <div class="desktop-user-info">
                 <div class="desktop-username">Hi, <%= current_user_session.username %></div>
                 <div class="desktop-peer-count"><%= current_user_session.peers.active.count %> peers online</div>
+                <div class="desktop-peer-status <%= p2p_status_css_class %>"><%= p2p_connection_status %></div>
               </div>
             </div>
             
@@ -108,48 +110,96 @@
         </div>
       <% end %>
       
-      <!-- Unified header for all platforms -->
-      <header class="app-header">
-        <div class="header-container">
-          <div class="header-left">
-            <%= link_to root_path, class: "logo-link" do %>
-              <span class="logo">🔐 Cipher</span>
-            <% end %>
+      <!-- Platform headers -->
+      <% if Rails.env.desktop? %>
+        <header class="app-header desktop-header">
+          <div class="header-container">
+            <div class="header-left">
+              <%= link_to root_path, class: "logo-link" do %>
+                <span class="logo">🔐 Cipher</span>
+              <% end %>
+            </div>
+
+            <nav class="header-nav desktop-nav-inline">
+              <% if current_user_session %>
+                <%= link_to "Feed", feed_path, class: "nav-link" %>
+                <%= link_to "Posts", posts_path, class: "nav-link" %>
+                <%= link_to "Friends", friends_users_path, class: "nav-link" %>
+                <%= link_to "Messages", messages_path, class: "nav-link" %>
+                <%= link_to "Local Hosting", local_hosting_users_path, class: "nav-link" %>
+                <%= link_to "Profile", user_path(current_user_session), class: "nav-link" %>
+              <% else %>
+                <%= link_to "Overview", root_path, class: "nav-link" %>
+                <%= link_to "Security", root_path(anchor: "security"), class: "nav-link" %>
+                <%= link_to "Community", root_path(anchor: "community"), class: "nav-link" %>
+              <% end %>
+            </nav>
+
+            <div class="header-right">
+              <% if current_user_session %>
+                <div class="desktop-session">
+                  <span class="desktop-user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
+                  <span class="desktop-peer-status <%= p2p_status_css_class %>"><%= p2p_connection_status %></span>
+                </div>
+              <% else %>
+                <nav class="auth-nav desktop-auth-actions">
+                  <%= link_to "Sign In", import_keys_users_path, class: "btn btn-secondary" %>
+                  <%= link_to "Create Account", new_user_path, class: "btn btn-primary" %>
+                </nav>
+              <% end %>
+
+              <div class="theme-toggle">
+                <%= button_to toggle_theme_path, method: :post, class: "theme-toggle-button", form_class: "theme-toggle-form" do %>
+                  <span class="theme-toggle-icon" aria-hidden="true"><%= current_theme == "light" ? "🌙" : "☀️" %></span>
+                  <span class="visually-hidden">Toggle theme</span>
+                <% end %>
+              </div>
+            </div>
           </div>
-          
-          <div class="header-right">
-            <!-- Mobile menu toggle -->
-            <input type="checkbox" id="mobile-menu-toggle" class="mobile-menu-toggle">
-            <label for="mobile-menu-toggle" class="mobile-menu-button">☰</label>
-            <div class="theme-toggle">
-              <%= button_to toggle_theme_path, method: :post, class: "theme-toggle-button", form_class: "theme-toggle-form" do %>
-                <span class="theme-toggle-icon" aria-hidden="true"><%= current_theme == "light" ? "🌙" : "☀️" %></span>
-                <span class="visually-hidden">Toggle theme</span>
+        </header>
+      <% else %>
+        <header class="app-header">
+          <div class="header-container">
+            <div class="header-left">
+              <%= link_to root_path, class: "logo-link" do %>
+                <span class="logo">🔐 Cipher</span>
               <% end %>
             </div>
             
-            <% if current_user_session %>
-              <div class="user-nav">
-                <span class="user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
-                <span class="peer-count"><%= current_user_session.peers.active.count %> peers</span>
-                <nav class="nav-links">
-                  <%= link_to "Feed", feed_path, class: "nav-link" %>
-                  <%= link_to "Posts", posts_path, class: "nav-link" %>
-                  <%= link_to "Friends", friends_users_path, class: "nav-link" %>
-                  <%= link_to "Messages", messages_path, class: "nav-link" %>
-                  <%= link_to "Local Hosting", local_hosting_users_path, class: "nav-link" %>
-                  <%= link_to "Profile", user_path(current_user_session), class: "nav-link" %>
-                </nav>
+            <div class="header-right">
+              <!-- Mobile menu toggle -->
+              <input type="checkbox" id="mobile-menu-toggle" class="mobile-menu-toggle">
+              <label for="mobile-menu-toggle" class="mobile-menu-button">☰</label>
+              <div class="theme-toggle">
+                <%= button_to toggle_theme_path, method: :post, class: "theme-toggle-button", form_class: "theme-toggle-form" do %>
+                  <span class="theme-toggle-icon" aria-hidden="true"><%= current_theme == "light" ? "🌙" : "☀️" %></span>
+                  <span class="visually-hidden">Toggle theme</span>
+                <% end %>
               </div>
-            <% else %>
-              <nav class="auth-nav">
-                <%= link_to "Sign In", import_keys_users_path, class: "btn btn-secondary" %>
-                <%= link_to "Create Account", new_user_path, class: "btn btn-primary" %>
-              </nav>
-            <% end %>
+              
+              <% if current_user_session %>
+                <div class="user-nav">
+                  <span class="user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
+                  <span class="peer-count"><%= current_user_session.peers.active.count %> peers</span>
+                  <nav class="nav-links">
+                    <%= link_to "Feed", feed_path, class: "nav-link" %>
+                    <%= link_to "Posts", posts_path, class: "nav-link" %>
+                    <%= link_to "Friends", friends_users_path, class: "nav-link" %>
+                    <%= link_to "Messages", messages_path, class: "nav-link" %>
+                    <%= link_to "Local Hosting", local_hosting_users_path, class: "nav-link" %>
+                    <%= link_to "Profile", user_path(current_user_session), class: "nav-link" %>
+                  </nav>
+                </div>
+              <% else %>
+                <nav class="auth-nav">
+                  <%= link_to "Sign In", import_keys_users_path, class: "btn btn-secondary" %>
+                  <%= link_to "Create Account", new_user_path, class: "btn btn-primary" %>
+                </nav>
+              <% end %>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      <% end %>
 
 
       <% if flash.any? %>

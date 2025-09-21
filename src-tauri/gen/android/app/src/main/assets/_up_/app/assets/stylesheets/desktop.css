@@ -1,72 +1,12 @@
 /* Desktop app specific styles */
 
+/* Use native OS titlebar; hide custom implementation */
 .desktop-titlebar {
-  display: none;
+  display: none !important;
 }
 
-/* Show titlebar only in desktop environment */
-.desktop-app .desktop-titlebar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 30px;
-  background: var(--desktop-titlebar-gradient);
-  color: var(--desktop-titlebar-text);
-  padding: 0 15px;
-  font-size: 13px;
-  font-weight: 500;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 10000;
-  -webkit-app-region: drag;
-}
-
-.desktop-titlebar-title {
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-
-.desktop-titlebar-buttons {
-  display: flex;
-  gap: 8px;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-button {
-  width: 18px;
-  height: 18px;
-  border: none;
-  border-radius: 50%;
-  background: var(--desktop-titlebar-button-bg);
-  color: var(--desktop-titlebar-text);
-  font-size: 10px;
-  font-weight: bold;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s ease;
-}
-
-.titlebar-button:hover {
-  background: var(--desktop-titlebar-button-bg-hover);
-}
-
-.titlebar-button:active {
-  background: var(--desktop-titlebar-button-bg-active);
-  transform: scale(0.95);
-}
-
-/* Adjust app layout for desktop titlebar */
 .desktop-app .app-wrapper {
-  margin-top: 30px;
-}
-
-.desktop-app .app-header {
-  position: sticky;
-  top: 30px;
+  margin-top: 0;
 }
 
 /* Show web header on all platforms */
@@ -76,7 +16,7 @@
 
 /* Keep web header visible on desktop apps too */
 .desktop-app .app-header {
-  display: block !important;
+  display: none !important;
 }
 
 /* Web app specific styles */
@@ -144,7 +84,7 @@
 
 /* Desktop app specific adjustments */
 .desktop-app {
-  min-height: calc(100vh - 30px);
+  min-height: 100vh;
 }
 
 /* Native desktop sidebar */
@@ -166,6 +106,10 @@
   padding: 0 20px 20px 20px;
   border-bottom: 1px solid var(--desktop-sidebar-section-border);
   margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .desktop-logo {
@@ -190,6 +134,9 @@
   margin-bottom: 16px;
   border: 1px solid var(--desktop-card-border);
   box-shadow: var(--desktop-card-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .desktop-username {
@@ -201,6 +148,49 @@
 .desktop-peer-count {
   font-size: 14px;
   color: var(--desktop-nav-muted);
+}
+
+.desktop-peer-status {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.desktop-peer-status.status-connected {
+  color: var(--color-success);
+}
+
+.desktop-peer-status.status-connecting {
+  color: var(--color-warning);
+}
+
+.desktop-peer-status.status-disconnected {
+  color: var(--color-danger);
+}
+
+.desktop-sidebar-actions {
+  display: flex;
+  align-items: center;
+}
+
+.desktop-theme-toggle-form {
+  margin: 0;
+}
+
+.desktop-theme-toggle-button {
+  border: 1px solid var(--desktop-sidebar-border);
+  border-radius: 999px;
+  background: var(--desktop-card-bg);
+  color: var(--desktop-nav-text);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.desktop-theme-toggle-button:hover {
+  background: var(--desktop-nav-hover-bg);
 }
 
 .desktop-wallet-section {
@@ -347,65 +337,59 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-/* Desktop window controls integration */
-.desktop-app .app-header .header-right {
-  padding-right: 100px; /* Make room for window controls */
+/* Desktop header layout */
+.desktop-app .desktop-header {
+  background: var(--desktop-header-bg, var(--color-bg-elevated));
+  border-bottom: 1px solid var(--desktop-sidebar-border);
+  margin-left: 280px;
+  z-index: 900;
+}
+
+.desktop-app .desktop-header .header-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+}
+
+.desktop-app .desktop-header .header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.desktop-app .desktop-header .header-right {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding-right: 0;
+}
+
+.desktop-app .desktop-session {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.desktop-app .desktop-user-greeting {
+  font-size: 14px;
+  color: var(--desktop-nav-text);
+}
+
+.desktop-app .desktop-peer-status {
+  font-size: 13px;
+  color: var(--desktop-nav-muted);
 }
 
 /* Platform-specific styles */
 
-/* Windows-specific adjustments */
-.desktop-app.platform-windows .desktop-titlebar {
-  height: 32px;
-  background: #0078d4;
-}
-
-.desktop-app.platform-windows .desktop-titlebar-buttons {
-  gap: 0;
-}
-
-.desktop-app.platform-windows .titlebar-button {
-  width: 46px;
-  height: 32px;
-  border-radius: 0;
-  background: transparent;
-  font-size: 12px;
-}
-
-.desktop-app.platform-windows .titlebar-button:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.desktop-app.platform-windows .titlebar-button:last-child:hover {
-  background: #e81123;
-}
-
-.desktop-app.platform-windows .app-wrapper {
-  margin-top: 32px;
-}
-
-.desktop-app.platform-windows .app-header {
-  top: 32px;
-}
-
+.desktop-app.platform-macos .app-wrapper,
+.desktop-app.platform-macos .app-main,
+.desktop-app.platform-windows .app-wrapper,
 .desktop-app.platform-windows .app-main {
-  padding-top: 20px; /* No header padding needed */
-}
-
-/* Hide scrollbars for Windows desktop */
-.desktop-app.platform-windows ::-webkit-scrollbar {
-  width: 0px;
-  height: 0px;
-  display: none;
-}
-
-/* macOS specific styles - no custom titlebar */
-.desktop-app.platform-macos .app-wrapper {
   margin-top: 0;
-}
-
-.desktop-app.platform-macos .app-main {
-  padding-top: 20px; /* No header padding needed */
+  padding-top: 20px;
 }
 
 /* Mobile-specific styles */
@@ -670,28 +654,3 @@
 }
 
 /* Desktop-specific responsive adjustments */
-@media (max-width: 768px) {
-  .desktop-app .desktop-titlebar-title {
-    font-size: 12px;
-  }
-  
-  .titlebar-button {
-    width: 16px;
-    height: 16px;
-    font-size: 9px;
-  }
-}
-
-/* Focus styles for keyboard navigation */
-.desktop-app .titlebar-button:focus {
-  outline: 2px solid rgba(255, 255, 255, 0.5);
-  outline-offset: 1px;
-}
-
-/* Disable text selection on titlebar */
-.desktop-titlebar {
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
-}

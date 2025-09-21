@@ -4,8 +4,8 @@
   "version": "0.7.1",
   "identifier": "com.cipher.social",
   "build": {
-    "beforeDevCommand": "TAURI_DEV_HOST=0.0.0.0 RAILS_ENV=android rails server -p 3001 -b 0.0.0.0",
-    "beforeBuildCommand": "RAILS_ENV=android rails assets:precompile",
+    "beforeDevCommand": "bin/android_dev_server",
+    "beforeBuildCommand": "RAILS_ENV=android bundle exec rails assets:precompile",
     "devUrl": "http://localhost:3001",
     "frontendDist": "../public"
   },

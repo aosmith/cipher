@@ -6,6 +6,8 @@ class ApplicationController < ActionController::Base
   # CSRF protection for all controllers
   protect_from_forgery with: :exception
 
+  before_action :set_theme
+
   protected
 
   def current_user_session
@@ -26,5 +28,18 @@ class ApplicationController < ActionController::Base
     session.delete(:user_id)
     cookies.delete(:test_user_id)
     redirect_to root_path, alert: message
+  end
+
+  def current_theme
+    @current_theme
+  end
+
+  helper_method :current_theme
+
+  private
+
+  def set_theme
+    requested_theme = cookies[:theme]
+    @current_theme = %w[light dark].include?(requested_theme) ? requested_theme : "dark"
   end
 end

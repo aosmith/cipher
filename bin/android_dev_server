@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$APP_ROOT"
+
+PORT="${TAURI_DEV_PORT:-${PORT:-3001}}"
+HOST="${TAURI_DEV_HOST:-0.0.0.0}"
+PIDFILE="tmp/pids/android-dev-server.pid"
+SERVER_PIDFILE="tmp/pids/server.pid"
+
+mkdir -p tmp/pids
+
+stop_pid_file() {
+  local file="$1"
+  if [[ -f "$file" ]]; then
+    local existing_pid
+    existing_pid="$(cat "$file" 2>/dev/null || true)"
+    if [[ -n "$existing_pid" ]] && ps -p "$existing_pid" >/dev/null 2>&1; then
+      echo "Stopping previous Rails server (pid $existing_pid)"
+      kill "$existing_pid" >/dev/null 2>&1 || true
+      wait "$existing_pid" 2>/dev/null || true
+    fi
+    rm -f "$file"
+  fi
+}
+
+stop_pid_file "$PIDFILE"
+stop_pid_file "$SERVER_PIDFILE"
+
+if lsof -ti tcp:"$PORT" >/dev/null 2>&1; then
+  echo "Port $PORT already in use. Attempting to stop Ruby processes on that port."
+  while read -r pid; do
+    if ps -p "$pid" -o comm= | grep -qi "ruby"; then
+      echo "Stopping process $pid on port $PORT"
+      kill "$pid" >/dev/null 2>&1 || true
+      wait "$pid" 2>/dev/null || true
+    else
+      echo "Port $PORT is used by non-Ruby process $pid. Please free the port and retry."
+      exit 1
+    fi
+  done < <(lsof -ti tcp:"$PORT")
+fi
+
+bundle check >/dev/null 2>&1 || bundle install
+
+echo $$ > "$PIDFILE"
+echo "Starting Rails android server on $HOST:$PORT"
+exec bundle exec rails server -p "$PORT" -b "$HOST" -e android
