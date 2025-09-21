@@ -38,7 +38,7 @@ Rails.application.configure do
 
   # Desktop app URL helpers
   config.action_mailer.default_url_options = { host: "localhost", port: 3001 }
-  
+
   # Logging
   config.log_level = :info
   config.log_tags = [ :request_id ]
@@ -56,11 +56,11 @@ Rails.application.configure do
 
   # Desktop app specific configurations
   config.desktop_mode = true
-  
+
   # Allow embedding in desktop app
   config.force_ssl = false
   config.ssl_options = { redirect: false }
-  
+
   # CSP for desktop app - disable CSP completely
   config.content_security_policy_report_only = false
 

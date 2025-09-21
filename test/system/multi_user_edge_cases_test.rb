@@ -3,14 +3,14 @@ require "application_system_test_case"
 class MultiUserEdgeCasesTest < ApplicationSystemTestCase
   setup do
     ApplicationRecord.connection.disable_referential_integrity do
-      [Comment, Post, Friendship, User].each(&:delete_all)
+      [ Comment, Post, Friendship, User ].each(&:delete_all)
     end
 
     @alice = User.create!(username: "alice", display_name: "Alice", public_key: "alice_key")
     @bob   = User.create!(username: "bob",   display_name: "Bob",   public_key: "bob_key")
     @carol = User.create!(username: "carol", display_name: "Carol", public_key: "carol_key")
 
-    [@alice, @bob, @carol].combination(2).each do |(requester, addressee)|
+    [ @alice, @bob, @carol ].combination(2).each do |(requester, addressee)|
       Friendship.create!(requester:, addressee:, status: "accepted")
     end
 

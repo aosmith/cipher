@@ -9,10 +9,10 @@ class CreateMessages < ActiveRecord::Migration[8.0]
 
       t.timestamps
     end
-    
+
     # Add indices for common queries
-    add_index :messages, [:sender_id, :recipient_id, :created_at]
-    add_index :messages, [:recipient_id, :read_at]
+    add_index :messages, [ :sender_id, :recipient_id, :created_at ]
+    add_index :messages, [ :recipient_id, :read_at ]
     add_index :messages, :created_at
   end
 end

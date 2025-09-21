@@ -92,7 +92,7 @@
                   </div>
                 </div>
                 <div class="user-actions">
-                  <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;', data: { confirm: 'Cancel this friend request?' } do %>
+                  <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;' do %>
                     <%= submit_tag "Cancel", class: "btn btn-secondary btn-sm" %>
                   <% end %>
                 </div>
@@ -139,7 +139,7 @@
                   <% end %>
                 <% end %>
                 <% friendship = @current_user.friendships.find_by("(requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)", @current_user.id, friend.id, friend.id, @current_user.id) %>
-                <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;', data: { confirm: 'Remove this friend?' } do %>
+                <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;' do %>
                   <%= submit_tag "Remove", class: "btn btn-danger btn-sm" %>
                 <% end %>
               </div>
@@ -156,4 +156,3 @@
     </div>
   </div>
 </div>
-

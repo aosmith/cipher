@@ -3,7 +3,7 @@ require "application_system_test_case"
 class FeedCommentingTest < ApplicationSystemTestCase
   setup do
     ApplicationRecord.connection.disable_referential_integrity do
-      [Comment, Post, Friendship, User].each(&:delete_all)
+      [ Comment, Post, Friendship, User ].each(&:delete_all)
     end
 
     @alice = User.create!(
@@ -31,7 +31,7 @@ class FeedCommentingTest < ApplicationSystemTestCase
     assert_text "Your Feed"
     assert_text "Posts from your 1 friend"
 
-    within first('.message-item.post') do
+    within first(".message-item.post") do
       fill_in "comment[content]", with: "Great to see you here, Bob! Welcome to Cipher."
       click_button "Post"
     end
@@ -40,7 +40,7 @@ class FeedCommentingTest < ApplicationSystemTestCase
     assert_text "Great to see you here, Bob! Welcome to Cipher."
     assert_text "1 comment"
 
-    within first('.message-item.post') do
+    within first(".message-item.post") do
       fill_in "comment[content]", with: "Looking forward to more posts!"
       click_button "Post"
     end
@@ -51,8 +51,8 @@ class FeedCommentingTest < ApplicationSystemTestCase
 
     visit feed_path
 
-    within first('.message-item.post', visible: :all) do
-      find('button', text: '×', match: :first, visible: :all).click
+    within first(".message-item.post", visible: :all) do
+      find("button", text: "×", match: :first, visible: :all).click
     end
 
     assert_text "Comment deleted successfully!"
@@ -62,10 +62,10 @@ class FeedCommentingTest < ApplicationSystemTestCase
   test "user can access feed through navigation" do
     login_as(@alice)
 
-    if page.has_css?('.desktop-nav-link')
-      within('.desktop-nav') { click_link "📰 Feed" }
+    if page.has_css?(".desktop-nav-link")
+      within(".desktop-nav") { click_link "📰 Feed" }
     else
-      within('.nav-links') { click_link "Feed" }
+      within(".nav-links") { click_link "Feed" }
     end
 
     assert_current_path feed_path
@@ -105,7 +105,7 @@ class FeedCommentingTest < ApplicationSystemTestCase
     login_as(@alice)
     visit feed_path
 
-    within first('.message-item.post') do
+    within first(".message-item.post") do
       fill_in "comment[content]", with: ""
       click_button "Post"
     end

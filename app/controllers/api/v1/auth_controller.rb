@@ -1,28 +1,28 @@
 class Api::V1::AuthController < ApplicationController
   # Use null session for API endpoints to prevent CSRF issues while maintaining protection
   protect_from_forgery with: :null_session
-  
+
   def verify_identity
     username = params[:username]
     public_key = params[:public_key]
-    
+
     if username.blank? || public_key.blank?
-      render json: { valid: false, error: 'Username and public key required' }, status: 400
+      render json: { valid: false, error: "Username and public key required" }, status: 400
       return
     end
-    
+
     user = User.find_by(username: username)
-    
+
     if user && user.public_key == public_key
       render json: { valid: true, user_id: user.id, username: user.username }
     else
-      render json: { valid: false, error: 'Invalid credentials' }
+      render json: { valid: false, error: "Invalid credentials" }
     end
   rescue => e
     Rails.logger.error "Identity verification error: #{e.message}"
-    render json: { valid: false, error: 'Server error' }, status: 500
+    render json: { valid: false, error: "Server error" }, status: 500
   end
-  
+
   def login
     # SECURITY: Only allow user_id login in test environment
     if params[:user_id].present? && Rails.env.test?
@@ -44,24 +44,24 @@ class Api::V1::AuthController < ApplicationController
       end
     elsif params[:user_id].present? && !Rails.env.test?
       # SECURITY: Block user_id login in non-test environments
-      render json: { success: false, error: 'Invalid authentication method' }, status: 400
+      render json: { success: false, error: "Invalid authentication method" }, status: 400
       return
     end
-    
+
     # Production login with username/password OR username/public_key
     username = params[:username]
     password = params[:password]
     public_key = params[:public_key]
 
     if username.blank? || (password.blank? && public_key.blank?)
-      render json: { success: false, error: 'Username and password or public key required' }, status: 400
+      render json: { success: false, error: "Username and password or public key required" }, status: 400
       return
     end
 
     user = User.find_by(username: username)
 
     unless user
-      render json: { success: false, error: 'Invalid credentials' }, status: 401
+      render json: { success: false, error: "Invalid credentials" }, status: 401
       return
     end
 
@@ -101,14 +101,14 @@ class Api::V1::AuthController < ApplicationController
       end
     else
       if request.format.html?
-        redirect_to import_keys_users_path, alert: 'Invalid username or password'
+        redirect_to import_keys_users_path, alert: "Invalid username or password"
       else
-        render json: { success: false, error: 'Invalid credentials' }, status: 401
+        render json: { success: false, error: "Invalid credentials" }, status: 401
       end
     end
   rescue => e
     Rails.logger.error "Login error: #{e.message}"
-    render json: { success: false, error: 'Server error' }, status: 500
+    render json: { success: false, error: "Server error" }, status: 500
   end
 
   def logout
@@ -116,6 +116,6 @@ class Api::V1::AuthController < ApplicationController
     render json: { success: true }
   rescue => e
     Rails.logger.error "Logout error: #{e.message}"
-    render json: { success: false, error: 'Server error' }, status: 500
+    render json: { success: false, error: "Server error" }, status: 500
   end
 end

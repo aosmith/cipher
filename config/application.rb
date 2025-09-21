@@ -23,7 +23,7 @@ module Cipher
     #
     # config.time_zone = "Central Time (US & Canada)"
     # config.eager_load_paths << Rails.root.join("extras")
-    
+
     # Browser runtime is intentionally disabled; all interactions are handled on the
     # per-user Rails server to keep state and latency local.
     config.x.browser_runtime_enabled = false

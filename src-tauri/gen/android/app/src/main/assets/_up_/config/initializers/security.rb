@@ -19,28 +19,13 @@ end
 
 # Helper method for controllers to set serialization context
 module ControllerSecurityHelpers
-  def set_serialization_context(user)
-    Thread.current[:current_user_for_serialization] = user&.id
-  end
-  
-  def clear_serialization_context
-    Thread.current[:current_user_for_serialization] = nil
-  end
-  
   # Safe user serialization for API responses
   def serialize_user_safely(user, include_own_private_key: false)
-    current_user_id = session[:user_id] 
-    
-    # Only include private key if it's the current user AND explicitly requested
-    if include_own_private_key && user.id == current_user_id
-      set_serialization_context(user)
-      result = user.as_json(include_private_key: true)
-      clear_serialization_context
-      result
-    else
-      # Always exclude private keys for other users or when not requested
-      user.as_json(except: [:private_key, :private_key_encrypted])
+    if include_own_private_key
+      Rails.logger.warn "Private key serialization requested for user ##{user.id}, but keys are managed client-side"
     end
+
+    user.as_json(except: [ :private_key, :private_key_encrypted ])
   end
 end
 

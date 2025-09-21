@@ -12,23 +12,23 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
   test "should create post with single text attachment" do
     file_content = "This is test file content"
     file = Rack::Test::UploadedFile.new(
-      StringIO.new(file_content), 
-      "text/plain", 
+      StringIO.new(file_content),
+      "text/plain",
       original_filename: "test.txt"
     )
-    
+
     assert_difference "Post.count", 1 do
       assert_difference "Attachment.count", 1 do
-        post posts_path, params: { 
-          post: { content: "Post with text file" }, 
-          attachments: [file] 
+        post posts_path, params: {
+          post: { content: "Post with text file" },
+          attachments: [ file ]
         }
       end
     end
-    
+
     assert_redirected_to root_path
     assert_equal "Post created successfully!", flash[:notice]
-    
+
     created_post = Post.last
     attachment = created_post.attachments.first
     assert_equal "test.txt", attachment.filename
@@ -39,33 +39,33 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
 
   test "should create post with multiple mixed attachments" do
     text_file = Rack::Test::UploadedFile.new(
-      StringIO.new("Text content"), 
-      "text/plain", 
+      StringIO.new("Text content"),
+      "text/plain",
       original_filename: "document.txt"
     )
-    
+
     image_file = Rack::Test::UploadedFile.new(
-      StringIO.new("fake image data"), 
-      "image/jpeg", 
+      StringIO.new("fake image data"),
+      "image/jpeg",
       original_filename: "photo.jpg"
     )
-    
+
     assert_difference "Post.count", 1 do
       assert_difference "Attachment.count", 2 do
-        post posts_path, params: { 
-          post: { content: "Multi-attachment post" }, 
-          attachments: [text_file, image_file] 
+        post posts_path, params: {
+          post: { content: "Multi-attachment post" },
+          attachments: [ text_file, image_file ]
         }
       end
     end
-    
+
     created_post = Post.last
     assert_equal 2, created_post.attachments.count
-    
+
     filenames = created_post.attachments.pluck(:filename)
     assert_includes filenames, "document.txt"
     assert_includes filenames, "photo.jpg"
-    
+
     content_types = created_post.attachments.pluck(:content_type)
     assert_includes content_types, "text/plain"
     assert_includes content_types, "image/jpeg"
@@ -74,49 +74,49 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
   test "should detect media attachments correctly" do
     # Create post with image (media)
     image_file = Rack::Test::UploadedFile.new(
-      StringIO.new("fake image data"), 
-      "image/png", 
+      StringIO.new("fake image data"),
+      "image/png",
       original_filename: "image.png"
     )
-    
-    post posts_path, params: { 
-      post: { content: "Image post" }, 
-      attachments: [image_file] 
+
+    post posts_path, params: {
+      post: { content: "Image post" },
+      attachments: [ image_file ]
     }
-    
+
     media_post = Post.last
     assert media_post.has_media?
-    
+
     # Create post with text file (not media)
     text_file = Rack::Test::UploadedFile.new(
-      StringIO.new("Text content"), 
-      "text/plain", 
+      StringIO.new("Text content"),
+      "text/plain",
       original_filename: "document.txt"
     )
-    
-    post posts_path, params: { 
-      post: { content: "Text post" }, 
-      attachments: [text_file] 
+
+    post posts_path, params: {
+      post: { content: "Text post" },
+      attachments: [ text_file ]
     }
-    
+
     text_post = Post.last
     assert_not text_post.has_media?
   end
 
   test "should create post with only attachments and no content" do
     file = Rack::Test::UploadedFile.new(
-      StringIO.new("File only content"), 
-      "application/pdf", 
+      StringIO.new("File only content"),
+      "application/pdf",
       original_filename: "document.pdf"
     )
-    
+
     assert_difference "Post.count", 1 do
-      post posts_path, params: { 
-        post: { content: "" }, 
-        attachments: [file] 
+      post posts_path, params: {
+        post: { content: "" },
+        attachments: [ file ]
       }
     end
-    
+
     created_post = Post.last
     # Content can be nil or empty string
     assert(created_post.content.nil? || created_post.content == "", "Content should be nil or empty")
@@ -127,18 +127,18 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
   test "should handle large file attachments" do
     large_content = "A" * 10000  # 10KB file
     large_file = Rack::Test::UploadedFile.new(
-      StringIO.new(large_content), 
-      "text/plain", 
+      StringIO.new(large_content),
+      "text/plain",
       original_filename: "large_file.txt"
     )
-    
+
     assert_difference "Post.count", 1 do
-      post posts_path, params: { 
-        post: { content: "Large file post" }, 
-        attachments: [large_file] 
+      post posts_path, params: {
+        post: { content: "Large file post" },
+        attachments: [ large_file ]
       }
     end
-    
+
     created_post = Post.last
     attachment = created_post.attachments.first
     assert_equal 10000, attachment.file_size
@@ -152,21 +152,21 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
       { content: "Audio data", type: "audio/mp3", name: "audio.mp3" },
       { content: "Archive data", type: "application/zip", name: "archive.zip" }
     ]
-    
+
     files.each do |file_info|
       file = Rack::Test::UploadedFile.new(
-        StringIO.new(file_info[:content]), 
-        file_info[:type], 
+        StringIO.new(file_info[:content]),
+        file_info[:type],
         original_filename: file_info[:name]
       )
-      
+
       assert_difference "Post.count", 1 do
-        post posts_path, params: { 
-          post: { content: "Post with #{file_info[:name]}" }, 
-          attachments: [file] 
+        post posts_path, params: {
+          post: { content: "Post with #{file_info[:name]}" },
+          attachments: [ file ]
         }
       end
-      
+
       created_post = Post.last
       attachment = created_post.attachments.first
       assert_equal file_info[:name], attachment.filename
@@ -177,19 +177,19 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
   test "should encrypt attachment data" do
     secret_content = "This is secret file content"
     file = Rack::Test::UploadedFile.new(
-      StringIO.new(secret_content), 
-      "text/plain", 
+      StringIO.new(secret_content),
+      "text/plain",
       original_filename: "secret.txt"
     )
-    
-    post posts_path, params: { 
-      post: { content: "Encrypted file post" }, 
-      attachments: [file] 
+
+    post posts_path, params: {
+      post: { content: "Encrypted file post" },
+      attachments: [ file ]
     }
-    
+
     created_post = Post.last
     attachment = created_post.attachments.first
-    
+
     # Data should be encrypted (not equal to original)
     assert_not_nil attachment.data_encrypted
     # Should have a checksum for integrity
@@ -199,32 +199,32 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
   test "should validate attachment presence when no content" do
     # Should fail with no content and no attachments
     assert_no_difference "Post.count" do
-      post posts_path, params: { 
+      post posts_path, params: {
         post: { content: "" }
         # No attachments parameter
       }
     end
-    
+
     assert_response :unprocessable_content
   end
 
   test "should skip empty attachment files" do
     valid_file = Rack::Test::UploadedFile.new(
-      StringIO.new("Valid content"), 
-      "text/plain", 
+      StringIO.new("Valid content"),
+      "text/plain",
       original_filename: "valid.txt"
     )
-    
+
     # Simulate empty file parameter
     assert_difference "Post.count", 1 do
       assert_difference "Attachment.count", 1 do # Only one attachment should be created
-        post posts_path, params: { 
-          post: { content: "Post with mixed files" }, 
-          attachments: [valid_file, nil, ""] 
+        post posts_path, params: {
+          post: { content: "Post with mixed files" },
+          attachments: [ valid_file, nil, "" ]
         }
       end
     end
-    
+
     created_post = Post.last
     assert_equal 1, created_post.attachments.count
     assert_equal "valid.txt", created_post.attachments.first.filename
@@ -233,16 +233,16 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
   test "should preserve original filename and content type" do
     special_filename = "My Special File (v2).pdf"
     file = Rack::Test::UploadedFile.new(
-      StringIO.new("PDF content"), 
-      "application/pdf", 
+      StringIO.new("PDF content"),
+      "application/pdf",
       original_filename: special_filename
     )
-    
-    post posts_path, params: { 
-      post: { content: "Special filename test" }, 
-      attachments: [file] 
+
+    post posts_path, params: {
+      post: { content: "Special filename test" },
+      attachments: [ file ]
     }
-    
+
     created_post = Post.last
     attachment = created_post.attachments.first
     assert_equal special_filename, attachment.filename
@@ -252,8 +252,8 @@ class PostAttachmentsTest < ActionDispatch::IntegrationTest
   private
 
   def login_as(user)
-    post "/api/v1/login", 
-         params: { username: user.username, public_key: user.public_key }, 
+    post "/api/v1/login",
+         params: { username: user.username, public_key: user.public_key },
          as: :json
     assert_response :success
   end

@@ -50,7 +50,7 @@ class Api::V1::P2pConnectionsController < ApplicationController
 
   def require_login
     unless current_user
-      render json: { error: 'Authentication required' }, status: 401
+      render json: { error: "Authentication required" }, status: 401
     end
   end
 end

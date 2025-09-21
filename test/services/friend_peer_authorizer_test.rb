@@ -4,7 +4,7 @@ require "base64"
 class FriendPeerAuthorizerTest < ActiveSupport::TestCase
   setup do
     ApplicationRecord.connection.disable_referential_integrity do
-      [P2pConnection, Friendship, User].each(&:delete_all)
+      [ P2pConnection, Friendship, User ].each(&:delete_all)
     end
 
     @alice = User.create!(

@@ -9,13 +9,13 @@ class Api::V1::FriendsController < ApplicationController
 
   def search_by_public_key
     public_key = params[:public_key]
-    
+
     if public_key.blank?
-      return render json: { error: 'public_key required' }, status: 400
+      return render json: { error: "public_key required" }, status: 400
     end
-    
+
     user = User.find_by(public_key: public_key)
-    
+
     if user
       # Only return public information, never private keys
       render json: {
@@ -28,7 +28,7 @@ class Api::V1::FriendsController < ApplicationController
         pending_request: current_user.sent_friendships.pending.exists?(addressee: user)
       }
     else
-      render json: { error: 'User not found' }, status: 404
+      render json: { error: "User not found" }, status: 404
     end
   end
 
@@ -40,9 +40,9 @@ class Api::V1::FriendsController < ApplicationController
       target_user = User.find_by(public_key: params[:public_key])
     else
       respond_to do |format|
-        format.json { render json: { error: 'Username or public key required' }, status: 400 }
+        format.json { render json: { error: "Username or public key required" }, status: 400 }
         format.html {
-          flash[:error] = 'Username or public key required'
+          flash[:error] = "Username or public key required"
           redirect_to friends_users_path and return
         }
       end
@@ -50,9 +50,9 @@ class Api::V1::FriendsController < ApplicationController
 
     if target_user.nil?
       respond_to do |format|
-        format.json { render json: { error: 'User not found' }, status: 404 }
+        format.json { render json: { error: "User not found" }, status: 404 }
         format.html {
-          flash[:error] = 'User not found'
+          flash[:error] = "User not found"
           redirect_to friends_users_path and return
         }
       end
@@ -74,7 +74,7 @@ class Api::V1::FriendsController < ApplicationController
       respond_to do |format|
         format.json {
           render json: {
-            message: 'Friend request sent successfully',
+            message: "Friend request sent successfully",
             friendship: {
               id: friendship.id,
               status: friendship.status,
@@ -87,15 +87,15 @@ class Api::V1::FriendsController < ApplicationController
           }
         }
         format.html {
-          flash[:success] = 'Friend request sent successfully'
+          flash[:success] = "Friend request sent successfully"
           redirect_to friends_users_path
         }
       end
     else
       respond_to do |format|
-        format.json { render json: { error: 'Friend request could not be sent. You may already be friends or have a pending request.' }, status: 400 }
+        format.json { render json: { error: "Friend request could not be sent. You may already be friends or have a pending request." }, status: 400 }
         format.html {
-          flash[:error] = 'Friend request could not be sent. You may already be friends or have a pending request.'
+          flash[:error] = "Friend request could not be sent. You may already be friends or have a pending request."
           redirect_to friends_users_path
         }
       end
@@ -110,29 +110,29 @@ class Api::V1::FriendsController < ApplicationController
 
     if friendship.nil?
       respond_to do |format|
-        format.json { render json: { error: 'Friend request not found' }, status: 404 }
+        format.json { render json: { error: "Friend request not found" }, status: 404 }
         format.html {
-          flash[:error] = 'Friend request not found'
+          flash[:error] = "Friend request not found"
           redirect_to friends_users_path and return
         }
       end
     end
 
     case action
-    when 'accept'
+    when "accept"
       friendship.accept!
-      message = 'Friend request accepted'
-    when 'decline'
+      message = "Friend request accepted"
+    when "decline"
       friendship.decline!
-      message = 'Friend request declined'
-    when 'block'
+      message = "Friend request declined"
+    when "block"
       friendship.block!
-      message = 'User blocked'
+      message = "User blocked"
     else
       respond_to do |format|
-        format.json { render json: { error: 'Invalid action' }, status: 400 }
+        format.json { render json: { error: "Invalid action" }, status: 400 }
         format.html {
-          flash[:error] = 'Invalid action'
+          flash[:error] = "Invalid action"
           redirect_to friends_users_path and return
         }
       end
@@ -165,9 +165,9 @@ class Api::V1::FriendsController < ApplicationController
 
     if friendship.nil?
       respond_to do |format|
-        format.json { render json: { error: 'Friendship not found' }, status: 404 }
+        format.json { render json: { error: "Friendship not found" }, status: 404 }
         format.html {
-          flash[:error] = 'Friendship not found'
+          flash[:error] = "Friendship not found"
           redirect_to friends_users_path and return
         }
       end
@@ -176,9 +176,9 @@ class Api::V1::FriendsController < ApplicationController
     friendship.destroy
 
     respond_to do |format|
-      format.json { render json: { message: 'Friendship removed successfully' } }
+      format.json { render json: { message: "Friendship removed successfully" } }
       format.html {
-        flash[:success] = 'Friendship removed successfully'
+        flash[:success] = "Friendship removed successfully"
         redirect_to friends_users_path
       }
     end
@@ -187,11 +187,11 @@ class Api::V1::FriendsController < ApplicationController
   # Get pending friend requests
   def show
     case params[:id]
-    when 'requests'
+    when "requests"
       pending_received = current_user.pending_friend_requests.map do |friendship|
         {
           id: friendship.id,
-          type: 'received',
+          type: "received",
           user: {
             id: friendship.requester.id,
             username: friendship.requester.username,
@@ -201,11 +201,11 @@ class Api::V1::FriendsController < ApplicationController
           created_at: friendship.created_at
         }
       end
-      
+
       pending_sent = current_user.sent_friend_requests.map do |friendship|
         {
           id: friendship.id,
-          type: 'sent',
+          type: "sent",
           user: {
             id: friendship.addressee.id,
             username: friendship.addressee.username,
@@ -215,13 +215,13 @@ class Api::V1::FriendsController < ApplicationController
           created_at: friendship.created_at
         }
       end
-      
-      render json: { 
+
+      render json: {
         received: pending_received,
-        sent: pending_sent 
+        sent: pending_sent
       }
     else
-      render json: { error: 'Invalid request' }, status: 400
+      render json: { error: "Invalid request" }, status: 400
     end
   end
 
@@ -230,9 +230,9 @@ class Api::V1::FriendsController < ApplicationController
   def authenticate_user
     user_id = session[:user_id]
     @current_user = User.find_by(id: user_id) if user_id
-    
+
     unless @current_user
-      render json: { error: 'Authentication required' }, status: 401
+      render json: { error: "Authentication required" }, status: 401
     end
   end
 

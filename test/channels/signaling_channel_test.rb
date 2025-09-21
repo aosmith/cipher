@@ -4,7 +4,7 @@ require "json"
 class SignalingChannelTest < ActionCable::Channel::TestCase
   setup do
     ApplicationRecord.connection.disable_referential_integrity do
-      [P2pConnection, Peer, Friendship, User].each(&:delete_all)
+      [ P2pConnection, Peer, Friendship, User ].each(&:delete_all)
     end
 
     @alice = User.create!(username: "alice_signal", display_name: "Alice", public_key: "alice_pub")

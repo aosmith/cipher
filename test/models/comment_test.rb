@@ -11,7 +11,7 @@ class CommentTest < ActiveSupport::TestCase
     Peer.destroy_all
     Post.destroy_all
     User.destroy_all
-    
+
     @user = User.create!(username: "testuser", public_key: "test_key")
     @post = @user.posts.create!(content: "Test post")
     @comment = Comment.new(user: @user, post: @post, content: "Test comment")
@@ -60,7 +60,7 @@ class CommentTest < ActiveSupport::TestCase
 
   test "should belong to user and post" do
     @comment.save!
-    
+
     assert_equal @user, @comment.user
     assert_equal @post, @comment.post
     assert_includes @user.comments, @comment
@@ -70,7 +70,7 @@ class CommentTest < ActiveSupport::TestCase
   test "should be destroyed when post is destroyed" do
     @comment.save!
     comment_id = @comment.id
-    
+
     @post.destroy
     assert_not Comment.exists?(comment_id)
   end
@@ -78,7 +78,7 @@ class CommentTest < ActiveSupport::TestCase
   test "should be destroyed when user is destroyed" do
     @comment.save!
     comment_id = @comment.id
-    
+
     @user.destroy
     assert_not Comment.exists?(comment_id)
   end
@@ -86,10 +86,10 @@ class CommentTest < ActiveSupport::TestCase
   test "timestamp should not be updated on content change" do
     @comment.save!
     original_timestamp = @comment.timestamp
-    
+
     sleep(0.01)
     @comment.update!(content: "Updated content")
-    
+
     assert_equal original_timestamp.to_i, @comment.timestamp.to_i
   end
 end

@@ -3,7 +3,7 @@ require "application_system_test_case"
 class PostingWorkflowTest < ApplicationSystemTestCase
   def setup
     ApplicationRecord.connection.disable_referential_integrity do
-      [Comment, Post, Friendship, User].each(&:delete_all)
+      [ Comment, Post, Friendship, User ].each(&:delete_all)
     end
 
     @user = User.create!(
@@ -25,7 +25,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     assert_text "This is my first test post!"
 
     post = Post.last
-    assert_equal "This is my first test post!", post.content
+    assert_equal "This is my first test post!", post.content.strip
     assert_equal @user, post.user
   end
 
@@ -53,7 +53,7 @@ class PostingWorkflowTest < ApplicationSystemTestCase
     post = @user.posts.create!(content: "Delete me")
 
     visit posts_path
-    within first('.message-item.post', text: "Delete me") do
+    within first(".message-item.post", text: "Delete me") do
       click_button "Delete"
     end
 

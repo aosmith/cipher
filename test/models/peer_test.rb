@@ -17,8 +17,8 @@ class PeerTest < ActiveSupport::TestCase
       public_key: "peer_public_key"
     )
 
-    custom_stun_servers = [{ urls: "stun:test" }]
-    custom_turn_servers = [{ urls: "turn:test", username: "user", credential: "secret" }]
+    custom_stun_servers = [ { urls: "stun:test" } ]
+    custom_turn_servers = [ { urls: "turn:test", username: "user", credential: "secret" } ]
 
     WebRtcConfig.stub :stun_servers, custom_stun_servers do
       WebRtcConfig.stub :turn_servers, custom_turn_servers do

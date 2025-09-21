@@ -5,8 +5,8 @@ class Peer < ApplicationRecord
   validates :address, presence: true
   validates :port, presence: true, numericality: { greater_than: 0, less_than: 65536 }
 
-  scope :active, -> { where('last_seen > ?', 30.minutes.ago) }
-  scope :recently_seen, -> { where('last_seen > ?', 24.hours.ago) }
+  scope :active, -> { where("last_seen > ?", 30.minutes.ago) }
+  scope :recently_seen, -> { where("last_seen > ?", 24.hours.ago) }
 
   def update_last_seen!
     update!(last_seen: Time.current)
@@ -30,12 +30,23 @@ class Peer < ApplicationRecord
     # This will be called from the frontend to establish WebRTC connection
     {
       peer_id: id,
-      stun_servers: WebRTCConfig.stun_servers,
-      turn_servers: WebRTCConfig.turn_servers
+      stun_servers: WebRtcConfig.stun_servers,
+      turn_servers: WebRtcConfig.turn_servers
     }
   end
 
   def verify_identity(challenge, signature)
     user.verify_signature(challenge, signature, public_key)
+  end
+
+  def connection_profile_for(friend_user)
+    {
+      id: friend_user.id,
+      username: friend_user.username,
+      public_key: friend_user.public_key,
+      address: address,
+      port: port,
+      last_seen: last_seen
+    }
   end
 end

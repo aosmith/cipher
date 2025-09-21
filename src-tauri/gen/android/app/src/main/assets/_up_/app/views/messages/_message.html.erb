@@ -1,5 +1,4 @@
-<%= turbo_frame_tag message do %>
-  <div class="message <%= 'message-own' if message.sender == current_user %>" id="<%= dom_id(message) %>">
+<div class="message <%= 'message-own' if message.sender == current_user %>" id="<%= dom_id(message) %>">
     <div class="message-content">
       <div class="message-text">
         <%= simple_format(message.content) %>
@@ -11,12 +10,11 @@
         </time>
         
         <% if message.sender == current_user %>
-          <%= link_to message, method: :delete, 
-                      class: "message-delete", 
-                      confirm: "Delete this message?",
-                      data: { turbo_method: :delete } do %>
-            🗑️
-          <% end %>
+          <%= button_to "🗑️",
+                        message,
+                        method: :delete,
+                        form: { class: "inline-form" },
+                        class: "message-delete" %>
         <% end %>
       </div>
     </div>
@@ -27,4 +25,3 @@
       </div>
     <% end %>
   </div>
-<% end %>

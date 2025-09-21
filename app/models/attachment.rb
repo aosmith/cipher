@@ -1,7 +1,7 @@
 class Attachment < ApplicationRecord
-  require 'rbnacl'
-  require 'base64'
-  require 'digest'
+  require "rbnacl"
+  require "base64"
+  require "digest"
 
   belongs_to :post
   has_many :attachment_shares, dependent: :destroy
@@ -15,28 +15,28 @@ class Attachment < ApplicationRecord
 
   before_validation :generate_checksum
   after_create :create_attachment_shares
-  
+
   # Blockchain-related attributes
   attr_accessor :blockchain_file_hash, :blockchain_upload_cost, :blockchain_transaction_hash
 
   def encrypt_data(binary_data, shared_user_public_keys = [])
     # Use ChaCha20-Poly1305 for large file encryption with SimpleBox
     key = RbNaCl::Random.random_bytes(RbNaCl::SecretBox.key_bytes)
-    
+
     # Use the simple_box interface which handles nonce automatically
     encrypted_data = RbNaCl::SimpleBox.from_secret_key(key).encrypt(binary_data)
-    
+
     # Store the encrypted data (nonce is included in the output)
     self.data_encrypted = Base64.encode64(encrypted_data)
-    
+
     # For development: store the key in base64 for the owner
     # In production, this key would be encrypted with the user's public key
     self.dev_owner_key = Base64.encode64(key)
-    
+
     # Always include the owner
-    all_public_keys = [post.user.public_key] + shared_user_public_keys
+    all_public_keys = [ post.user.public_key ] + shared_user_public_keys
     all_public_keys.uniq!
-    
+
     @encryption_key = key # Store temporarily for sharing
     @shared_public_keys = all_public_keys
     @original_data = binary_data
@@ -44,11 +44,11 @@ class Attachment < ApplicationRecord
 
   def decrypt_data_for_user(user)
     return @decrypted_data if @decrypted_data
-    
+
     # Get the encrypted key for this specific user
     encrypted_key = AttachmentShare.encrypted_key_for(user, self)
     return nil unless encrypted_key
-    
+
     # This needs to be handled client-side since server doesn't have private keys
     # Return the encrypted key so client can decrypt it
     # Note: data_encrypted contains nonce + encrypted_data concatenated
@@ -57,67 +57,67 @@ class Attachment < ApplicationRecord
       encrypted_data: data_encrypted
     }
   end
-  
+
   # Server-side method to check if user has access
   def accessible_by?(user)
     # Owner always has access
     return true if post.user == user
-    
+
     # Check if user is in the shared list
     AttachmentShare.user_has_access?(user, self)
   end
 
   def is_image?
-    content_type.start_with?('image/')
+    content_type.start_with?("image/")
   end
 
   def is_video?
-    content_type.start_with?('video/')
+    content_type.start_with?("video/")
   end
 
   def is_audio?
-    content_type.start_with?('audio/')
+    content_type.start_with?("audio/")
   end
 
   def media_type
     case content_type
     when /^image\//
-      'image'
+      "image"
     when /^video\//
-      'video'
+      "video"
     when /^audio\//
-      'audio'
+      "audio"
     else
-      'file'
+      "file"
     end
   end
 
   def human_file_size
-    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    units = [ "B", "KB", "MB", "GB", "TB" ]
     size = file_size.to_f
     unit_index = 0
-    
+
     while size >= 1024 && unit_index < units.length - 1
       size /= 1024
       unit_index += 1
     end
-    
+
     "#{size.round(1)} #{units[unit_index]}"
   end
-  
+
   # Blockchain integration methods
   def calculate_blockchain_cost
     # Cost is 1 CPH per KB, rounded up
     size_kb = (file_size + 1023) / 1024
     size_kb # Returns cost in CPH
   end
-  
+
   def blockchain_file_hash_for_storage
     # Use the file's checksum as the blockchain file hash
     # This ensures the hash is deterministic and represents the actual file content
     checksum
   end
-  
+
   def to_blockchain_json
     {
       filename: filename,
@@ -153,16 +153,16 @@ class Attachment < ApplicationRecord
       self.checksum = Digest::SHA256.hexdigest("#{filename}-#{file_size}-#{Time.current.to_i}")
     end
   end
-  
+
   def create_attachment_shares
     return unless @encryption_key && @shared_public_keys
-    
+
     # This method expects that key encryption happens client-side
     # For now, we'll create placeholder shares that need to be updated client-side
     @shared_public_keys.each do |public_key|
       user = User.find_by(public_key: public_key)
       next unless user
-      
+
       # Create placeholder - the encrypted key will be set by client-side code
       attachment_shares.find_or_create_by(user: user) do |share|
         share.encrypted_key = "PLACEHOLDER_TO_BE_ENCRYPTED_CLIENT_SIDE"

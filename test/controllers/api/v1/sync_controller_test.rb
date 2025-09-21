@@ -5,15 +5,15 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     @alice = users(:alice)
     @bob = users(:bob)
     @charlie = users(:charlie)
-    
+
     # Ensure friendship between Alice and Bob exists (may already be in fixtures)
-    unless Friendship.exists?(requester: @alice, addressee: @bob, status: 'accepted')
-      @alice.sent_friendships.create!(addressee: @bob, status: 'accepted')
+    unless Friendship.exists?(requester: @alice, addressee: @bob, status: "accepted")
+      @alice.sent_friendships.create!(addressee: @bob, status: "accepted")
     end
-    unless Friendship.exists?(requester: @bob, addressee: @alice, status: 'accepted')
-      @bob.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    unless Friendship.exists?(requester: @bob, addressee: @alice, status: "accepted")
+      @bob.sent_friendships.create!(addressee: @alice, status: "accepted")
     end
-    
+
     # Create Alice's posts on her server
     @alice_post = @alice.posts.create!(
       content: "Hello from Alice's server!",
@@ -21,7 +21,7 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
       original_user_id: @alice.id,
       content_hash: Digest::SHA256.hexdigest("Hello from Alice's server!")
     )
-    
+
     # Create Bob's posts on his server
     @bob_post = @bob.posts.create!(
       content: "Hello from Bob's server!",
@@ -29,7 +29,7 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
       original_user_id: @bob.id,
       content_hash: Digest::SHA256.hexdigest("Hello from Bob's server!")
     )
-    
+
     # Setup two separate server sessions
     @alice_session = ActionDispatch::Integration::Session.new(Rails.application)
     @bob_session = ActionDispatch::Integration::Session.new(Rails.application)
@@ -39,30 +39,30 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     # Step 1: Bob's server requests sync data from Alice's server
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
     @alice_session.get "/api/v1/sync_data", params: { friend_id: @bob.id }
-    
+
     assert_equal 200, @alice_session.response.status
     alice_sync_data = JSON.parse(@alice_session.response.body)
-    
-    assert alice_sync_data.key?('posts')
-    assert alice_sync_data.key?('user_id')
-    assert_equal @alice.id, alice_sync_data['user_id']
-    
+
+    assert alice_sync_data.key?("posts")
+    assert alice_sync_data.key?("user_id")
+    assert_equal @alice.id, alice_sync_data["user_id"]
+
     # Should include Alice's posts that Bob can sync
-    post_contents = alice_sync_data['posts'].map { |p| p['content'] }
+    post_contents = alice_sync_data["posts"].map { |p| p["content"] }
     assert_includes post_contents, "Hello from Alice's server!"
-    
+
     # Step 2: Bob's server accepts the sync data from Alice
     @bob_session.post "/api/v1/login", params: { user_id: @bob.id }
-    @bob_session.post "/api/v1/accept_sync", params: { 
-      friend_id: @alice.id, 
-      sync_data: alice_sync_data 
+    @bob_session.post "/api/v1/accept_sync", params: {
+      friend_id: @alice.id,
+      sync_data: alice_sync_data
     }
-    
+
     assert_equal 200, @bob_session.response.status
     bob_response = JSON.parse(@bob_session.response.body)
-    assert bob_response['success']
-    assert_equal 1, bob_response['synced_posts_count']
-    
+    assert bob_response["success"]
+    assert_equal 1, bob_response["synced_posts_count"]
+
     # Step 3: Verify Alice's post now exists on Bob's server as synced
     synced_post = Post.find_by(
       user: @bob,
@@ -78,16 +78,16 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     # Charlie's server tries to sync with Alice, but they're not friends
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
     @alice_session.get api_v1_sync_data_path, params: { friend_id: @charlie.id }
-    
+
     assert_equal 403, @alice_session.response.status
     response_data = JSON.parse(@alice_session.response.body)
-    assert_equal "Access denied: Can only sync with friends or friends of friends", response_data['error']
+    assert_equal "Access denied: Can only sync with friends or friends of friends", response_data["error"]
   end
 
   test "should reject sync data request without authentication" do
     # Unauthenticated request to Alice's server
     @alice_session.get api_v1_sync_data_path, params: { friend_id: @bob.id }
-    
+
     assert_equal 401, @alice_session.response.status
   end
 
@@ -95,31 +95,31 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     # Step 1: Alice's server shares data with Bob
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
     @alice_session.get api_v1_sync_data_path, params: { friend_id: @bob.id }
-    
+
     alice_sync_data = JSON.parse(@alice_session.response.body)
-    
+
     @bob_session.post "/api/v1/login", params: { user_id: @bob.id }
-    @bob_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @alice.id, 
-      sync_data: alice_sync_data 
+    @bob_session.post api_v1_accept_sync_path, params: {
+      friend_id: @alice.id,
+      sync_data: alice_sync_data
     }
-    
+
     assert_equal 200, @bob_session.response.status
-    
+
     # Step 2: Bob's server shares data with Alice
     @bob_session.get api_v1_sync_data_path, params: { friend_id: @alice.id }
-    
+
     bob_sync_data = JSON.parse(@bob_session.response.body)
-    
-    @alice_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @bob.id, 
-      sync_data: bob_sync_data 
+
+    @alice_session.post api_v1_accept_sync_path, params: {
+      friend_id: @bob.id,
+      sync_data: bob_sync_data
     }
-    
+
     assert_equal 200, @alice_session.response.status
     alice_response = JSON.parse(@alice_session.response.body)
-    assert alice_response['success']
-    
+    assert alice_response["success"]
+
     # Step 3: Verify both servers have each other's content
     # Bob's post should exist on Alice's server as synced
     bob_post_on_alice = Post.find_by(
@@ -130,7 +130,7 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
       original_user_id: @bob.id
     )
     assert bob_post_on_alice, "Bob's post should be synced to Alice's server"
-    
+
     # Alice's post should exist on Bob's server as synced
     alice_post_on_bob = Post.find_by(
       user: @bob,
@@ -157,15 +157,15 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     }
 
     @bob_session.post "/api/v1/login", params: { user_id: @bob.id }
-    @bob_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @charlie.id, 
-      sync_data: charlie_sync_data 
+    @bob_session.post api_v1_accept_sync_path, params: {
+      friend_id: @charlie.id,
+      sync_data: charlie_sync_data
     }
-    
+
     assert_equal 403, @bob_session.response.status
     response_data = JSON.parse(@bob_session.response.body)
-    assert_equal "Access denied: Can only sync with friends or friends of friends", response_data['error']
-    
+    assert_equal "Access denied: Can only sync with friends or friends of friends", response_data["error"]
+
     # Verify no malicious data was synced
     malicious_post = Post.find_by(content_encrypted: "Malicious post from Charlie")
     assert_nil malicious_post, "Malicious post should not be synced"
@@ -188,14 +188,14 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     }
 
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
-    @alice_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @bob.id, 
-      sync_data: malicious_sync_data 
+    @alice_session.post api_v1_accept_sync_path, params: {
+      friend_id: @bob.id,
+      sync_data: malicious_sync_data
     }
-    
+
     assert_equal 400, @alice_session.response.status
     response_data = JSON.parse(@alice_session.response.body)
-    assert_match(/SECURITY VIOLATION.*Private key data detected/, response_data['error'])
+    assert_match(/SECURITY VIOLATION.*Private key data detected/, response_data["error"])
   end
 
 
@@ -205,25 +205,25 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     # First, sync Alice's existing post to Bob's server
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
     @alice_session.get api_v1_sync_data_path, params: { friend_id: @bob.id }
-    
+
     alice_sync_data = JSON.parse(@alice_session.response.body)
-    
+
     @bob_session.post "/api/v1/login", params: { user_id: @bob.id }
-    @bob_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @alice.id, 
-      sync_data: alice_sync_data 
+    @bob_session.post api_v1_accept_sync_path, params: {
+      friend_id: @alice.id,
+      sync_data: alice_sync_data
     }
-    
+
     # Now try to sync the same content again
-    @bob_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @alice.id, 
-      sync_data: alice_sync_data 
+    @bob_session.post api_v1_accept_sync_path, params: {
+      friend_id: @alice.id,
+      sync_data: alice_sync_data
     }
-    
+
     assert_equal 200, @bob_session.response.status
     response_data = JSON.parse(@bob_session.response.body)
-    assert_equal 0, response_data['synced_posts_count']
-    assert_includes response_data['skipped_reasons'], 'Duplicate content detected'
+    assert_equal 0, response_data["synced_posts_count"]
+    assert_includes response_data["skipped_reasons"], "Duplicate content detected"
   end
 
   test "should validate sync data structure" do
@@ -234,14 +234,14 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
     }
 
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
-    @alice_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @bob.id, 
-      sync_data: invalid_sync_data 
+    @alice_session.post api_v1_accept_sync_path, params: {
+      friend_id: @bob.id,
+      sync_data: invalid_sync_data
     }
-    
+
     assert_equal 400, @alice_session.response.status
     response_data = JSON.parse(@alice_session.response.body)
-    assert_match(/Invalid sync data format/, response_data['error'])
+    assert_match(/Invalid sync data format/, response_data["error"])
   end
 
   test "should enforce bulk sync limits" do
@@ -254,36 +254,36 @@ class Api::V1::SyncControllerTest < ActionDispatch::IntegrationTest
         created_at: 1.hour.ago.iso8601
       }
     end
-    
+
     sync_data = {
       posts: large_posts_array,
       user_id: @bob.id
     }
 
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
-    @alice_session.post api_v1_accept_sync_path, params: { 
-      friend_id: @bob.id, 
-      sync_data: sync_data 
+    @alice_session.post api_v1_accept_sync_path, params: {
+      friend_id: @bob.id,
+      sync_data: sync_data
     }
-    
+
     assert_equal 400, @alice_session.response.status
     response_data = JSON.parse(@alice_session.response.body)
-    assert_match(/Too many posts in sync batch/, response_data['error'])
+    assert_match(/Too many posts in sync batch/, response_data["error"])
   end
 
   test "should return appropriate sync metadata" do
     @alice_session.post "/api/v1/login", params: { user_id: @alice.id }
     @alice_session.get api_v1_sync_data_path, params: { friend_id: @bob.id }
-    
+
     assert_equal 200, @alice_session.response.status
     response_data = JSON.parse(@alice_session.response.body)
-    
-    assert response_data.key?('sync_metadata')
-    metadata = response_data['sync_metadata']
-    
-    assert metadata.key?('last_sync_time')
-    assert metadata.key?('total_posts')
-    assert metadata.key?('user_public_key')
-    assert_equal @alice.id, metadata['user_id']
+
+    assert response_data.key?("sync_metadata")
+    metadata = response_data["sync_metadata"]
+
+    assert metadata.key?("last_sync_time")
+    assert metadata.key?("total_posts")
+    assert metadata.key?("user_public_key")
+    assert_equal @alice.id, metadata["user_id"]
   end
 end

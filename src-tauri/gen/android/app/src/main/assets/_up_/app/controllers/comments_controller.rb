@@ -1,5 +1,5 @@
 class CommentsController < ApplicationController
-  before_action :require_user
+  before_action :require_user_session
   before_action :set_post
 
   def create
@@ -32,12 +32,6 @@ class CommentsController < ApplicationController
 
   def comment_params
     params.require(:comment).permit(:content)
-  end
-
-  def require_user
-    unless current_user_session
-      redirect_to root_path, alert: "Please log in to comment"
-    end
   end
 
   def current_user_session

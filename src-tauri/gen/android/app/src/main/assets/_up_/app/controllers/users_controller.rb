@@ -1,5 +1,5 @@
 class UsersController < ApplicationController
-  before_action :set_user, only: [:show]
+  before_action :set_user, only: [ :show ]
 
   def index
     @users = User.all.includes(:peers)
@@ -17,11 +17,11 @@ class UsersController < ApplicationController
 
   def create
     @user = User.new(user_params)
-    
+
     # Validate password fields
     password = params[:password]
     confirm_password = params[:confirm_password]
-    
+
     if password.blank? || confirm_password.blank?
       @user.errors.add(:base, "Password and confirmation are required")
     elsif password.length < 8
@@ -29,7 +29,7 @@ class UsersController < ApplicationController
     elsif password != confirm_password
       @user.errors.add(:base, "Password and confirmation do not match")
     end
-    
+
     # Generate cryptographic keys from username + password (for local-only app)
     if @user.errors.empty?
       begin
@@ -49,11 +49,11 @@ class UsersController < ApplicationController
         @user.errors.add(:base, "Key generation failed. Please try again.")
       end
     end
-    
+
     if @user.errors.empty? && @user.save
       # Set this user as the current session user
       session[:user_id] = @user.id
-      redirect_to dashboard_users_path, notice: 'Welcome to Cipher! Your account has been created successfully.'
+      redirect_to dashboard_users_path, notice: "Welcome to Cipher! Your account has been created successfully."
     else
       Rails.logger.error "User creation failed: #{@user.errors.full_messages}"
       render :new, status: :unprocessable_content
@@ -62,7 +62,7 @@ class UsersController < ApplicationController
 
   def export_keys
     @user = current_user_session
-    return redirect_to root_path, alert: 'Please log in first' unless @user
+    redirect_to root_path, alert: "Please log in first" unless @user
     # Show the backup instructions page
   end
 
@@ -74,33 +74,33 @@ class UsersController < ApplicationController
   def host_dashboard
     # Blockchain host dashboard view
     @current_user = current_user_session
-    render 'host_dashboard'
+    render "host_dashboard"
   end
 
   def local_hosting
     # Local hosting management page
     @current_user = current_user_session
-    render 'local_hosting'
+    render "local_hosting"
   end
 
   def p2p_status
     # API endpoint to get real-time P2P connection status
     @current_user = current_user_session
-    return render json: { error: 'Unauthorized' }, status: :unauthorized unless @current_user
+    return render json: { error: "Unauthorized" }, status: :unauthorized unless @current_user
 
     # Check ActionCable connection status
     cable_connected = ActionCable.server.connections.any?
 
     # Count active peers
-    active_peers = @current_user.peers.where('last_seen > ?', 5.minutes.ago).count
+    active_peers = @current_user.peers.where("last_seen > ?", 5.minutes.ago).count
 
     # Calculate connection status
     status = if cable_connected && active_peers > 0
-      'Connected'
+      "Connected"
     elsif cable_connected
-      'Online (No peers)'
+      "Online (No peers)"
     else
-      'Disconnected'
+      "Disconnected"
     end
 
     render json: {
@@ -114,14 +114,18 @@ class UsersController < ApplicationController
   def friends
     # Friend management page
     @current_user = current_user_session
-    render 'friends'
+    unless @current_user
+      require_user_session
+      return
+    end
+    render "friends"
   end
 
   def dashboard
     # User dashboard showing their keys and getting started guide
     @current_user = current_user_session
-    return redirect_to root_path, alert: 'Please log in first' unless @current_user
-    render 'dashboard'
+    return redirect_to root_path, alert: "Please log in first" unless @current_user
+    render "dashboard"
   end
 
   private

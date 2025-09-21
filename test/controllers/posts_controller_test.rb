@@ -7,7 +7,7 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
       public_key: "test_public_key_12345"
     )
     @other_user = User.create!(
-      username: "otheruser", 
+      username: "otheruser",
       public_key: "other_public_key_67890"
     )
     @post = @user.posts.create!(content: "Test post content")
@@ -67,10 +67,10 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should show user's posts in index" do
     login_as(@user)
     other_post = @other_user.posts.create!(content: "Other user's post")
-    
+
     get posts_path
     assert_response :success
-    
+
     # Should show user's post
     assert_match @post.content, response.body
     # Should not show other user's post
@@ -86,14 +86,14 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
 
   test "should create post with valid content" do
     login_as(@user)
-    
+
     assert_difference "Post.count", 1 do
       post posts_path, params: { post: { content: "New test post" } }
     end
-    
+
     assert_redirected_to root_path
     assert_equal "Post created successfully!", flash[:notice]
-    
+
     created_post = Post.last
     assert_equal "New test post", created_post.content
     assert_equal @user, created_post.user
@@ -101,11 +101,11 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
 
   test "should not create post with empty content and no attachments" do
     login_as(@user)
-    
+
     assert_no_difference "Post.count" do
       post posts_path, params: { post: { content: "" } }
     end
-    
+
     assert_response :unprocessable_content
     assert_select ".error", /Post must have either content or attachments/
   end
@@ -113,14 +113,14 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should create post with attachments but no content" do
     login_as(@user)
     file = fixture_file_upload("test_file.txt", "text/plain")
-    
+
     assert_difference "Post.count", 1 do
-      post posts_path, params: { 
-        post: { content: "" }, 
-        attachments: [file] 
+      post posts_path, params: {
+        post: { content: "" },
+        attachments: [ file ]
       }
     end
-    
+
     created_post = Post.last
     assert_equal 1, created_post.attachments.count
     assert_equal "test_file.txt", created_post.attachments.first.filename
@@ -136,7 +136,7 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should not show other user's post" do
     login_as(@user)
     other_post = @other_user.posts.create!(content: "Private post")
-    
+
     get post_path(other_post)
     assert_redirected_to root_path
     assert_equal "Access denied", flash[:alert]
@@ -153,7 +153,7 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should not get edit for other user's post" do
     login_as(@user)
     other_post = @other_user.posts.create!(content: "Other post")
-    
+
     get edit_post_path(other_post)
     assert_redirected_to root_path
     assert_equal "Access denied", flash[:alert]
@@ -161,23 +161,23 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
 
   test "should update own post with valid content" do
     login_as(@user)
-    
+
     patch post_path(@post), params: { post: { content: "Updated content" } }
-    
+
     assert_redirected_to post_path(@post)
     assert_equal "Post updated successfully!", flash[:notice]
-    
+
     @post.reload
     assert_equal "Updated content", @post.content
   end
 
   test "should not update post with invalid content" do
     login_as(@user)
-    
+
     patch post_path(@post), params: { post: { content: "" } }
-    
+
     assert_response :unprocessable_content
-    
+
     @post.reload
     assert_not_equal "", @post.content
   end
@@ -186,22 +186,22 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
     login_as(@user)
     other_post = @other_user.posts.create!(content: "Other post")
     original_content = other_post.content
-    
+
     patch post_path(other_post), params: { post: { content: "Hacked content" } }
     assert_redirected_to root_path
     assert_equal "Access denied", flash[:alert]
-    
+
     other_post.reload
     assert_equal original_content, other_post.content
   end
 
   test "should destroy own post" do
     login_as(@user)
-    
+
     assert_difference "Post.count", -1 do
       delete post_path(@post)
     end
-    
+
     assert_redirected_to root_path
     assert_equal "Post deleted successfully!", flash[:notice]
   end
@@ -209,11 +209,11 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should not destroy other user's post" do
     login_as(@user)
     other_post = @other_user.posts.create!(content: "Other post")
-    
+
     assert_no_difference "Post.count" do
       delete post_path(other_post)
     end
-    
+
     assert_redirected_to root_path
     assert_equal "Access denied", flash[:alert]
   end
@@ -222,16 +222,16 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
     login_as(@user)
     file1 = fixture_file_upload("test_file.txt", "text/plain")
     file2 = fixture_file_upload("test_image.jpg", "image/jpeg")
-    
+
     assert_difference "Post.count", 1 do
       assert_difference "Attachment.count", 2 do
-        post posts_path, params: { 
-          post: { content: "Post with multiple attachments" }, 
-          attachments: [file1, file2] 
+        post posts_path, params: {
+          post: { content: "Post with multiple attachments" },
+          attachments: [ file1, file2 ]
         }
       end
     end
-    
+
     created_post = Post.last
     assert_equal 2, created_post.attachments.count
     filenames = created_post.attachments.pluck(:filename)
@@ -242,11 +242,11 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should set post timestamp automatically" do
     login_as(@user)
     freeze_time = Time.current
-    
+
     travel_to freeze_time do
       post posts_path, params: { post: { content: "Timestamped post" } }
     end
-    
+
     created_post = Post.last
     assert_not_nil created_post.timestamp
     assert_in_delta freeze_time.to_f, created_post.timestamp.to_f, 1.0
@@ -254,9 +254,9 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
 
   test "should generate signature automatically" do
     login_as(@user)
-    
+
     post posts_path, params: { post: { content: "Signed post" } }
-    
+
     created_post = Post.last
     assert_not_nil created_post.signature
     assert_instance_of String, created_post.signature
@@ -265,9 +265,9 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   test "should encrypt content automatically" do
     login_as(@user)
     content = "Secret message"
-    
+
     post posts_path, params: { post: { content: content } }
-    
+
     created_post = Post.last
     assert_equal content, created_post.content # Should decrypt for display
     assert_not_nil created_post.content_encrypted # Should be encrypted in DB
@@ -278,8 +278,8 @@ class PostsControllerTest < ActionDispatch::IntegrationTest
   def login_as(user)
     # For Rails integration tests, we can't directly access session
     # Instead, we'll use the login API endpoint
-    post "/api/v1/login", 
-         params: { username: user.username, public_key: user.public_key }, 
+    post "/api/v1/login",
+         params: { username: user.username, public_key: user.public_key },
          as: :json
     assert_response :success
   end

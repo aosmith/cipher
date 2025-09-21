@@ -62,9 +62,7 @@
           <div class="status-icon">🌐</div>
           <div class="status-info">
             <div class="status-label">P2P Network</div>
-            <%= turbo_frame_tag "p2p-status" do %>
-              <div id="p2p-status" class="status-value <%= p2p_status_css_class %>"><%= p2p_connection_status %></div>
-            <% end %>
+            <div id="p2p-status" class="status-value <%= p2p_status_css_class %>"><%= p2p_connection_status %></div>
           </div>
         </div>
       </div>
@@ -236,5 +234,4 @@
     </div>
   </div>
 </div>
-
 

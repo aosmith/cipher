@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2025_09_13_121127) do
+ActiveRecord::Schema[8.0].define(version: 2025_09_13_163000) do
   create_table "attachment_shares", force: :cascade do |t|
     t.integer "attachment_id", null: false
     t.integer "user_id", null: false
@@ -138,12 +138,12 @@ ActiveRecord::Schema[8.0].define(version: 2025_09_13_121127) do
     t.string "display_name"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
-    t.text "private_key"
     t.string "email"
     t.datetime "email_verified_at"
     t.string "verification_code"
     t.datetime "verification_code_expires_at"
     t.integer "content_size_limit", default: 10485760
+    t.string "theme", default: "deep-blue"
     t.index ["email"], name: "index_users_on_email", unique: true
     t.index ["verification_code"], name: "index_users_on_verification_code"
   end

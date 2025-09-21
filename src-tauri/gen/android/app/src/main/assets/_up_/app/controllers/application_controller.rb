@@ -5,9 +5,9 @@ class ApplicationController < ActionController::Base
 
   # CSRF protection for all controllers
   protect_from_forgery with: :exception
-  
+
   protected
-  
+
   def current_user_session
     # Test environment: also check for test_user_id cookie for system tests
     if Rails.env.test? && cookies[:test_user_id].present?
@@ -16,6 +16,15 @@ class ApplicationController < ActionController::Base
       @current_user_session ||= User.find_by(id: session[:user_id])
     end
   end
-  
+
   helper_method :current_user_session
+
+  def require_user_session
+    return if current_user_session
+
+    message = "Session expired. Please sign in again."
+    session.delete(:user_id)
+    cookies.delete(:test_user_id)
+    redirect_to root_path, alert: message
+  end
 end

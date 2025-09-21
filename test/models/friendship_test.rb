@@ -4,7 +4,7 @@ require "base64"
 class FriendshipTest < ActiveSupport::TestCase
   setup do
     ApplicationRecord.connection.disable_referential_integrity do
-      [SyncMessage, P2pConnection, Peer, Friendship, AttachmentShare, Attachment, Comment, Post, User].each do |model|
+      [ SyncMessage, P2pConnection, Peer, Friendship, AttachmentShare, Attachment, Comment, Post, User ].each do |model|
         model.delete_all if defined?(model)
       end
     end

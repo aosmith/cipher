@@ -55,12 +55,11 @@ class AndroidAppTest < ApplicationSystemTestCase
     content = File.read(mobile_rs)
     refute_includes content, "http://localhost"
     assert_includes content, "mobile_entry_point"
-    assert_includes content, "bin/rails"
-    assert_includes content, "127.0.0.1"
+    assert_includes content, "run_rails.sh"
   end
 
   test "static assets avoid localhost references" do
-    [MOBILE_INDEX, APP_HTML].each do |file_path|
+    [ MOBILE_INDEX, APP_HTML ].each do |file_path|
       next unless File.exist?(file_path)
       content = File.read(file_path)
       refute_includes content, "localhost", "#{file_path.basename} should not reference localhost"

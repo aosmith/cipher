@@ -1,7 +1,16 @@
 require "test_helper"
 
 class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
-  driven_by :rack_test
+  DRIVER = ENV.fetch("SYSTEM_TEST_DRIVER", "selenium_chrome").to_sym
+
+  case DRIVER
+  when :selenium_chrome
+    driven_by :selenium, using: :chrome, screen_size: [1400, 900]
+  when :selenium_chrome_headless
+    driven_by :selenium, using: :chrome, screen_size: [1400, 900], options: { args: %w[headless disable-gpu no-sandbox disable-dev-shm-usage] }
+  else
+    driven_by DRIVER
+  end
 
   setup do
     Capybara.default_max_wait_time = 5
@@ -22,7 +31,7 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
 
   # Helper to ensure user is logged out
   def logout_user
-    page.driver.post("/api/v1/logout")
+    visit "/api/v1/logout?test_logout=true"
     visit root_path
   end
 end

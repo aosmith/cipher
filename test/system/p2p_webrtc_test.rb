@@ -3,7 +3,7 @@ require "application_system_test_case"
 class P2pWebrtcTest < ApplicationSystemTestCase
   setup do
     ApplicationRecord.connection.disable_referential_integrity do
-      [Comment, Post, Friendship, User].each(&:delete_all)
+      [ Comment, Post, Friendship, User ].each(&:delete_all)
     end
 
     @alice = User.create!(username: "alice", display_name: "Alice", public_key: "alice_key")

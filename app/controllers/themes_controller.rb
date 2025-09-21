@@ -1,10 +1,13 @@
 class ThemesController < ApplicationController
   def toggle
-    current_theme = session[:theme] || cookies[:theme] || 'dark'
-    new_theme = current_theme == 'dark' ? 'light' : 'dark'
+    current_theme = cookies[:theme]
+    new_theme = current_theme == "light" ? "dark" : "light"
 
-    session[:theme] = new_theme
-    cookies[:theme] = { value: new_theme, expires: 1.year.from_now }
+    cookies[:theme] = {
+      value: new_theme,
+      expires: 1.year.from_now,
+      same_site: :lax
+    }
 
     redirect_back fallback_location: root_path
   end

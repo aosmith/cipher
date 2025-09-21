@@ -11,32 +11,32 @@ class P2pSimpleTest < ApplicationSystemTestCase
     Peer.destroy_all
     Post.destroy_all
     User.destroy_all
-    
+
     # Create two test users
     @alice = User.create!(
-      username: "alice_webrtc", 
+      username: "alice_webrtc",
       display_name: "Alice WebRTC",
       public_key: Base64.strict_encode64("alice_webrtc_key_123456789012345678901234")
     )
-    
+
     @bob = User.create!(
-      username: "bob_webrtc", 
-      display_name: "Bob WebRTC", 
+      username: "bob_webrtc",
+      display_name: "Bob WebRTC",
       public_key: Base64.strict_encode64("bob_webrtc_key_987654321098765432109876")
     )
-    
+
     # Make them friends
-    Friendship.create!(requester: @alice, addressee: @bob, status: 'accepted')
+    Friendship.create!(requester: @alice, addressee: @bob, status: "accepted")
   end
 
   test "hosting dashboard shows network status" do
     using_session "alice" do
       login_as @alice
       visit root_path
-      
+
       # Verify user is logged in
       assert_text "Hi, alice_webrtc"
-      
+
       click_on "Local Hosting"
       assert_text "Local Hosting"
       assert_selector "#p2p-status", wait: 5
@@ -73,11 +73,11 @@ class P2pSimpleTest < ApplicationSystemTestCase
     using_session "alice" do
       login_as @alice
       visit local_hosting_users_path
-      
+
       # Verify hosting page loads correctly
       assert_text "Local Hosting"
       assert_text "Hosting Status"
-      
+
       assert_css ".hosting-overview"
       assert_css "#p2p-status"
     end
@@ -87,28 +87,28 @@ class P2pSimpleTest < ApplicationSystemTestCase
     using_session "alice" do
       login_as @alice
       visit local_hosting_users_path
-      
+
       assert_text "Local Hosting"
       assert_css "#p2p-status"
 
       alice_peer = @alice.peers.create!(
-        address: '127.0.0.1',
+        address: "127.0.0.1",
         port: 9000,
         public_key: @bob.public_key,
         last_seen: Time.current
       )
       assert alice_peer.persisted?, "Alice should be able to create peer connection record"
     end
-    
+
     using_session "bob" do
       login_as @bob
       visit local_hosting_users_path
-      
+
       assert_text "Local Hosting"
       assert_css "#p2p-status"
 
       bob_peer = @bob.peers.create!(
-        address: '127.0.0.1',
+        address: "127.0.0.1",
         port: 9001,
         public_key: @alice.public_key,
         last_seen: Time.current
@@ -120,5 +120,4 @@ class P2pSimpleTest < ApplicationSystemTestCase
     assert_equal 1, @alice.peers.count, "Alice should have one peer record"
     assert_equal 1, @bob.peers.count, "Bob should have one peer record"
   end
-
 end

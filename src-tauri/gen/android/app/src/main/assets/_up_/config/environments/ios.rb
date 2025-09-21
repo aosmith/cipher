@@ -11,13 +11,13 @@ Rails.application.configure do
 
   # Enable/disable caching. By default caching is disabled.
   # Run rails dev:cache to toggle caching.
-  if Rails.root.join('tmp/caching-dev.txt').exist?
+  if Rails.root.join("tmp/caching-dev.txt").exist?
     config.action_controller.perform_caching = true
     config.action_controller.enable_fragment_cache_logging = true
 
     config.cache_store = :memory_store
     config.public_file_server.headers = {
-      'Cache-Control' => 'public, max-age=172800'
+      "Cache-Control" => "public, max-age=172800"
     }
   else
     config.action_controller.perform_caching = false
@@ -58,9 +58,9 @@ Rails.application.configure do
 
   # Mobile-specific optimizations
   config.force_ssl = false
-  
+
   # Enable serving of images, stylesheets, and JavaScripts from an asset server
-  config.asset_host = 'http://localhost:3001'
+  config.asset_host = "http://localhost:3001"
 
   # Raises error for missing translations.
   # config.i18n.raise_on_missing_translations = true
@@ -76,23 +76,23 @@ Rails.application.configure do
   config.hosts << "localhost"
   config.hosts << "127.0.0.1"
   # Web console not needed for mobile apps
-  
+
   # Disable logging to save disk space on mobile devices
-  config.logger = ActiveSupport::Logger.new('/dev/null')
+  config.logger = ActiveSupport::Logger.new("/dev/null")
   config.log_level = :fatal
   config.active_record.verbose_query_logs = false
-  
+
   # Allow all parameter
   config.action_controller.allow_forgery_protection = false
-  
+
   # Mobile environment identifier
-  config.mobile_platform = 'ios'
+  config.mobile_platform = "ios"
 end
 
 # Make Rails.env.ios? return true
 module Rails
   module_function
-  
+
   def env
     @_env ||= ActiveSupport::StringInquirer.new(
       ENV["RAILS_ENV"].presence || ENV["RACK_ENV"].presence || "development"
@@ -103,13 +103,13 @@ end
 # Add mobile environment methods to Rails environment
 ActiveSupport::StringInquirer.prepend(Module.new do
   def ios?
-    self == 'ios'
+    self == "ios"
   end
-  
+
   def android?
-    self == 'android'
+    self == "android"
   end
-  
+
   def mobile?
     ios? || android?
   end

@@ -1,2 +1,0 @@
-module P2pConnectionsHelper
-end

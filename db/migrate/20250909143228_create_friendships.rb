@@ -7,9 +7,9 @@ class CreateFriendships < ActiveRecord::Migration[8.0]
 
       t.timestamps
     end
-    
-    add_index :friendships, [:requester_id, :addressee_id], unique: true
-    add_index :friendships, [:addressee_id, :requester_id]
+
+    add_index :friendships, [ :requester_id, :addressee_id ], unique: true
+    add_index :friendships, [ :addressee_id, :requester_id ]
     add_index :friendships, :status
   end
 end

@@ -25,29 +25,7 @@
 
       <div class="verification-section">
         <h4>🔍 Verify Your Backup</h4>
-        <p>To make sure you remember your password correctly, enter it below to verify your identity:</p>
-        
-        <form id="verify-form">
-          <div class="form-group">
-            <%= label_tag :verify_password, "Enter Your Master Password", class: "form-label" %>
-            <%= password_field_tag :verify_password, "", class: "form-control", 
-                                   placeholder: "Enter your master password",
-                                   id: "verify-password" %>
-          </div>
-          
-          <div class="form-actions">
-            <button type="submit" class="btn btn-secondary">🔍 Verify Identity</button>
-          </div>
-        </form>
-        
-        <div id="verification-result" style="display: none;">
-          <div id="verification-success" class="success-message" style="display: none;">
-            <strong>✅ Verified!</strong> Your password correctly generates your public key.
-          </div>
-          <div id="verification-failure" class="error-message" style="display: none;">
-            <strong>❌ Incorrect!</strong> This password does not match your identity.
-          </div>
-        </div>
+        <p>Use the Rails console on your server (<code>rails runner</code>) to regenerate your key pair with the remembered password. The browser no longer performs client-side verification.</p>
       </div>
     </div>
 
@@ -175,50 +153,3 @@
   color: #856404;
 }
 </style>
-
-<script type="module">
-import CipherCrypto from 'crypto_utils';
-
-document.addEventListener('DOMContentLoaded', function() {
-  const verifyForm = document.getElementById('verify-form');
-  const verifyPasswordField = document.getElementById('verify-password');
-  const verificationResult = document.getElementById('verification-result');
-  const verificationSuccess = document.getElementById('verification-success');
-  const verificationFailure = document.getElementById('verification-failure');
-  
-  const crypto = new CipherCrypto();
-  const username = '<%= @user.username %>';
-  const expectedPublicKey = '<%= @user.public_key %>';
-  
-  verifyForm.addEventListener('submit', async function(event) {
-    event.preventDefault();
-    
-    const password = verifyPasswordField.value;
-    if (!password) {
-      alert('Please enter your master password');
-      return;
-    }
-    
-    try {
-      // Generate key pair from username and password
-      const keyPair = await crypto.createKeyPair(username, password);
-      
-      // Compare with stored public key
-      if (keyPair.publicKeyBase64 === expectedPublicKey) {
-        verificationSuccess.style.display = 'block';
-        verificationFailure.style.display = 'none';
-        verificationResult.style.display = 'block';
-      } else {
-        verificationSuccess.style.display = 'none';
-        verificationFailure.style.display = 'block';
-        verificationResult.style.display = 'block';
-      }
-    } catch (error) {
-      console.error('Verification failed:', error);
-      verificationSuccess.style.display = 'none';
-      verificationFailure.style.display = 'block';
-      verificationResult.style.display = 'block';
-    }
-  });
-});
-</script>

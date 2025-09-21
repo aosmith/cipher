@@ -7,7 +7,7 @@
   <div class="form-container auth-form-grid">
     <div class="form-section card">
       <div class="card-body">
-        <%= form_with model: @user, class: "user-form" do |form| %>
+        <%= form_with model: @user, html: { class: "user-form", novalidate: true } do |form| %>
         <% if @user.errors.any? %>
           <div class="error-messages">
             <h3><%= pluralize(@user.errors.count, "error") %> prohibited this user from being saved:</h3>

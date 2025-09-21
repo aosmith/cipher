@@ -1,0 +1,1 @@
+- Policy: When asked to "run all tests" run the full test suite (`bundle exec bin/rails test`), browser/system tests (`bundle exec bin/rails test test/system`), static analysis (`bundle exec bin/rubocop`), security (`bundle exec bin/brakeman`), and any project-specific scripts if present (e.g., `npm run`, `cargo test`).

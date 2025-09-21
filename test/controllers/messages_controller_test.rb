@@ -24,8 +24,8 @@ class MessagesControllerTest < ActionController::TestCase
   end
 
   test "should create message" do
-    assert_difference('Message.count', 1) do
-      post :create, params: { 
+    assert_difference("Message.count", 1) do
+      post :create, params: {
         message: { content: "Test message" },
         user_id: @bob.id
       }
@@ -35,8 +35,8 @@ class MessagesControllerTest < ActionController::TestCase
 
   test "should not create message without login" do
     logout
-    assert_no_difference('Message.count') do
-      post :create, params: { 
+    assert_no_difference("Message.count") do
+      post :create, params: {
         message: { content: "Test message" },
         user_id: @bob.id
       }
@@ -46,14 +46,14 @@ class MessagesControllerTest < ActionController::TestCase
 
   test "should destroy own message" do
     message = Message.create!(sender: @alice, recipient: @bob, content: "Test")
-    assert_difference('Message.count', -1) do
+    assert_difference("Message.count", -1) do
       delete :destroy, params: { id: message.id }
     end
   end
 
   test "should not destroy other user's message" do
     message = Message.create!(sender: @bob, recipient: @alice, content: "Test")
-    assert_no_difference('Message.count') do
+    assert_no_difference("Message.count") do
       delete :destroy, params: { id: message.id }
     end
   end

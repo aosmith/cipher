@@ -1,21 +1,22 @@
 class Api::V1::UsersController < ApplicationController
   protect_from_forgery with: :null_session
-  before_action :authenticate_user, only: [:current_user_with_private_key]
+  before_action :authenticate_user, only: [ :current_user_with_private_key ]
 
   def current_user_with_private_key
-    # Allow user to get their own private key over localhost connection
-    render json: serialize_user_safely(current_user, include_own_private_key: true)
+    render json: {
+      error: "Private keys are managed entirely on the client. Export them from your device backups."
+    }, status: :gone
   end
 
   def by_public_key
     public_key = params[:public_key]
-    
+
     if public_key.blank?
-      return render json: { error: 'public_key required' }, status: 400
+      return render json: { error: "public_key required" }, status: 400
     end
-    
+
     user = User.find_by(public_key: public_key)
-    
+
     if user
       render json: {
         id: user.id,
@@ -25,7 +26,7 @@ class Api::V1::UsersController < ApplicationController
         created_at: user.created_at
       }
     else
-      render json: { error: 'User not found' }, status: 404
+      render json: { error: "User not found" }, status: 404
     end
   end
 
@@ -34,9 +35,9 @@ class Api::V1::UsersController < ApplicationController
   def authenticate_user
     user_id = session[:user_id]
     @current_user = User.find_by(id: user_id) if user_id
-    
+
     unless @current_user
-      render json: { error: 'Authentication required' }, status: 401
+      render json: { error: "Authentication required" }, status: 401
     end
   end
 

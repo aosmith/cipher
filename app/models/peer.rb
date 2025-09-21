@@ -5,8 +5,8 @@ class Peer < ApplicationRecord
   validates :address, presence: true
   validates :port, presence: true, numericality: { greater_than: 0, less_than: 65536 }
 
-  scope :active, -> { where('last_seen > ?', 30.minutes.ago) }
-  scope :recently_seen, -> { where('last_seen > ?', 24.hours.ago) }
+  scope :active, -> { where("last_seen > ?", 30.minutes.ago) }
+  scope :recently_seen, -> { where("last_seen > ?", 24.hours.ago) }
 
   def update_last_seen!
     update!(last_seen: Time.current)

@@ -27,13 +27,13 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
       password: "securepassword123",
       confirm_password: "securepassword123"
     }
-    
+
     assert_difference "User.count", 1 do
       post users_url, params: user_params
     end
-    
+
     assert_redirected_to dashboard_users_path
-    
+
     # Verify the user was created with a generated public key
     user = User.find_by(username: "newuser")
     assert_not_nil user

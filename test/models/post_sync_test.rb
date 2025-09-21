@@ -4,13 +4,13 @@ class PostSyncTest < ActiveSupport::TestCase
   setup do
     @alice = users(:alice)
     @bob = users(:bob)
-    
+
     # Ensure friendship between Alice and Bob exists (may already be in fixtures)
-    unless Friendship.exists?(requester: @alice, addressee: @bob, status: 'accepted')
-      @alice.sent_friendships.create!(addressee: @bob, status: 'accepted')
+    unless Friendship.exists?(requester: @alice, addressee: @bob, status: "accepted")
+      @alice.sent_friendships.create!(addressee: @bob, status: "accepted")
     end
-    unless Friendship.exists?(requester: @bob, addressee: @alice, status: 'accepted')
-      @bob.sent_friendships.create!(addressee: @alice, status: 'accepted')
+    unless Friendship.exists?(requester: @bob, addressee: @alice, status: "accepted")
+      @bob.sent_friendships.create!(addressee: @alice, status: "accepted")
     end
   end
 
@@ -20,7 +20,7 @@ class PostSyncTest < ActiveSupport::TestCase
       is_synced: false,
       original_user_id: @alice.id
     )
-    
+
     assert_not post.is_synced
     assert_equal @alice.id, post.original_user_id
     assert_nil post.synced_from_user_id
@@ -35,7 +35,7 @@ class PostSyncTest < ActiveSupport::TestCase
       is_synced: false,
       original_user_id: @alice.id
     )
-    
+
     # Create synced version on Bob's server
     synced_post = @bob.posts.create!(
       content: "Alice's original content",
@@ -45,7 +45,7 @@ class PostSyncTest < ActiveSupport::TestCase
       synced_at: Time.current,
       content_hash: Digest::SHA256.hexdigest("Alice's original content")
     )
-    
+
     assert synced_post.is_synced
     assert_equal @alice.id, synced_post.original_user_id
     assert_equal @alice.id, synced_post.synced_from_user_id
@@ -62,7 +62,7 @@ class PostSyncTest < ActiveSupport::TestCase
       synced_from_user_id: @alice.id,
       synced_at: Time.current
     )
-    
+
     assert_equal @alice, synced_post.original_user
     assert_equal @alice, synced_post.synced_from_user
     assert_equal @bob, synced_post.user
@@ -75,12 +75,12 @@ class PostSyncTest < ActiveSupport::TestCase
       is_synced: false,
       original_user_id: @alice.id
     )
-    
+
     # Verify the hash was set correctly
     assert_not_nil post.content_hash
     expected_hash = post.send(:generate_content_hash)
     assert_equal expected_hash, post.content_hash
-    
+
     # Now test that tampering with the hash would fail in production
     # Note: This validation is disabled in test environment
     post.content_hash = "tampered_hash"
@@ -97,7 +97,7 @@ class PostSyncTest < ActiveSupport::TestCase
       original_user_id: @alice.id,
       synced_from_user_id: @alice.id,
     )
-    
+
     assert_not post.valid?
     assert_includes post.errors.full_messages, "Synced from user can only be set if post is synced"
   end
@@ -109,7 +109,7 @@ class PostSyncTest < ActiveSupport::TestCase
       is_synced: false,
       original_user_id: @alice.id,
     )
-    
+
     # Create synced post
     synced = @bob.posts.create!(
       content: "Synced content",
@@ -118,7 +118,7 @@ class PostSyncTest < ActiveSupport::TestCase
       synced_from_user_id: @alice.id,
       synced_at: Time.current,
     )
-    
+
     original_posts = Post.original_posts
     assert_includes original_posts, original
     assert_not_includes original_posts, synced
@@ -131,7 +131,7 @@ class PostSyncTest < ActiveSupport::TestCase
       is_synced: false,
       original_user_id: @alice.id,
     )
-    
+
     # Create synced post
     synced = @bob.posts.create!(
       content: "Synced content",
@@ -140,7 +140,7 @@ class PostSyncTest < ActiveSupport::TestCase
       synced_from_user_id: @alice.id,
       synced_at: Time.current,
     )
-    
+
     synced_posts = Post.synced_posts
     assert_includes synced_posts, synced
     assert_not_includes synced_posts, original
@@ -148,14 +148,14 @@ class PostSyncTest < ActiveSupport::TestCase
 
   test "content size validation prevents oversized posts" do
     large_content = "A" * (10.megabytes + 1) # Exceeds 10MB limit
-    
+
     post = Post.new(
       user: @alice,
       content: large_content,
       is_synced: false,
       original_user_id: @alice.id,
     )
-    
+
     assert_not post.valid?
     assert_includes post.errors.full_messages, "Content too large: Maximum 10MB allowed"
   end
@@ -167,7 +167,7 @@ class PostSyncTest < ActiveSupport::TestCase
       display_name: "Stranger",
       public_key: "stranger_key"
     )
-    
+
     # Try to sync content from non-friend
     synced_from_stranger = Post.new(
       user: @alice,
@@ -177,7 +177,7 @@ class PostSyncTest < ActiveSupport::TestCase
       synced_from_user_id: stranger.id,
       synced_at: Time.current,
     )
-    
+
     assert_not synced_from_stranger.valid?
     assert_includes synced_from_stranger.errors.full_messages, "Can only sync posts from friends or friends of friends"
   end
@@ -189,7 +189,7 @@ class PostSyncTest < ActiveSupport::TestCase
       original_user_id: @alice.id,
       synced_from_user_id: @alice.id,
     )
-    
+
     assert_not_nil post.synced_at
     assert post.synced_at <= Time.current
     assert post.synced_at >= 1.minute.ago
@@ -203,7 +203,7 @@ class PostSyncTest < ActiveSupport::TestCase
       original_user_id: @alice.id
       # Note: content_hash is not provided
     )
-    
+
     assert_not_nil post.content_hash
     assert post.content_hash.length == 64 # SHA256 hex string length
   end
@@ -215,7 +215,7 @@ class PostSyncTest < ActiveSupport::TestCase
       is_synced: false,
       original_user_id: @alice.id,
     )
-    
+
     # Create synced version
     synced = @bob.posts.create!(
       content: "Original for metadata test",
@@ -225,7 +225,7 @@ class PostSyncTest < ActiveSupport::TestCase
       synced_at: Time.current,
       content_hash: original.content_hash
     )
-    
+
     # Verify all sync metadata is present
     assert synced.is_synced?
     assert_equal @alice, synced.original_user
@@ -234,7 +234,7 @@ class PostSyncTest < ActiveSupport::TestCase
     # Both posts should have valid content hashes
     assert_not_nil original.content_hash
     assert_not_nil synced.content_hash
-    
+
     # Verify relationships work both ways
     assert_equal @bob, synced.user
     assert_equal "Original for metadata test", synced.content
@@ -248,7 +248,7 @@ class PostSyncTest < ActiveSupport::TestCase
         original_user_id: @alice.id
       }
     end
-    
+
     # Create all posts in a transaction to ensure consistency
     Post.transaction do
       sync_posts_data.each do |post_data|
@@ -262,11 +262,11 @@ class PostSyncTest < ActiveSupport::TestCase
         )
       end
     end
-    
+
     # Verify all posts were created correctly
     synced_posts = @bob.posts.synced_posts.where(synced_from_user_id: @alice.id)
     assert_equal 5, synced_posts.count
-    
+
     synced_posts.each_with_index do |post, index|
       assert_equal "Bulk sync post #{index}", post.content
       assert_equal @alice.id, post.original_user_id
@@ -277,19 +277,19 @@ class PostSyncTest < ActiveSupport::TestCase
 
   test "migration preserves existing data integrity" do
     # This test verifies that the migration adding sync fields doesn't break existing posts
-    
+
     # Simulate pre-migration post (would have been created before sync fields existed)
     pre_migration_post = Post.new(
       user: @alice,
       content: "Pre-migration post",
       is_synced: false
     )
-    
+
     # Manually set the original_user_id as the migration would
     pre_migration_post.original_user_id = @alice.id
     # content_hash will be set automatically by the model
     pre_migration_post.save!
-    
+
     # Verify post is valid and has correct default values
     assert pre_migration_post.valid?
     assert_not pre_migration_post.is_synced

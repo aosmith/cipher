@@ -118,4 +118,26 @@ The mobile build system is **production-ready** with:
 4. **Test on simulators/emulators**
 5. **Deploy to real devices via sideloading**
 
+## 🛠️ Bundled Ruby Runtime (Android)
+
+Android builds ship with an embedded Ruby runtime bundle so the Rails stack runs locally on-device. Rebuild the runtime bundle any time gems or migrations change:
+
+```bash
+# 1. Package MRI + gems + app into src-tauri/gen/android/runtime
+NDK_HOME=$HOME/Library/Android/sdk/ndk \
+  ANDROID_ARCH=arm64-v8a \
+  scripts/package-ruby-android.sh
+
+# 2. Build the APK (runtime assets are picked up automatically)
+ANDROID_HOME=$HOME/Library/Android/sdk \
+  NDK_HOME=$HOME/Library/Android/sdk/ndk \
+  cargo tauri android build --apk
+```
+
+The `run_rails.sh` bootstrap inside the bundle starts Rails at `127.0.0.1:3001`, and the mobile entrypoint copies the runtime into the app cache on first launch. Make sure `zipalign` and `apksigner` from the Android build-tools are on PATH when you package the APK.
+
 The infrastructure is complete and ready for mobile app development! 🎉
+
+## ⚠️ Verification
+
+Browser system tests (Capybara/Selenium) cover the Rails UI and flows locally, but the Tauri Android/iOS clients run inside their own embedded Ruby runtime bundle and WebView sandbox. After packaging the runtime you must sideload the APK and smoke test on-device to catch runtime, file-path, or permission issues that don’t show up in macOS browser tests.
