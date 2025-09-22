@@ -1,10 +1,10 @@
 use std::{
     fs, io,
     path::Path,
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
     io::prelude::*,
 };
-use tauri::Manager;
+use tauri::{Manager, Url};
 
 #[cfg(target_os = "android")]
 use std::os::unix::fs::PermissionsExt;
@@ -218,7 +218,7 @@ fn signin_form_response() -> String {
     </html>".to_string()
 }
 
-fn serve_asset_response(request_line: &str) -> String {
+fn serve_asset_response(_request_line: &str) -> String {
     "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAsset not found"
         .to_string()
 }
@@ -497,13 +497,15 @@ pub fn main() {
                 Ok(()) => {
                     println!("Successfully started local embedded server");
 
-                    // Wait a moment for server to be ready, then redirect webview
-                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    // Wait longer for server to be ready, then redirect webview
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
 
                     // Get the main window and navigate to our local server
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.eval("window.location.href = 'http://127.0.0.1:3000';");
-                        println!("Redirected webview to local embedded server");
+                        match window.navigate(Url::parse("http://127.0.0.1:3000").unwrap()) {
+                            Ok(()) => println!("Successfully navigated webview to local embedded server"),
+                            Err(err) => println!("Failed to navigate webview: {}", err),
+                        }
                     }
                 }
                 Err(err) => {
