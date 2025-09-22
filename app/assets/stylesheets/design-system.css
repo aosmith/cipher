@@ -169,26 +169,6 @@
   --entropy-ready-bg: rgba(var(--color-success-rgb), 0.18);
   --entropy-ready-border: rgba(var(--color-success-rgb), 0.38);
 
-  /* Desktop surfaces */
-  --desktop-titlebar-gradient: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-  --desktop-titlebar-text: var(--color-text-light);
-  --desktop-titlebar-button-bg: rgba(255, 255, 255, 0.2);
-  --desktop-titlebar-button-bg-hover: rgba(255, 255, 255, 0.3);
-  --desktop-titlebar-button-bg-active: rgba(255, 255, 255, 0.4);
-  --desktop-sidebar-bg: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(15, 23, 42, 0.85) 100%);
-  --desktop-sidebar-border: rgba(148, 163, 184, 0.3);
-  --desktop-sidebar-section-border: rgba(148, 163, 184, 0.25);
-  --desktop-card-bg: rgba(15, 23, 42, 0.6);
-  --desktop-card-alt-bg: rgba(15, 23, 42, 0.5);
-  --desktop-card-border: rgba(148, 163, 184, 0.3);
-  --desktop-card-shadow: var(--shadow-sm);
-  --desktop-nav-text: var(--color-text-secondary);
-  --desktop-nav-text-active: var(--color-secondary);
-  --desktop-nav-muted: var(--color-text-muted);
-  --desktop-nav-hover-bg: rgba(var(--color-secondary-rgb), 0.15);
-  --desktop-nav-active-bg: rgba(var(--color-secondary-rgb), 0.2);
-  --desktop-nav-hover-text: var(--color-text-light);
-
   /* Mobile surfaces */
   --mobile-header-bg: linear-gradient(135deg, rgba(15, 23, 42, 0.9) 0%, rgba(30, 41, 59, 0.85) 100%);
   --mobile-header-border: rgba(59, 130, 246, 0.25);
@@ -347,26 +327,6 @@
   --text-primary: var(--color-text-primary);
   --text-secondary: var(--color-text-secondary);
 
-  /* Desktop surfaces */
-  --desktop-titlebar-gradient: linear-gradient(90deg, #4f46e5 0%, var(--color-primary) 100%);
-  --desktop-titlebar-text: var(--color-text-light);
-  --desktop-titlebar-button-bg: rgba(255, 255, 255, 0.22);
-  --desktop-titlebar-button-bg-hover: rgba(255, 255, 255, 0.32);
-  --desktop-titlebar-button-bg-active: rgba(255, 255, 255, 0.42);
-  --desktop-sidebar-bg: linear-gradient(135deg, var(--color-bg-secondary) 0%, var(--color-border) 100%);
-  --desktop-sidebar-border: rgba(148, 163, 184, 0.35);
-  --desktop-sidebar-section-border: rgba(148, 163, 184, 0.4);
-  --desktop-card-bg: rgba(255, 255, 255, 0.85);
-  --desktop-card-alt-bg: rgba(255, 255, 255, 0.75);
-  --desktop-card-border: rgba(148, 163, 184, 0.3);
-  --desktop-card-shadow: var(--shadow-sm);
-  --desktop-nav-text: var(--color-text-secondary);
-  --desktop-nav-text-active: var(--color-secondary);
-  --desktop-nav-muted: var(--color-text-muted);
-  --desktop-nav-hover-bg: rgba(var(--color-secondary-rgb), 0.12);
-  --desktop-nav-active-bg: rgba(var(--color-secondary-rgb), 0.15);
-  --desktop-nav-hover-text: var(--color-secondary);
-
   /* Mobile surfaces */
   --mobile-header-bg: linear-gradient(135deg, var(--color-bg-secondary) 0%, var(--color-border) 100%);
   --mobile-header-border: rgba(148, 163, 184, 0.35);
@@ -499,26 +459,6 @@
     --entropy-collecting-border: rgba(var(--color-warning-rgb), 0.35);
     --entropy-ready-bg: rgba(var(--color-success-rgb), 0.18);
     --entropy-ready-border: rgba(var(--color-success-rgb), 0.32);
-
-    /* Desktop surfaces */
-    --desktop-titlebar-gradient: linear-gradient(90deg, #4f46e5 0%, #6366f1 100%);
-    --desktop-titlebar-text: var(--color-text-light);
-    --desktop-titlebar-button-bg: rgba(255, 255, 255, 0.22);
-    --desktop-titlebar-button-bg-hover: rgba(255, 255, 255, 0.32);
-    --desktop-titlebar-button-bg-active: rgba(255, 255, 255, 0.42);
-    --desktop-sidebar-bg: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-    --desktop-sidebar-border: rgba(148, 163, 184, 0.35);
-    --desktop-sidebar-section-border: rgba(148, 163, 184, 0.4);
-    --desktop-card-bg: rgba(255, 255, 255, 0.85);
-    --desktop-card-alt-bg: rgba(255, 255, 255, 0.75);
-    --desktop-card-border: rgba(148, 163, 184, 0.3);
-    --desktop-card-shadow: var(--shadow-sm);
-    --desktop-nav-text: var(--color-text-secondary);
-    --desktop-nav-text-active: var(--color-secondary);
-    --desktop-nav-muted: var(--color-text-muted);
-    --desktop-nav-hover-bg: rgba(var(--color-secondary-rgb), 0.12);
-    --desktop-nav-active-bg: rgba(var(--color-secondary-rgb), 0.15);
-    --desktop-nav-hover-text: var(--color-secondary);
 
     /* Mobile surfaces */
     --mobile-header-bg: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
