@@ -60,7 +60,7 @@ Rails.application.configure do
   config.force_ssl = false
 
   # Enable serving of images, stylesheets, and JavaScripts from an asset server
-  config.asset_host = "http://localhost:3001"
+  config.asset_host = "http://localhost:3000"
 
   # Raises error for missing translations.
   # config.i18n.raise_on_missing_translations = true
@@ -86,8 +86,8 @@ Rails.application.configure do
   config.logger = ActiveSupport::Logger.new(STDOUT)
   config.log_level = :info
 
-  # Allow all parameter
-  config.action_controller.allow_forgery_protection = false
+  # Enable CSRF protection for mobile security
+  config.action_controller.allow_forgery_protection = true
 
   # Mobile environment identifier
   config.mobile_platform = "android"
