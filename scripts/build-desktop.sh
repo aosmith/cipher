@@ -11,6 +11,10 @@ if [[ "$OSTYPE" != "darwin"* ]]; then
   exit 1
 fi
 
+echo "🛑 Stopping any running desktop app instances..."
+pkill -f "Cipher.app" 2>/dev/null || true
+pkill -f "rails server" 2>/dev/null || true
+
 # Check prerequisites
 echo "📋 Checking prerequisites..."
 
