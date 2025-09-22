@@ -58,14 +58,20 @@ rm -rf storage/*
 rm -rf public/assets
 
 APP_SUPPORT_DIR="$HOME/Library/Application Support/com.cipher.social"
-INSTALLED_APP="$HOME/Applications/Cipher.app"
+INSTALLED_APP_HOME="$HOME/Applications/Cipher.app"
+INSTALLED_APP_SYSTEM="/Applications/Cipher.app"
 
 echo "🗑️ Removing cached desktop data..."
 rm -rf "$APP_SUPPORT_DIR"
 
-if [ -d "$INSTALLED_APP" ]; then
-  echo "🗑️ Removing previously installed Cipher.app..."
-  rm -rf "$INSTALLED_APP"
+if [ -d "$INSTALLED_APP_HOME" ]; then
+  echo "🗑️ Removing ~/Applications/Cipher.app..."
+  rm -rf "$INSTALLED_APP_HOME"
+fi
+
+if [ -d "$INSTALLED_APP_SYSTEM" ]; then
+  echo "🗑️ Removing /Applications/Cipher.app..."
+  sudo rm -rf "$INSTALLED_APP_SYSTEM"
 fi
 
 echo "🛠️ Running migrations and precompiling assets..."
