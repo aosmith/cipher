@@ -1,0 +1,77 @@
+<div class="container">
+  <div class="welcome-hero">
+    <h1>📝 My Posts</h1>
+    <p>Your encrypted posts and media</p>
+    <div class="getting-started">
+      <%= link_to "Create New Post", new_post_path, class: "btn btn-primary btn-large" %>
+    </div>
+  </div>
+
+  <% if @post&.errors&.any? %>
+    <div class="error-messages">
+      <% @post.errors.full_messages.each do |message| %>
+        <div class="error"><%= message %></div>
+      <% end %>
+    </div>
+  <% end %>
+
+  <% if @posts.any? %>
+    <div class="posts-list" data-posts-feed>
+      <% @posts.each do |post| %>
+        <div class="message-item post" data-post-id="<%= post.id %>" data-has-media="<%= post.has_media? %>">
+          <div class="message-header">
+            <div class="author">
+              <%= post.user.display_name || post.user.username %> (@<%= post.user.username %>)
+            </div>
+            <div class="timestamp" data-timestamp="<%= post.timestamp&.iso8601 %>">
+              <%= time_ago_in_words(post.timestamp) if post.timestamp %> ago • 🔒 Encrypted
+            </div>
+            <div class="message-actions">
+              <%= link_to "✏️", edit_post_path(post), class: "btn btn-sm btn-outline", aria: { label: "Edit post" } %>
+              <%= button_to "Delete", post_path(post), 
+                  method: :delete,
+                  class: "btn btn-sm btn-danger",
+                  form_class: "delete-form",
+                  aria: { label: "Delete post" } %>
+            </div>
+          </div>
+
+          <div class="message-content">
+            <% if post.content.present? %>
+              <%= link_to post_path(post), class: "post-content-link" do %>
+                <%= simple_format(post.content) %>
+              <% end %>
+            <% end %>
+            
+            <% if post.attachments.any? %>
+              <div class="attachments-section">
+                <% post.attachments.each do |attachment| %>
+                  <div class="attachment-item">
+                    <% if attachment.content_type&.start_with?('image/') %>
+                      🖼️
+                    <% elsif attachment.content_type&.start_with?('video/') %>
+                      🎥
+                    <% elsif attachment.content_type&.start_with?('audio/') %>
+                      🎵
+                    <% else %>
+                      📎
+                    <% end %>
+                    <%= link_to attachment.filename, post_attachment_path(post, attachment), target: "_blank", class: "attachment-link" %>
+                    (<%= number_to_human_size(attachment.file_size) %>)
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    </div>
+  <% else %>
+    <div class="empty-state">
+      <div class="empty-icon">📝</div>
+      <h2>No posts yet</h2>
+      <p>Create your first encrypted post to get started!</p>
+      <%= link_to "Create Your First Post", new_post_path, class: "btn btn-primary btn-large" %>
+    </div>
+  <% end %>
+</div>

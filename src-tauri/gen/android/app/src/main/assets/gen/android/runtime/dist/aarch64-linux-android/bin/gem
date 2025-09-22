@@ -1,0 +1,10 @@
+#!/Users/alex/Development/cipher/src-tauri/gen/android/runtime/dist/aarch64-linux-android/bin/ruby
+#--
+# Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#++
+
+require "rubygems/gem_runner"
+
+Gem::GemRunner.new.run ARGV.clone

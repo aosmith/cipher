@@ -1,0 +1,58 @@
+<div class="messages-container">
+  <div class="messages-header">
+    <h1>💬 Messages</h1>
+    <% if @unread_count > 0 %>
+      <span class="unread-badge"><%= @unread_count %> unread</span>
+    <% end %>
+  </div>
+  
+  <% if @conversations.any? %>
+    <div class="conversations-list">
+      <% @conversations.each do |user| %>
+        <% last_message = current_user_session.messages_with(user).first %>
+        <% unread_from_user = current_user_session.received_messages.where(sender: user, read_at: nil).count %>
+        
+        <div class="conversation-item">
+          <%= link_to user_message_path(user), class: "conversation-link" do %>
+            <div class="conversation-avatar">
+              <div class="user-initial"><%= user.username.first.upcase %></div>
+            </div>
+            
+            <div class="conversation-details">
+              <div class="conversation-header">
+                <h3 class="conversation-username"><%= user.username %></h3>
+                <% if last_message %>
+                  <time class="conversation-time"><%= time_ago_in_words(last_message.created_at) %> ago</time>
+                <% end %>
+              </div>
+              
+              <div class="conversation-preview">
+                <% if last_message %>
+                  <p class="last-message">
+                    <% if last_message.sender == current_user_session %>
+                      <span class="message-sender">You:</span>
+                    <% end %>
+                    <%= truncate(last_message.content, length: 60) %>
+                  </p>
+                <% else %>
+                  <p class="no-messages">Start a conversation...</p>
+                <% end %>
+                
+                <% if unread_from_user > 0 %>
+                  <span class="unread-count"><%= unread_from_user %></span>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+    </div>
+  <% else %>
+    <div class="empty-state">
+      <div class="empty-state-icon">💬</div>
+      <h3>No conversations yet</h3>
+      <p>Start chatting with your friends!</p>
+      <%= link_to "Browse Users", users_path, class: "btn btn-primary" %>
+    </div>
+  <% end %>
+</div>

@@ -1,0 +1,155 @@
+<div class="container">
+  <div class="welcome-hero">
+    <h2>💾 Backup Your Identity</h2>
+    <p>Secure your Cipher account with zero-knowledge backup</p>
+  </div>
+
+  <div class="form-container">
+    <div class="form-section">
+      <div class="backup-info">
+        <h3>📝 Your Identity Backup</h3>
+        <p>With Cipher's zero-knowledge architecture, backing up your identity is simple:</p>
+        
+        <div class="backup-method">
+          <h4>🔑 Just Remember Two Things:</h4>
+          <ol>
+            <li><strong>Username:</strong> <code><%= @user.username %></code></li>
+            <li><strong>Master Password:</strong> The password you used when creating your account</li>
+          </ol>
+        </div>
+        
+        <div class="success-note">
+          <strong>✅ That's it!</strong> Your identity can be recreated on any Cipher instance with just your username and password.
+        </div>
+      </div>
+
+      <div class="verification-section">
+        <h4>🔍 Verify Your Backup</h4>
+        <p>Use the Rails console on your server (<code>rails runner</code>) to regenerate your key pair with the remembered password. The browser no longer performs client-side verification.</p>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <h3>🛡️ Zero-Knowledge Security</h3>
+      <div class="security-details">
+        <h4>How it works:</h4>
+        <ul>
+          <li>Your private key is <strong>derived</strong> from username + password using PBKDF2</li>
+          <li>The same inputs always produce the same keys (deterministic)</li>
+          <li>Your password never leaves your device</li>
+          <li>The server only stores your username and public key</li>
+        </ul>
+
+        <h4>To restore your identity:</h4>
+        <ol>
+          <li>Go to any Cipher instance</li>
+          <li>Click "Import Keys" on the homepage</li>
+          <li>Enter your username and master password</li>
+          <li>Your identity is instantly recreated</li>
+        </ol>
+      </div>
+
+      <div class="warning-section">
+        <h4>⚠️ Important Reminders</h4>
+        <ul>
+          <li><strong>No password recovery:</strong> If you forget your password, your identity is lost forever</li>
+          <li><strong>Write it down:</strong> Consider writing your username and password on paper</li>
+          <li><strong>Use a password manager:</strong> Store both values securely</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.backup-info {
+  background: rgba(231, 243, 255, 0.9);
+  backdrop-filter: blur(10px);
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.backup-info h3 {
+  margin-top: 0;
+  color: #1a365d;
+}
+
+.backup-method {
+  background: rgba(255, 255, 255, 0.8);
+  padding: 15px;
+  border-radius: 8px;
+  margin: 15px 0;
+}
+
+.backup-method code {
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-weight: 600;
+}
+
+.success-note {
+  background: rgba(40, 167, 69, 0.1);
+  border: 1px solid rgba(40, 167, 69, 0.3);
+  color: #28a745;
+  padding: 15px;
+  border-radius: 8px;
+  margin: 15px 0;
+  font-weight: 500;
+}
+
+.verification-section {
+  background: rgba(255, 243, 231, 0.9);
+  padding: 20px;
+  border-radius: 12px;
+  margin-top: 20px;
+}
+
+.verification-section h4 {
+  margin-top: 0;
+  color: #9f4e00;
+}
+
+.success-message {
+  background: rgba(40, 167, 69, 0.1);
+  border: 1px solid rgba(40, 167, 69, 0.3);
+  color: #28a745;
+  padding: 15px;
+  border-radius: 8px;
+  margin-top: 15px;
+}
+
+.error-message {
+  background: rgba(220, 53, 69, 0.1);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  color: #dc3545;
+  padding: 15px;
+  border-radius: 8px;
+  margin-top: 15px;
+}
+
+.security-details h4, .warning-section h4 {
+  color: #2d3748;
+  margin: 15px 0 8px 0;
+  font-weight: 600;
+}
+
+.security-details ul, .security-details ol, .warning-section ul {
+  color: #4a5568;
+  margin-bottom: 15px;
+}
+
+.warning-section {
+  background: rgba(255, 243, 231, 0.9);
+  padding: 15px;
+  border-radius: 8px;
+  margin-top: 15px;
+}
+
+.warning-section h4 {
+  color: #856404;
+}
+</style>

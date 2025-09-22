@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+# Rails development server reload script
+echo "🔄 Triggering Rails server reload..."
+
+# Touch the restart file to trigger server restart
+touch tmp/restart.txt
+
+echo "✅ Server reload triggered!"
+echo "💡 Changes will take effect on the next request"

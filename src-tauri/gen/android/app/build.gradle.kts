@@ -46,7 +46,11 @@ android {
         }
     }
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "16"
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_16
+        targetCompatibility = JavaVersion.VERSION_16
     }
     buildFeatures {
         buildConfig = true

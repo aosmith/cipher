@@ -1,0 +1,68 @@
+<% content_for :title, "Host Dashboard - Cipher" %>
+
+<div class="host-dashboard">
+  <div class="dashboard-header">
+    <h1>🏠 Storage Host Dashboard</h1>
+    <p class="dashboard-subtitle">Hosting is coordinated by your local server node for zero-latency sharing.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Manage Hosting from the Server</h2>
+    </div>
+    <div class="card-body">
+      <p>All staking, storage allocation, and payout tasks run on the Rails server process. Use the provided CLI helpers to manage your host:</p>
+      <ol>
+        <li><code>bin/host status</code> &ndash; view current storage, earnings, and reliability.</li>
+        <li><code>bin/host allocate --mb=500</code> &ndash; adjust dedicated storage.</li>
+        <li><code>bin/host settle</code> &ndash; claim pending rewards.</li>
+      </ol>
+      <p>Refer to <%= link_to "docs/hosting.md", "/docs/hosting.md" %> for the full walkthrough.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Current Server Snapshot</h2>
+    </div>
+    <div class="card-body">
+      <dl class="host-snapshot">
+        <dt>Storage Allocated</dt>
+        <dd><%= @current_user&.p2p_connections&.count.to_i %> peer links established</dd>
+        <dt>Active Friends</dt>
+        <dd><%= current_user_session.friends.count %> trusted peers</dd>
+        <dt>Last Sync</dt>
+        <dd><%= current_user_session.posts.order(synced_at: :desc).limit(1).pluck(:synced_at).first&.strftime("%b %d, %Y %H:%M") || "No sync yet" %></dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+<style>
+.host-dashboard {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.dashboard-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.host-snapshot {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  row-gap: 12px;
+  column-gap: 16px;
+}
+
+.host-snapshot dt {
+  font-weight: 600;
+  color: #2d3748;
+}
+
+.host-snapshot dd {
+  margin: 0;
+  color: #4a5568;
+}
+</style>

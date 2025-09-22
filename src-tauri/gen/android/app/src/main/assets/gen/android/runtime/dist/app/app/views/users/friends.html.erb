@@ -1,0 +1,158 @@
+<% content_for :title, "Friends - Cipher" %>
+
+<% unless @current_user %>
+  <div class="flash-messages">
+    <div class="flash-message flash-error">
+      Please log in to access the friends page.
+    </div>
+  </div>
+  <% return %>
+<% end %>
+
+<div class="friends-page">
+  <div class="welcome-hero">
+    <h2>👥 Friends</h2>
+    <p>Manage your connections for secure file sharing</p>
+  </div>
+
+  <!-- Add Friend Section -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Add Friend</h2>
+    </div>
+    <div class="card-body">
+      <%= form_tag '/api/v1/friends/send_request', method: :post, class: "add-friend-form" do %>
+        <div class="form-group">
+          <label for="username" class="form-label">Username:</label>
+          <div class="input-group">
+            <%= text_field_tag :username, "", placeholder: "Enter username", class: "form-control", required: true %>
+            <%= submit_tag "Send Request", class: "btn btn-primary" %>
+          </div>
+          <small class="form-help">Enter the exact username of the person you want to add as a friend</small>
+        </div>
+      <% end %>
+    </div>
+  </div>
+
+  <!-- Friend Requests Section -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Friend Requests</h2>
+    </div>
+    <div class="card-body">
+      <div class="requests-section">
+        <h3>Received Requests</h3>
+        <div id="received-requests" class="requests-list">
+          <% if @current_user.pending_friend_requests.any? %>
+            <% @current_user.pending_friend_requests.each do |friendship| %>
+              <div class="request-item">
+                <div class="user-avatar"><%= friendship.requester.username[0..1].upcase %></div>
+                <div class="user-info">
+                  <div class="user-name"><%= friendship.requester.username %></div>
+                  <div class="user-details">
+                    <%= friendship.requester.display_name if friendship.requester.display_name.present? %>
+                    • Requested <%= time_ago_in_words(friendship.created_at) %> ago
+                  </div>
+                </div>
+                <div class="user-actions">
+                  <%= form_tag '/api/v1/friends/respond_to_request', method: :post, style: 'display: inline;' do %>
+                    <%= hidden_field_tag :friendship_id, friendship.id %>
+                    <%= hidden_field_tag :action_type, 'accept' %>
+                    <%= submit_tag "Accept", class: "btn btn-success btn-sm" %>
+                  <% end %>
+                  <%= form_tag '/api/v1/friends/respond_to_request', method: :post, style: 'display: inline;' do %>
+                    <%= hidden_field_tag :friendship_id, friendship.id %>
+                    <%= hidden_field_tag :action_type, 'decline' %>
+                    <%= submit_tag "Decline", class: "btn btn-outline btn-sm" %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          <% else %>
+            <div class="empty-state">
+              <div class="empty-icon">📭</div>
+              <p>No pending requests</p>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
+      <div class="requests-section">
+        <h3>Sent Requests</h3>
+        <div id="sent-requests" class="requests-list">
+          <% if @current_user.sent_friend_requests.any? %>
+            <% @current_user.sent_friend_requests.each do |friendship| %>
+              <div class="request-item">
+                <div class="user-avatar"><%= friendship.addressee.username[0..1].upcase %></div>
+                <div class="user-info">
+                  <div class="user-name"><%= friendship.addressee.username %></div>
+                  <div class="user-details">
+                    <%= friendship.addressee.display_name if friendship.addressee.display_name.present? %>
+                    • Sent <%= time_ago_in_words(friendship.created_at) %> ago
+                  </div>
+                </div>
+                <div class="user-actions">
+                  <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;' do %>
+                    <%= submit_tag "Cancel", class: "btn btn-secondary btn-sm" %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          <% else %>
+            <div class="empty-state">
+              <div class="empty-icon">⏳</div>
+              <p>No sent requests</p>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Friends List Section -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Your Friends (<span id="friends-count"><%= @current_user.friends.count %></span>)</h2>
+    </div>
+    <div class="card-body">
+      <div id="friends-list" class="friends-list">
+        <% if @current_user.friends.any? %>
+          <% @current_user.friends.each do |friend| %>
+            <div class="friend-item">
+              <div class="user-avatar"><%= friend.username[0..1].upcase %></div>
+              <div class="user-info">
+                <div class="user-name"><%= friend.username %></div>
+                <div class="user-details">
+                  <%= friend.display_name if friend.display_name.present? %>
+                  • Friends since <%= friend.created_at.strftime('%B %Y') %>
+                </div>
+              </div>
+              <div class="user-actions">
+                <%= link_to "/messages/#{friend.id}", class: "btn btn-outline btn-sm" do %>
+                  💬 Message
+                <% end %>
+                <% if @current_user.connected_to?(friend) %>
+                  <span class="btn btn-success btn-sm" disabled>🟢 Connected</span>
+                <% else %>
+                  <%= form_tag "/api/v1/p2p/establish/#{friend.id}", method: :post, style: 'display: inline;' do %>
+                    <%= submit_tag "🔗 Connect", class: "btn btn-primary btn-sm" %>
+                  <% end %>
+                <% end %>
+                <% friendship = @current_user.friendships.find_by("(requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)", @current_user.id, friend.id, friend.id, @current_user.id) %>
+                <%= form_tag "/api/v1/friends/#{friendship.id}", method: :delete, style: 'display: inline;' do %>
+                  <%= submit_tag "Remove", class: "btn btn-danger btn-sm" %>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        <% else %>
+          <div class="empty-state">
+            <div class="empty-icon">👥</div>
+            <p>No friends yet</p>
+            <small>Add friends to start sharing files securely</small>
+          </div>
+        <% end %>
+      </div>
+    </div>
+  </div>
+</div>

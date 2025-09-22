@@ -1,0 +1,93 @@
+<div class="container auth-container">
+  <div class="welcome-hero auth-hero">
+    <h2>🔓 Restore Your Identity</h2>
+    <p>Sign in to your existing Cipher account</p>
+  </div>
+
+  <div class="form-container auth-form-grid">
+    <div class="form-section card">
+      <div class="card-body">
+        <% if flash[:alert] %>
+          <div class="error-messages">
+            <p><%= flash[:alert] %></p>
+          </div>
+        <% end %>
+
+        <%= form_tag '/api/v1/login', method: :post, id: "restore-form", class: "import-form" do %>
+          <div class="restore-info">
+            <h3>🔄 Sign In to Your Cipher Account</h3>
+            <p>Enter your username and master password to restore your identity.</p>
+
+            <div class="info-note">
+              <strong>🔑 Zero-Knowledge Login:</strong>
+              Your keys are recreated from your credentials — no files needed!
+            </div>
+          </div>
+
+          <div class="form-group">
+            <%= label_tag :username, "Username", class: "form-label" %>
+            <%= text_field_tag :username, "", class: "form-control",
+                               placeholder: "Enter your username",
+                               required: true %>
+            <small class="form-help">Your unique Cipher username</small>
+          </div>
+
+          <div class="form-group">
+            <%= label_tag :password, "Master Password", class: "form-label" %>
+            <%= password_field_tag :password, "", class: "form-control",
+                                   placeholder: "Enter your master password",
+                                   required: true %>
+            <small class="form-help">The password you used when creating your account</small>
+          </div>
+
+          <div id="restore-progress" class="restore-progress" style="display: none;">
+            <div class="restore-status">
+              <p><strong>🔐 Restoring Identity...</strong></p>
+              <div class="progress-bar">
+                <div id="restore-progress-bar" class="progress-fill"></div>
+              </div>
+              <p id="restore-status" class="restore-status-text">Deriving keys from credentials...</p>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <%= submit_tag "🔓 Restore & Sign In", class: "btn btn-primary btn-large" %>
+          </div>
+        <% end %>
+      </div>
+    </div>
+
+    <div class="info-section card">
+      <div class="card-body">
+        <h3>How Identity Restoration Works</h3>
+        <ol class="info-timeline">
+          <li><strong>Key Derivation:</strong> Your private key is recreated from username + password</li>
+          <li><strong>Verification:</strong> The generated public key is checked against your account</li>
+          <li><strong>Authentication:</strong> If keys match, you're logged in automatically</li>
+          <li><strong>Local Storage:</strong> Your keys are stored encrypted in your browser</li>
+        </ol>
+
+        <div class="security-note card-surface">
+          <h4>🛡️ Zero-Knowledge Benefits</h4>
+          <ul class="checklist">
+            <li><strong>No Files:</strong> No backup files to lose or manage</li>
+            <li><strong>Portable:</strong> Access your identity from any Cipher instance</li>
+            <li><strong>Secure:</strong> Private keys never leave your device</li>
+            <li><strong>Deterministic:</strong> Same credentials always recreate the same identity</li>
+          </ul>
+        </div>
+
+        <div class="help-section card-surface">
+          <h4>❓ Troubleshooting</h4>
+          <p>If restoration fails:</p>
+          <ul class="checklist">
+            <li>Double-check your username spelling</li>
+            <li>Verify your password is exactly as you created it</li>
+            <li>Make sure your account exists on this Cipher instance</li>
+            <li>Contact support if you're certain your credentials are correct</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

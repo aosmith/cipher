@@ -4,10 +4,9 @@
   "version": "0.7.1",
   "identifier": "com.cipher.social",
   "build": {
-    "beforeDevCommand": "bin/android_dev_server",
+    "beforeDevCommand": "",
     "beforeBuildCommand": "RAILS_ENV=android bundle exec rails assets:precompile",
-    "devUrl": "http://localhost:3001",
-    "frontendDist": "../public"
+    "devUrl": "http://127.0.0.1:3000"
   },
   "app": {
     "windows": [
@@ -45,6 +44,7 @@
       "../config", 
       "../db",
       "../lib",
+      "gen/android/runtime/dist",
       "../Gemfile",
       "../Gemfile.lock",
       "../config.ru",

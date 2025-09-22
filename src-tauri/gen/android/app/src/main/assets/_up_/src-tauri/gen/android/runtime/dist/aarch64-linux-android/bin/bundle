@@ -1,0 +1,3 @@
+#!/system/bin/sh
+DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+exec "$DIR/ruby" "$DIR/bundle_real" "$@"
