@@ -111,7 +111,14 @@
       "Bash(sdkmanager:*)",
       "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --target aarch64 --release)",
       "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --target aarch64)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(/usr/libexec/java_home:*)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk ANDROID_DEV_HOST=10.0.2.2 ./scripts/run-android-dev.sh)",
+      "Bash(RAILS_ENV=android bin/rails server -p 3001 -b 0.0.0.0)",
+      "Read(//tmp/**)",
+      "Bash(cargo clean:*)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --config src-tauri/tauri.android.conf.json --target aarch64 --debug)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --config tauri.android.conf.json --target aarch64 --debug)"
     ],
     "deny": [],
     "ask": []

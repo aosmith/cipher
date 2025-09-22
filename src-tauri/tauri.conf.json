@@ -1,19 +1,19 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cipher",
-  "version": "0.7.0",
+  "version": "0.7.2",
   "identifier": "com.cipher.social",
   "build": {
     "beforeDevCommand": "bin/desktop_dev_server",
     "beforeBuildCommand": "RAILS_ENV=desktop bundle exec rails assets:precompile",
-    "devUrl": "http://localhost:3001",
+    "devUrl": "http://localhost:3000",
     "frontendDist": "../public"
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "url": "http://127.0.0.1:3001/",
+        "url": "http://127.0.0.1:3000/",
         "fullscreen": false,
         "height": 900,
         "resizable": true,

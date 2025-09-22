@@ -66,6 +66,14 @@ This is a Rails 8.0.2 application called "Cipher" - an end-to-end encrypted peer
 - `./scripts/build-desktop-windows.ps1` - Build Windows desktop app
 - `npm run tauri:build:linux` - Build Linux desktop app
 
+### Mobile Application
+- **Architecture**: Mobile apps (iOS/Android) are self-contained with embedded Rails server via Tauri wrapper
+- **No External Server**: Mobile apps run their own local server internally on localhost:3000
+- **Build Commands**:
+  - `ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --target aarch64 --debug` - Build Android debug APK
+  - `npx tauri ios build` - Build iOS app
+- **Installation**: Use ADB to install APK on Android devices: `adb install -r path/to/app.apk`
+
 ### Release Management
 - `./scripts/prepare-release.sh [version]` - Build all platforms and prepare release files
 - `./scripts/update-release-links.sh [version]` - Update all version numbers and download links

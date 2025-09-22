@@ -143,6 +143,19 @@ build_libedit() {
 
   log "Downloading libedit ${version}"
   curl -sSL "$url" | tar -xz -C "$build_dir" --strip-components=1
+  # Disable username completion that depends on getpwent(3) which Android lacks
+  python3 - "$build_dir/src/readline.c" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+if "__ANDROID__" not in text:
+    needle = "char *\nusername_completion_function"
+    if needle in text:
+        text = text.replace(needle,
+"#if defined(__ANDROID__)\nchar *\nusername_completion_function(const char *text, int state)\n{\n    return NULL;\n}\n#else\n" + needle, 1)
+        text = text.replace("return strdup(pass->pw_name);\n}\n\n\n/*", "return strdup(pass->pw_name);\n}\n#endif\n\n\n/*", 1)
+        path.write_text(text)
+PY
   log "Configuring libedit"
   local old_libs="${LIBS:-}"
   local old_ac_cv_func_setpwent="${ac_cv_func_setpwent+x}"

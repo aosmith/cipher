@@ -43,6 +43,58 @@ fn main() {
             if let Some(root) = rails_root {
                 // Start Rails server in bundled directory (localhost-only for security)
                 std::thread::spawn(move || {
+                    // First, ensure storage directory exists
+                    let storage_dir = root.join("storage");
+                    if !storage_dir.exists() {
+                        if let Err(e) = std::fs::create_dir_all(&storage_dir) {
+                            println!("Failed to create storage directory: {}", e);
+                        } else {
+                            println!("Created storage directory at: {:?}", storage_dir);
+                        }
+                    }
+
+                    // Prepare the database
+                    println!("Preparing database for {} environment...", platform);
+                    let db_prepare_command = if cfg!(target_os = "windows") {
+                        std::process::Command::new("cmd")
+                            .args(&[
+                                "/C",
+                                "ruby",
+                                "bin/rails",
+                                "db:prepare",
+                            ])
+                            .env("RAILS_ENV", platform)
+                            .current_dir(&root)
+                            .output()
+                    } else {
+                        std::process::Command::new("ruby")
+                            .args(&[
+                                "bin/rails",
+                                "db:prepare",
+                            ])
+                            .env("RAILS_ENV", platform)
+                            .current_dir(&root)
+                            .output()
+                    };
+
+                    match db_prepare_command {
+                        Ok(output) => {
+                            if output.status.success() {
+                                println!("Database prepared successfully for {}", platform);
+                                println!("Database preparation output: {}", String::from_utf8_lossy(&output.stdout));
+                            } else {
+                                println!("Database preparation failed for {}: {}", platform, String::from_utf8_lossy(&output.stderr));
+                                println!("Exit status: {}", output.status);
+                                // Also show stdout in case there are useful messages
+                                println!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
+                            }
+                        }
+                        Err(e) => {
+                            println!("Failed to run db:prepare for {}: {}", platform, e);
+                        }
+                    }
+
+                    // Now start the Rails server
                     let rails_command = if cfg!(target_os = "windows") {
                         std::process::Command::new("cmd")
                             .args(&[
@@ -51,7 +103,7 @@ fn main() {
                                 "bin/rails",
                                 "server",
                                 "-p",
-                                "3001",
+                                "3000",
                                 "-b",
                                 "127.0.0.1",
                                 "-e",
@@ -65,7 +117,7 @@ fn main() {
                                 "bin/rails",
                                 "server",
                                 "-p",
-                                "3001",
+                                "3000",
                                 "-b",
                                 "127.0.0.1",
                                 "-e",

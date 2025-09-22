@@ -9,10 +9,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 RUNTIME_DIR="$ROOT/src-tauri/gen/android/runtime"
 BUILD_DIR="${RUNTIME_DIR}/build"
 DIST_DIR="${RUNTIME_DIR}/dist"
+DEPS_DIR="$RUNTIME_DIR/deps"
 
 ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 ANDROID_ARCH=${ANDROID_ARCH:-arm64-v8a}
 RUBY_VERSION=${RUBY_VERSION:-3.2.1}
+RUBY_VERSION_DIRNAME=${RUBY_VERSION#ruby-}
 TARGET_TRIPLE=${TARGET_TRIPLE:-aarch64-linux-android}
 
 # Toolchain defaults
@@ -63,9 +65,12 @@ export LD="$TOOLCHAIN/bin/ld"
 export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export READELF="$TOOLCHAIN/bin/llvm-readelf"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
-export CFLAGS="-fPIC -O2"
-export LDFLAGS="-fPIC"
-export RUBY_CONFIGURE_OPTS="--with-static-linked-ext --disable-install-doc --without-gmp --host=${TARGET_TRIPLE} --target=${TARGET_TRIPLE} --with-out-ext=dbm,openssl,zlib"
+export CFLAGS="-fPIC -O2 -I${DEPS_DIR}/include"
+export LDFLAGS="-fPIC -L${DEPS_DIR}/lib"
+export PKG_CONFIG_PATH="${DEPS_DIR}/lib/pkgconfig:${DEPS_DIR}/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LIBYAML_CFLAGS="-I${DEPS_DIR}/include"
+export LIBYAML_LIBS="-L${DEPS_DIR}/lib -lyaml"
+export RUBY_CONFIGURE_OPTS="--with-opt-dir=${DEPS_DIR} --with-libyaml-dir=${DEPS_DIR} --with-libyaml-include=${DEPS_DIR}/include --with-libyaml-lib=${DEPS_DIR}/lib --with-static-linked-ext --disable-install-doc --without-gmp --host=${TARGET_TRIPLE} --target=${TARGET_TRIPLE} --with-out-ext=dbm,openssl,zlib,readline"
 export ac_cv_func_nl_langinfo=no
 export ac_cv_header_langinfo_h=no
 export ac_cv_func_endpwent=no
@@ -74,13 +79,35 @@ export ANDROID_NDK_ROOT="$NDK_HOME"
 export PATH="$TOOLCHAIN/bin:$PATH"
 
 PREFIX="$DIST_DIR/${TARGET_TRIPLE}"
-mkdir -p "$PREFIX"
+PREBUILT_ROOT_DEFAULT="$ROOT/android-ruby/ruby-${RUBY_VERSION_DIRNAME}"
+PREBUILT_ROOT="${ANDROID_RUBY_PREBUILT_DIR:-$PREBUILT_ROOT_DEFAULT}"
+USE_PREBUILT=0
+RUNTIME_SOURCE=""
 
-if [[ ! -d "$PREFIX/lib/ruby" ]]; then
-  echo "[ruby-android] building Ruby $RUBY_VERSION for Android" >&2
-  "$RUBY_BUILD" "$RUBY_VERSION" "$PREFIX" --verbose
-else
-  echo "[ruby-android] Ruby runtime already present at $PREFIX" >&2
+if [[ -d "$PREBUILT_ROOT" ]]; then
+  if [[ -d "$PREBUILT_ROOT/$TARGET_TRIPLE" && -f "$PREBUILT_ROOT/$TARGET_TRIPLE/bin/ruby" ]]; then
+    RUNTIME_SOURCE="$PREBUILT_ROOT/$TARGET_TRIPLE"
+  elif [[ -f "$PREBUILT_ROOT/bin/ruby" ]]; then
+    RUNTIME_SOURCE="$PREBUILT_ROOT"
+  fi
+
+  if [[ -n "$RUNTIME_SOURCE" ]]; then
+    USE_PREBUILT=1
+    echo "[ruby-android] Using prebuilt runtime from $RUNTIME_SOURCE" >&2
+    rm -rf "$PREFIX"
+    mkdir -p "$PREFIX"
+    rsync -a "$RUNTIME_SOURCE/" "$PREFIX/"
+  fi
+fi
+
+if [[ "$USE_PREBUILT" -eq 0 ]]; then
+  mkdir -p "$PREFIX"
+  if [[ ! -d "$PREFIX/lib/ruby" ]]; then
+    echo "[ruby-android] building Ruby $RUBY_VERSION for Android" >&2
+    "$RUBY_BUILD" "$RUBY_VERSION" "$PREFIX" --verbose
+  else
+    echo "[ruby-android] Ruby runtime already present at $PREFIX" >&2
+  fi
 fi
 
 # Install bundle into vendor directory
@@ -89,15 +116,19 @@ export GEM_HOME
 export GEM_PATH="$GEM_HOME"
 export BUNDLE_PATH="$GEM_HOME"
 
-BUNDLE_BIN="$PREFIX/bin/bundle"
-if [[ ! -x "$BUNDLE_BIN" ]]; then
-  echo "[ruby-android] Installing bundler" >&2
-  "$PREFIX/bin/gem" install bundler --no-document
-fi
+if [[ "$USE_PREBUILT" -eq 0 ]]; then
+  BUNDLE_BIN="$PREFIX/bin/bundle"
+  if [[ ! -x "$BUNDLE_BIN" ]]; then
+    echo "[ruby-android] Installing bundler" >&2
+    "$PREFIX/bin/gem" install bundler --no-document
+  fi
 
-pushd "$ROOT" >/dev/null
-RAILS_ENV=android "$PREFIX/bin/bundle" install --deployment --path "$GEM_HOME" --without development test --binstubs "$PREFIX/bin"
-popd >/dev/null
+  pushd "$ROOT" >/dev/null
+  RAILS_ENV=android "$PREFIX/bin/bundle" install --deployment --path "$GEM_HOME" --without development test --binstubs "$PREFIX/bin"
+  popd >/dev/null
+else
+  echo "[ruby-android] Skipping bundle install; using prebuilt gems" >&2
+fi
 
 # Copy application files
 APP_DIR="$DIST_DIR/app"
@@ -117,8 +148,15 @@ export BUNDLE_GEMFILE="$BASE_DIR/app/Gemfile"
 export HOME="${HOME:-$BASE_DIR/tmp}"
 export TMPDIR="$BASE_DIR/tmp"
 mkdir -p "$TMPDIR"
+export RAILS_ENV="${RAILS_ENV:-android}"
 cd "$BASE_DIR/app"
-exec "$BASE_DIR/aarch64-linux-android/bin/bundle" exec rails server -p 3001 -b 127.0.0.1 -e android
+
+BUNDLE_BIN="$BASE_DIR/aarch64-linux-android/bin/bundle"
+
+echo "[ruby-android] Preparing database for $RAILS_ENV"
+"$BUNDLE_BIN" exec rails db:prepare
+
+exec "$BUNDLE_BIN" exec rails server -p 3001 -b 127.0.0.1 -e "$RAILS_ENV"
 BOOT
 chmod +x "$DIST_DIR/run_rails.sh"
 

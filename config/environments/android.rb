@@ -75,6 +75,7 @@ Rails.application.configure do
   # Android mobile app specific configurations
   config.hosts << "localhost"
   config.hosts << "127.0.0.1"
+  config.hosts << "10.0.2.2"  # Android emulator host IP
 
   # Configure web console if available (development only)
   if defined?(Rails::Console)

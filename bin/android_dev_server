@@ -5,7 +5,8 @@ APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_ROOT"
 
 PORT="${TAURI_DEV_PORT:-${PORT:-3001}}"
-HOST="${TAURI_DEV_HOST:-0.0.0.0}"
+PUBLIC_HOST="${TAURI_DEV_HOST:-0.0.0.0}"
+LISTEN_HOST="${ANDROID_DEV_LISTEN_HOST:-0.0.0.0}"
 PIDFILE="tmp/pids/android-dev-server.pid"
 SERVER_PIDFILE="tmp/pids/server.pid"
 
@@ -28,22 +29,24 @@ stop_pid_file() {
 stop_pid_file "$PIDFILE"
 stop_pid_file "$SERVER_PIDFILE"
 
-if lsof -ti tcp:"$PORT" >/dev/null 2>&1; then
-  echo "Port $PORT already in use. Attempting to stop Ruby processes on that port."
+attempts=0
+while lsof -ti tcp:"$PORT" >/dev/null 2>&1; do
+  echo "Port $PORT in use; terminating occupying processes"
   while read -r pid; do
-    if ps -p "$pid" -o comm= | grep -qi "ruby"; then
-      echo "Stopping process $pid on port $PORT"
-      kill "$pid" >/dev/null 2>&1 || true
-      wait "$pid" 2>/dev/null || true
-    else
-      echo "Port $PORT is used by non-Ruby process $pid. Please free the port and retry."
-      exit 1
-    fi
+    [[ -z "$pid" ]] && continue
+    echo "Stopping process $pid on port $PORT"
+    kill "$pid" >/dev/null 2>&1 || true
   done < <(lsof -ti tcp:"$PORT")
-fi
+  sleep 1
+  attempts=$((attempts + 1))
+  if (( attempts > 5 )); then
+    echo "Unable to free port $PORT after $attempts attempts."
+    exit 1
+  fi
+done
 
 bundle check >/dev/null 2>&1 || bundle install
 
 echo $$ > "$PIDFILE"
-echo "Starting Rails android server on $HOST:$PORT"
-exec bundle exec rails server -p "$PORT" -b "$HOST" -e android
+echo "Starting Rails android server on $LISTEN_HOST:$PORT (public host: $PUBLIC_HOST)"
+exec bundle exec rails server -p "$PORT" -b "$LISTEN_HOST" -e android
