@@ -31,7 +31,7 @@
 
   <% body_classes = [] %>
   <% if Rails.env.desktop? %>
-    <% body_classes += %w[desktop-app env-desktop platform-macos] %>
+    <% body_classes += %w[env-desktop platform-macos] %>
   <% end %>
   <% if Rails.env.ios? %>
     <% body_classes += %w[mobile-app env-ios platform-ios] %>
