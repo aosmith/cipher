@@ -55,6 +55,7 @@ bundle exec rails db:reset
 echo "🧼 Clearing build artifacts and storage..."
 bundle exec rails tmp:clear
 rm -rf storage/*
+rm -rf public/assets
 
 echo "🛠️ Running migrations and precompiling assets..."
 bundle exec rails db:prepare

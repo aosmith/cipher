@@ -56,16 +56,6 @@
             </div>
             
             <div class="header-right">
-              <!-- Mobile menu toggle -->
-              <input type="checkbox" id="mobile-menu-toggle" class="mobile-menu-toggle">
-              <label for="mobile-menu-toggle" class="mobile-menu-button">☰</label>
-              <div class="theme-toggle">
-                <%= button_to toggle_theme_path, method: :post, class: "theme-toggle-button", form_class: "theme-toggle-form" do %>
-                  <span class="theme-toggle-icon" aria-hidden="true"><%= current_theme == "light" ? "🌙" : "☀️" %></span>
-                  <span class="visually-hidden">Toggle theme</span>
-                <% end %>
-              </div>
-              
               <% if current_user_session %>
                 <div class="user-nav">
                   <span class="user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
@@ -80,11 +70,23 @@
                   </nav>
                 </div>
               <% else %>
+                <nav class="nav-links">
+                  <%= link_to "Overview", root_path, class: "nav-link" %>
+                  <%= link_to "Security", root_path(anchor: "security"), class: "nav-link" %>
+                  <%= link_to "Community", root_path(anchor: "community"), class: "nav-link" %>
+                </nav>
                 <nav class="auth-nav">
                   <%= link_to "Sign In", import_keys_users_path, class: "btn btn-secondary" %>
                   <%= link_to "Create Account", new_user_path, class: "btn btn-primary" %>
                 </nav>
               <% end %>
+
+              <div class="theme-toggle">
+                <%= button_to toggle_theme_path, method: :post, class: "theme-toggle-button", form_class: "theme-toggle-form" do %>
+                  <span class="theme-toggle-icon" aria-hidden="true"><%= current_theme == "light" ? "🌙" : "☀️" %></span>
+                  <span class="visually-hidden">Toggle theme</span>
+                <% end %>
+              </div>
             </div>
           </div>
         </header>
