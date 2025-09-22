@@ -17,7 +17,17 @@ TARGET_TRIPLE=${TARGET_TRIPLE:-aarch64-linux-android}
 
 # Toolchain defaults
 NDK_HOME=${NDK_HOME:-$HOME/Library/Android/sdk/ndk}
-TOOLCHAIN=${TOOLCHAIN:-$NDK_HOME/toolchains/llvm/prebuilt/darwin-arm64}
+if [[ -z "${TOOLCHAIN:-}" ]]; then
+  TOOLCHAIN_ROOT="$NDK_HOME/toolchains/llvm/prebuilt"
+  if [[ -d "$TOOLCHAIN_ROOT/darwin-arm64" ]]; then
+    TOOLCHAIN="$TOOLCHAIN_ROOT/darwin-arm64"
+  elif [[ -d "$TOOLCHAIN_ROOT/darwin-x86_64" ]]; then
+    TOOLCHAIN="$TOOLCHAIN_ROOT/darwin-x86_64"
+  else
+    echo "[ruby-android] Unable to locate Apple toolchain under $TOOLCHAIN_ROOT" >&2
+    exit 1
+  fi
+fi
 RUBY_BUILD=${RUBY_BUILD:-$(command -v ruby-build || true)}
 
 TARGET_CC="$TOOLCHAIN/bin/${TARGET_TRIPLE}${ANDROID_API_LEVEL}-clang"

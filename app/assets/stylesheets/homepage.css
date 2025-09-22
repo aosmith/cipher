@@ -192,14 +192,14 @@
 }
 
 #connected-peers {
-  background: rgba(248, 249, 250, 0.8);
-  border: 1px solid rgba(222, 226, 230, 0.6);
+  background: var(--surface-glass);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 16px;
   min-height: 60px;
   display: flex;
   align-items: center;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-style: italic;
 }
 

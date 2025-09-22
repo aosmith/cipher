@@ -70,7 +70,7 @@ This is a Rails 8.0.2 application called "Cipher" - an end-to-end encrypted peer
 - `./scripts/prepare-release.sh [version]` - Build all platforms and prepare release files
 - `./scripts/update-release-links.sh [version]` - Update all version numbers and download links
 - **Releases Directory**: `releases/` contains pre-compiled desktop apps for Windows, macOS, and Linux
-- **Current Version**: 0.6.5
+- **Current Version**: 0.7.0
 - See `releases/README.md` for installation instructions and download links
 
 #### Version Management

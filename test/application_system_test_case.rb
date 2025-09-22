@@ -5,9 +5,9 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
 
   case DRIVER
   when :selenium_chrome
-    driven_by :selenium, using: :chrome, screen_size: [1400, 900]
+    driven_by :selenium, using: :chrome, screen_size: [ 1400, 900 ]
   when :selenium_chrome_headless
-    driven_by :selenium, using: :chrome, screen_size: [1400, 900], options: { args: %w[headless disable-gpu no-sandbox disable-dev-shm-usage] }
+    driven_by :selenium, using: :chrome, screen_size: [ 1400, 900 ], options: { args: %w[headless disable-gpu no-sandbox disable-dev-shm-usage] }
   else
     driven_by DRIVER
   end

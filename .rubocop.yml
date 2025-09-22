@@ -10,3 +10,4 @@ inherit_gem: { rubocop-rails-omakase: rubocop.yml }
 AllCops:
   Exclude:
     - "src-tauri/target/**/*"
+    - "src-tauri/gen/**/*"

@@ -39,12 +39,12 @@
 .logo {
   font-size: 1.8rem;
   font-weight: 700;
-  color: var(--color-text-light);
+  color: var(--color-text-primary);
   transition: color 0.2s ease;
 }
 
 .logo-link:hover .logo {
-  color: var(--color-text-light);
+  color: var(--color-text-secondary);
 }
 
 .header-right {

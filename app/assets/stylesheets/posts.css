@@ -124,7 +124,7 @@
 }
 
 .encryption-info {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--color-bg-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--spacing-xl);
@@ -183,13 +183,13 @@
 }
 
 .posts-list .message-item {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--color-bg-card);
   backdrop-filter: blur(10px);
   border-radius: 16px;
   padding: 20px;
   margin-bottom: 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--color-border);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -271,12 +271,12 @@
 }
 
 .post-viewer .message-item {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--color-bg-card);
   backdrop-filter: blur(10px);
   border-radius: 16px;
   padding: 30px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--color-border);
   margin-bottom: 30px;
 }
 
@@ -345,12 +345,12 @@
 }
 
 .post-card {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--color-bg-card);
   backdrop-filter: blur(10px);
   border-radius: 16px;
   padding: 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--color-border);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -467,7 +467,7 @@
 
 /* Post Edit Form */
 .existing-attachments {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--color-bg-card);
   border-radius: 12px;
   padding: 20px;
   margin: 20px 0;
@@ -497,7 +497,7 @@
   padding: 15px;
   background: var(--color-bg-secondary);
   border-radius: 8px;
-  border: 1px solid var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
 }
 
 .attachment-icon {
@@ -532,7 +532,7 @@
 }
 
 .attachment-details {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--color-bg-card);
   border-radius: 12px;
   padding: 20px;
   margin-bottom: 20px;
@@ -611,7 +611,7 @@
 }
 
 .security-info {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--color-bg-card);
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 25px;

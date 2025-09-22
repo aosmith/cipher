@@ -18,13 +18,13 @@ module ActiveSupport
 
     workers = if configured_workers
                 configured_workers.to_i
-              elsif running_full_suite || memory_heavy_paths
+    elsif running_full_suite || memory_heavy_paths
                 1
-              else
+    else
                 2
-              end
+    end
 
-    parallelize(workers: [workers, 1].max)
+    parallelize(workers: [ workers, 1 ].max)
 
     Minitest.after_run do
       next if ENV["KEEP_TEST_LOGS"].present?
@@ -94,9 +94,9 @@ module TestHeartbeat
         since_last = (now - last_progress_at).round
         status = if tests_seen.positive?
                    "#{tests_seen} tests observed; last progress #{since_last}s ago"
-                 else
+        else
                    "initializing test suite"
-                 end
+        end
 
         if since_last >= timeout
           warn "[Heartbeat] No test progress for #{since_last}s (last: #{current_test || "unknown"})"

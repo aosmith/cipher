@@ -14,8 +14,6 @@ fn main() {
                 .resource_dir()
                 .expect("failed to resolve resource directory");
 
-            let rails_entry = resource_dir.join("bin/rails");
-
             let platform = if cfg!(target_os = "android") {
                 "android"
             } else if cfg!(target_os = "ios") {
@@ -24,9 +22,25 @@ fn main() {
                 "desktop"
             };
 
-            println!("{} app resource directory: {:?}", platform, resource_dir);
+            let mut candidate_roots: Vec<std::path::PathBuf> = vec![resource_dir.clone()];
+            candidate_roots.push(resource_dir.join("_up_"));
+            if let Ok(current_exe) = std::env::current_exe() {
+                if let Some(exe_dir) = current_exe.parent() {
+                    candidate_roots.push(exe_dir.join("../.."));
+                }
+            }
+            candidate_roots.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."));
 
-            if rails_entry.exists() {
+            let rails_root = candidate_roots
+                .into_iter()
+                .find(|root| root.join("bin/rails").exists());
+
+            println!(
+                "{} app resource directory: {:?}; rails root: {:?}",
+                platform, resource_dir, rails_root
+            );
+
+            if let Some(root) = rails_root {
                 // Start Rails server in bundled directory (localhost-only for security)
                 std::thread::spawn(move || {
                     let rails_command = if cfg!(target_os = "windows") {
@@ -43,7 +57,7 @@ fn main() {
                                 "-e",
                                 platform,
                             ])
-                            .current_dir(&resource_dir)
+                            .current_dir(&root)
                             .spawn()
                     } else {
                         std::process::Command::new("ruby")
@@ -57,7 +71,7 @@ fn main() {
                                 "-e",
                                 platform,
                             ])
-                            .current_dir(&resource_dir)
+                            .current_dir(&root)
                             .spawn()
                     };
 
@@ -76,7 +90,7 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_secs(3));
             } else {
                 println!(
-                    "Skipping bundled Rails launch for {} (bin/rails not present in resources)",
+                    "Skipping bundled Rails launch for {} (bin/rails not found in bundled resources)",
                     platform
                 );
             }

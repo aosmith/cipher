@@ -297,7 +297,7 @@
 .key-gen-progress {
   text-align: center;
   padding: var(--spacing-xl);
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-glass);
   border-radius: var(--radius-lg);
   margin-top: var(--spacing-md);
 }

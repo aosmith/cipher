@@ -164,7 +164,7 @@
 }
 
 .back-button:hover {
-  background-color: rgba(255,255,255,0.2);
+  background-color: rgba(var(--color-secondary-rgb), 0.2);
 }
 
 .chat-user-info {
@@ -176,7 +176,7 @@
 .chat-avatar .user-initial {
   width: 40px;
   height: 40px;
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--surface-glass);
   font-size: 1rem;
 }
 

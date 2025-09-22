@@ -48,6 +48,15 @@ bundle install
 # Prepare Rails app
 echo "🚂 Preparing Rails application..."
 export RAILS_ENV=desktop
+
+echo "🧹 Resetting desktop database..."
+bundle exec rails db:reset
+
+echo "🧼 Clearing build artifacts and storage..."
+bundle exec rails tmp:clear
+rm -rf storage/*
+
+echo "🛠️ Running migrations and precompiling assets..."
 bundle exec rails db:prepare
 bundle exec rails assets:precompile
 
