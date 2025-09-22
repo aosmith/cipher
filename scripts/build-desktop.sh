@@ -57,6 +57,17 @@ bundle exec rails tmp:clear
 rm -rf storage/*
 rm -rf public/assets
 
+APP_SUPPORT_DIR="$HOME/Library/Application Support/com.cipher.social"
+INSTALLED_APP="$HOME/Applications/Cipher.app"
+
+echo "🗑️ Removing cached desktop data..."
+rm -rf "$APP_SUPPORT_DIR"
+
+if [ -d "$INSTALLED_APP" ]; then
+  echo "🗑️ Removing previously installed Cipher.app..."
+  rm -rf "$INSTALLED_APP"
+fi
+
 echo "🛠️ Running migrations and precompiling assets..."
 bundle exec rails db:prepare
 bundle exec rails assets:precompile
