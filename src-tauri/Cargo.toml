@@ -22,6 +22,11 @@ serde = { version = "1.0", features = ["derive"] }
 tauri = { version = "2.0", features = ["devtools", "wry"], default-features = false }
 tauri-plugin-shell = { version = "2.0.0", default-features = false }
 
+# WebDriver support for testing
+[dev-dependencies]
+tauri-driver = "0.1"
+tokio = { version = "1.0", features = ["full"] }
+
 # For Android builds - use rustls instead of openssl
 [target.'cfg(target_os = "android")'.dependencies]
 tauri = { version = "2.0", features = ["devtools", "rustls-tls", "wry"], default-features = false }

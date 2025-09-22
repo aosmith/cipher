@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cipher</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #f5f5f5;
+      }
+      .loading {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        text-align: center;
+        padding: 20px;
+      }
+      .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-bottom: 20px;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .message {
+        color: #666;
+        font-size: 16px;
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body class="mobile-app platform-ios">
+    <div class="loading" id="loadingScreen">
+      <div class="spinner"></div>
+      <div class="message">Ciphering</div>
+    </div>
+    
+    <script>
+      console.log('Cipher mobile app loading...');
+      
+      // Detect if running in Tauri
+      if (window.__TAURI__) {
+        console.log('Running in Tauri mobile environment');
+        document.body.classList.add('tauri-mobile');
+      }
+      
+      // Add platform-specific styling
+      if (navigator.platform.includes('iPhone') || navigator.platform.includes('iPad')) {
+        document.body.classList.add('ios-platform');
+      }
+      
+      // Load the actual Rails application
+      setTimeout(() => {
+        document.getElementById('loadingScreen').style.display = 'none';
+        
+        // Create iframe to load Rails app
+        const iframe = document.createElement('iframe');
+        iframe.src = './app.html'; // This will be the Rails application
+        iframe.style.cssText = `
+          width: 100%;
+          height: 100vh;
+          border: none;
+          margin: 0;
+          padding: 0;
+        `;
+        
+        document.body.appendChild(iframe);
+        console.log('Rails application loaded');
+      }, 1000);
+    </script>
+  </body>
+</html>

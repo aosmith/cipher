@@ -6,7 +6,8 @@
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "RAILS_ENV=android bundle exec rails assets:precompile",
-    "devUrl": "http://127.0.0.1:3000"
+    "devUrl": "http://127.0.0.1:3000",
+    "frontendDist": "../public"
   },
   "app": {
     "windows": [
@@ -41,8 +42,9 @@
     "longDescription": "A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails. Share posts, images, and media with complete privacy.",
     "resources": [
       "../app",
-      "../config", 
+      "../config",
       "../db",
+      "../public",
       "../lib",
       "gen/android/runtime/dist",
       "../Gemfile",

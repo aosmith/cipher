@@ -1,0 +1,7 @@
+.theme-toggle-button {
+  background: var(--surface-glass, rgba(15, 23, 42, 0.68));
+}
+
+.theme-toggle-button:hover {
+  background: var(--surface-glass-strong, rgba(15, 23, 42, 0.85));
+}

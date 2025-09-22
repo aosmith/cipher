@@ -53,15 +53,17 @@ fn main() {
                         }
                     }
 
-                    // Prepare the database
-                    println!("Preparing database for {} environment...", platform);
-                    let db_prepare_command = if cfg!(target_os = "windows") {
+                    // Initialize the database with explicit steps
+                    println!("Initializing database for {} environment...", platform);
+
+                    // Step 1: Create database
+                    let db_create_command = if cfg!(target_os = "windows") {
                         std::process::Command::new("cmd")
                             .args(&[
                                 "/C",
                                 "ruby",
                                 "bin/rails",
-                                "db:prepare",
+                                "db:create",
                             ])
                             .env("RAILS_ENV", platform)
                             .current_dir(&root)
@@ -70,27 +72,131 @@ fn main() {
                         std::process::Command::new("ruby")
                             .args(&[
                                 "bin/rails",
-                                "db:prepare",
+                                "db:create",
                             ])
                             .env("RAILS_ENV", platform)
                             .current_dir(&root)
                             .output()
                     };
 
-                    match db_prepare_command {
+                    match db_create_command {
                         Ok(output) => {
-                            if output.status.success() {
-                                println!("Database prepared successfully for {}", platform);
-                                println!("Database preparation output: {}", String::from_utf8_lossy(&output.stdout));
-                            } else {
-                                println!("Database preparation failed for {}: {}", platform, String::from_utf8_lossy(&output.stderr));
-                                println!("Exit status: {}", output.status);
-                                // Also show stdout in case there are useful messages
-                                println!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
+                            println!("Database create result: {}", output.status);
+                            if !output.stdout.is_empty() {
+                                println!("Create stdout: {}", String::from_utf8_lossy(&output.stdout));
+                            }
+                            if !output.stderr.is_empty() {
+                                println!("Create stderr: {}", String::from_utf8_lossy(&output.stderr));
                             }
                         }
                         Err(e) => {
-                            println!("Failed to run db:prepare for {}: {}", platform, e);
+                            println!("Failed to run db:create for {}: {}", platform, e);
+                        }
+                    }
+
+                    // Step 2: Load schema
+                    let db_schema_command = if cfg!(target_os = "windows") {
+                        std::process::Command::new("cmd")
+                            .args(&[
+                                "/C",
+                                "ruby",
+                                "bin/rails",
+                                "db:schema:load",
+                            ])
+                            .env("RAILS_ENV", platform)
+                            .current_dir(&root)
+                            .output()
+                    } else {
+                        std::process::Command::new("ruby")
+                            .args(&[
+                                "bin/rails",
+                                "db:schema:load",
+                            ])
+                            .env("RAILS_ENV", platform)
+                            .current_dir(&root)
+                            .output()
+                    };
+
+                    match db_schema_command {
+                        Ok(output) => {
+                            if output.status.success() {
+                                println!("Database schema loaded successfully for {}", platform);
+                            } else {
+                                println!("Schema load failed for {}: {}", platform, String::from_utf8_lossy(&output.stderr));
+                                // Fallback to migrations if schema load fails
+                                println!("Attempting fallback to db:migrate...");
+                                let db_migrate_command = if cfg!(target_os = "windows") {
+                                    std::process::Command::new("cmd")
+                                        .args(&[
+                                            "/C",
+                                            "ruby",
+                                            "bin/rails",
+                                            "db:migrate",
+                                        ])
+                                        .env("RAILS_ENV", platform)
+                                        .current_dir(&root)
+                                        .output()
+                                } else {
+                                    std::process::Command::new("ruby")
+                                        .args(&[
+                                            "bin/rails",
+                                            "db:migrate",
+                                        ])
+                                        .env("RAILS_ENV", platform)
+                                        .current_dir(&root)
+                                        .output()
+                                };
+
+                                match db_migrate_command {
+                                    Ok(migrate_output) => {
+                                        if migrate_output.status.success() {
+                                            println!("Database migrations completed successfully for {}", platform);
+                                        } else {
+                                            println!("Migration failed for {}: {}", platform, String::from_utf8_lossy(&migrate_output.stderr));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("Failed to run db:migrate for {}: {}", platform, e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("Failed to run db:schema:load for {}: {}", platform, e);
+                        }
+                    }
+
+                    // Verify database was properly initialized by checking for users table
+                    println!("Verifying database initialization for {}...", platform);
+                    let verify_command = if cfg!(target_os = "windows") {
+                        std::process::Command::new("cmd")
+                            .args(&[
+                                "/C",
+                                "ruby",
+                                "-e",
+                                "require_relative 'config/environment'; puts User.table_exists? ? 'Database verified' : 'Database missing tables'",
+                            ])
+                            .env("RAILS_ENV", platform)
+                            .current_dir(&root)
+                            .output()
+                    } else {
+                        std::process::Command::new("ruby")
+                            .args(&[
+                                "-e",
+                                "require_relative 'config/environment'; puts User.table_exists? ? 'Database verified' : 'Database missing tables'",
+                            ])
+                            .env("RAILS_ENV", platform)
+                            .current_dir(&root)
+                            .output()
+                    };
+
+                    match verify_command {
+                        Ok(verify_output) => {
+                            let output_str = String::from_utf8_lossy(&verify_output.stdout);
+                            println!("Database verification result: {}", output_str.trim());
+                        }
+                        Err(e) => {
+                            println!("Failed to verify database for {}: {}", platform, e);
                         }
                     }
 
