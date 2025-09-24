@@ -54,10 +54,8 @@ This is a Rails 8.0.2 application called "Cipher" - an end-to-end encrypted peer
 - `bin/rails assets:precompile` - Compile assets for production
 
 ### Deployment
-- `bin/kamal deploy` - Deploy via Kamal
-- `bin/kamal console` - Access production console
-- `bin/kamal shell` - Access production shell
-- `bin/kamal logs` - View production logs
+- **Manual SSH deployment** - Deploy by SSHing to production server directly
+- **Do not use Kamal** - Kamal commands are not used for deployment
 
 ### Desktop Application
 - `bin/desktop` - Start desktop app in development mode (macOS/Linux)

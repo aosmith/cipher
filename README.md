@@ -87,14 +87,21 @@ bin/rails assets:precompile    # Compile for production
 
 ## Deployment
 
-Deploy to production using Kamal:
+**This is a local-only application.** Users run their own servers locally - there is no central deployment. Each person runs Cipher on their own machine and connects peer-to-peer with friends.
 
+### Running Your Own Server
+
+Users simply run:
 ```bash
-bin/kamal deploy    # Deploy application
-bin/kamal console   # Access production console
-bin/kamal shell     # Access production shell
-bin/kamal logs      # View production logs
+bin/rails server    # Start your local Cipher server
 ```
+
+### No Central Server Required
+
+- Each user runs their own local Rails server
+- Data syncs peer-to-peer via WebRTC between friends
+- No need for Kamal deployment or hosting infrastructure
+- Privacy by design - your data stays on your machine
 
 ## Health Check
 
