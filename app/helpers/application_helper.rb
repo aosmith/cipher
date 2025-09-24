@@ -28,6 +28,24 @@ module ApplicationHelper
     end
   end
 
+  def mobile_browser?
+    request.user_agent.match?(/Mobile|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i)
+  end
+
+  def android_device?
+    request.user_agent.match?(/Android/i)
+  end
+
+  def ios_device?
+    request.user_agent.match?(/iPhone|iPad|iPod/i)
+  end
+
+  def should_show_mobile_install_banner?
+    return false if Rails.env.android? || Rails.env.ios? || Rails.env.desktop?
+    return false if cookies[:hide_mobile_banner] == 'true'
+    mobile_browser?
+  end
+
   private
 
   def current_user_session

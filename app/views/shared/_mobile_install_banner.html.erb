@@ -1,0 +1,34 @@
+<% if should_show_mobile_install_banner? %>
+  <div id="mobile-install-banner" class="mobile-install-banner">
+    <div class="mobile-banner-content">
+      <div class="mobile-banner-app-info">
+        <div class="mobile-banner-icon">🔐</div>
+        <div class="mobile-banner-text">
+          <strong>Cipher</strong>
+          <span>Secure messaging app</span>
+        </div>
+      </div>
+      <div class="mobile-banner-actions">
+        <% if android_device? %>
+          <%= link_to "#", class: "mobile-install-btn",
+              onclick: "alert('Coming soon to Google Play Store!');" do %>
+            INSTALL
+          <% end %>
+        <% elsif ios_device? %>
+          <%= link_to "#", class: "mobile-install-btn",
+              onclick: "alert('Coming soon to App Store!');" do %>
+            GET
+          <% end %>
+        <% else %>
+          <%= link_to "#", class: "mobile-install-btn",
+              onclick: "alert('Coming soon to app stores!');" do %>
+            INSTALL
+          <% end %>
+        <% end %>
+        <button class="mobile-banner-close" onclick="hideMobileBanner()" aria-label="Close banner">
+          ✕
+        </button>
+      </div>
+    </div>
+  </div>
+<% end %>
