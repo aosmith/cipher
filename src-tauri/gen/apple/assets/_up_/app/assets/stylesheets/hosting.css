@@ -1,0 +1,332 @@
+/* Local Hosting Styles */
+
+.local-hosting-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.local-hosting-page .welcome-hero {
+  margin-top: 32px;
+  margin-bottom: 36px;
+}
+
+/* All hero sections standardized - using welcome-hero class */
+
+/* Card styles moved to design-system.css - using standardized .card component */
+
+/* Hosting Toggle */
+.hosting-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 24px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--color-border-muted);
+  transition: .4s;
+  border-radius: 24px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: var(--color-bg-primary);
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+  background-color: var(--success-color);
+}
+
+input:checked + .toggle-slider:before {
+  transform: translateX(26px);
+}
+
+#hosting-status-text {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+/* Status Grid styles moved to design-system.css */
+
+/* Quota Configuration */
+.quota-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  align-items: start;
+}
+
+/* Form group styles moved to design-system.css */
+
+.quota-input-group {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 8px;
+}
+
+.quota-range {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  outline: none;
+}
+
+.quota-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  cursor: pointer;
+}
+
+.quota-value-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.quota-number {
+  width: 80px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  text-align: center;
+}
+
+.quota-unit {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.quota-preview {
+  margin: 15px 0;
+}
+
+.quota-bar {
+  height: 12px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+.quota-bar-used {
+  height: 100%;
+  background: var(--danger-color, var(--color-danger-hover));
+  position: absolute;
+  left: 0;
+  transition: width 0.3s ease;
+}
+
+.quota-bar-allocated {
+  height: 100%;
+  background: var(--primary-color);
+  position: absolute;
+  left: 0;
+  transition: width 0.3s ease;
+  opacity: 0.7;
+}
+
+.quota-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.info-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.info-list li {
+  padding: 8px 0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* Earnings Dashboard */
+.earnings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+.earnings-card {
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(59, 130, 246, 0.05) 100%);
+  border-radius: 12px;
+  padding: 20px;
+  border: 1px solid var(--border-color);
+}
+
+.earnings-icon {
+  font-size: 2rem;
+  margin-bottom: 10px;
+}
+
+.earnings-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+
+.earnings-value {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.earnings-rate {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.earnings-actions {
+  margin-top: 8px;
+}
+
+/* Performance Metrics */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+}
+
+.metric-item {
+  text-align: center;
+}
+
+.metric-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.metric-value {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.metric-bar {
+  height: 6px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.metric-fill {
+  height: 100%;
+  background: var(--success-color);
+  transition: width 0.3s ease;
+}
+
+/* Activity List */
+.activity-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.no-activity {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-secondary);
+}
+
+.no-activity-icon {
+  font-size: 2rem;
+  margin-bottom: 10px;
+}
+
+/* Button styles moved to design-system.css */
+
+/* Form help styles moved to design-system.css */
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .local-hosting-page {
+    padding: 15px;
+  }
+  
+  .quota-section {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  
+  .status-grid,
+  .earnings-grid,
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .card-header {
+    flex-direction: column;
+    gap: 15px;
+    align-items: flex-start;
+  }
+  
+  .hosting-toggle {
+    align-self: flex-end;
+  }
+}
+
+/* P2P Status Styles */
+.status-connected {
+  color: var(--color-success) !important;
+}
+
+.status-disconnected {
+  color: var(--color-danger-hover) !important;
+}
+
+/* Test Section Styles */
+.test-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.test-results {
+  min-height: 100px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-secondary);
+}

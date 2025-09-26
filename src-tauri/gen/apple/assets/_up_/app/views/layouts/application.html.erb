@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title><%= content_for(:title) || "Cipher" %></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+    
+    <!-- Desktop app specific meta tags -->
+    <% if Rails.env.desktop? %>
+      <meta name="desktop-app" content="true">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'self' tauri: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:;">
+    <% end %>
+
+    <%= yield :head %>
+
+    <%# Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!) %>
+    <%#= tag.link rel: "manifest", href: pwa_manifest_path(format: :json) %>
+
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/android-chrome-512x512.png">
+
+    <%# Includes all stylesheet files in app/assets/stylesheets %>
+    <%= stylesheet_link_tag "application", "layout", "mobile", "homepage", "posts", "messages", "users", "hosting", "data-turbo-track": "reload" %>
+  </head>
+
+  <% body_classes = [] %>
+  <% if Rails.env.desktop? %>
+    <% body_classes += %w[env-desktop platform-macos] %>
+  <% end %>
+  <% if Rails.env.ios? %>
+    <% body_classes += %w[mobile-app env-ios platform-ios] %>
+  <% end %>
+  <% if Rails.env.android? %>
+    <% body_classes += %w[mobile-app env-android platform-android] %>
+  <% end %>
+  <% if Rails.env.development? || Rails.env.production? %>
+    <% body_classes << 'env-web' %>
+  <% end %>
+  <body data-theme="<%= current_theme %>" class="<%= body_classes.join(' ') %>">
+    <div class="app-wrapper">
+      <!-- Desktop native sidebar removed for simplified layout -->
+
+      <!-- App header -->
+        <header class="app-header">
+          <div class="header-container">
+            <div class="header-left">
+              <%= link_to root_path, class: "logo-link" do %>
+                <span class="logo">🔐 Cipher</span>
+              <% end %>
+            </div>
+            
+            <div class="header-right">
+              <% if current_user_session %>
+                <div class="user-nav">
+                  <span class="user-greeting">Hi, <strong><%= current_user_session.username %></strong></span>
+                  <span class="peer-count"><%= current_user_session.peers.active.count %> peers</span>
+                  <nav class="nav-links">
+                    <%= link_to "Feed", feed_path, class: "nav-link" %>
+                    <%= link_to "Posts", posts_path, class: "nav-link" %>
+                    <%= link_to "Friends", friends_users_path, class: "nav-link" %>
+                    <%= link_to "Messages", messages_path, class: "nav-link" %>
+                    <%= link_to "Local Hosting", local_hosting_users_path, class: "nav-link" %>
+                    <%= link_to "Profile", user_path(current_user_session), class: "nav-link" %>
+                  </nav>
+                </div>
+              <% else %>
+                <nav class="nav-links">
+                  <%= link_to "Overview", root_path, class: "nav-link" %>
+                  <%= link_to "Security", root_path(anchor: "security"), class: "nav-link" %>
+                  <%= link_to "Community", root_path(anchor: "community"), class: "nav-link" %>
+                </nav>
+                <nav class="auth-nav">
+                  <%= link_to "Sign In", import_keys_users_path, class: "btn btn-secondary" %>
+                  <%= link_to "Create Account", new_user_path, class: "btn btn-primary" %>
+                </nav>
+              <% end %>
+
+              <div class="theme-toggle">
+                <%= button_to toggle_theme_path, method: :post, class: "theme-toggle-button", form_class: "theme-toggle-form" do %>
+                  <span class="theme-toggle-icon" aria-hidden="true"><%= current_theme == "light" ? "🌙" : "☀️" %></span>
+                  <span class="visually-hidden">Toggle theme</span>
+                <% end %>
+              </div>
+            </div>
+          </div>
+        </header>
+
+      <!-- Mobile Install Banner -->
+      <%= render 'shared/mobile_install_banner' %>
+
+      <% if flash.any? %>
+        <div class="flash-messages">
+          <% flash.each do |type, message| %>
+            <div class="flash-message flash-<%= type %>">
+              <%= message %>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+
+      <main class="app-main">
+        <%= yield %>
+      </main>
+
+      <footer class="app-footer">
+        <div class="footer-container">
+          <div class="footer-content">
+            <div class="footer-section">
+              <h4>Cipher</h4>
+              <p>Secure, decentralized communication for the modern web</p>
+              <div class="footer-links">
+                <%= link_to "About", "#" %>
+                <%= link_to "Security", "#" %>
+                <%= link_to "Privacy", "#" %>
+              </div>
+            </div>
+            
+            <div class="footer-section">
+              <h4>Community</h4>
+              <div class="footer-links">
+                <%= link_to "GitHub", "#" %>
+                <%= link_to "Documentation", "#" %>
+                <%= link_to "Support", "#" %>
+              </div>
+            </div>
+          </div>
+          
+          <div class="footer-bottom">
+            <div class="footer-info">
+              <span>&copy; 2025 Cipher. Zero-knowledge by design.</span>
+            </div>
+            <div class="footer-badges">
+              <span class="badge security-badge">🔐 End-to-End Encrypted</span>
+              <span class="badge privacy-badge">🛡️ Zero-Knowledge</span>
+              <span class="badge badge-success b-corp-badge">🌱 Certified B Corporation</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <div class="no-js-note">
+      Browser scripting has been removed. Notifications and peer updates are handled by the server process.
+    </div>
+
+    <% if Rails.env.desktop? %>
+      <div class="desktop-js-note">Desktop window controls are managed directly by the host application.</div>
+    <% end %>
+
+    <script>
+      function hideMobileBanner() {
+        const banner = document.getElementById('mobile-install-banner');
+        if (banner) {
+          banner.classList.add('hidden');
+          // Set cookie to remember user dismissed the banner
+          document.cookie = 'hide_mobile_banner=true; path=/; max-age=' + (365 * 24 * 60 * 60); // 1 year
+        }
+      }
+    </script>
+  </body>
+</html>

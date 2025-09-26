@@ -1,0 +1,33 @@
+<div class="chat-container">
+  <div class="chat-header">
+    <%= link_to messages_path, class: "back-button" do %>
+      ← Back to Messages
+    <% end %>
+    
+    <div class="chat-user-info">
+      <div class="chat-avatar">
+        <div class="user-initial"><%= @recipient.username.first.upcase %></div>
+      </div>
+      <div class="chat-user-details">
+        <h2><%= @recipient.username %></h2>
+        <p class="chat-user-status">
+          <%= @recipient.friends_with?(current_user_session) ? "Friend" : "User" %>
+        </p>
+      </div>
+    </div>
+  </div>
+  
+  <div class="messages-area">
+    <div id="messages-list" class="messages-list">
+      <% @messages.reverse.each do |message| %>
+        <%= render partial: "messages/message", locals: { message: message, current_user: current_user_session } %>
+      <% end %>
+    </div>
+  </div>
+  
+  <div class="message-input-area">
+    <div id="new-message-form">
+      <%= render partial: "messages/message_form", locals: { message: @new_message, recipient: @recipient } %>
+    </div>
+  </div>
+</div>
