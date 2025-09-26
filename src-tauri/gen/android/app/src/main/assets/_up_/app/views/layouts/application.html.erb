@@ -91,6 +91,8 @@
           </div>
         </header>
 
+      <!-- Mobile Install Banner -->
+      <%= render 'shared/mobile_install_banner' %>
 
       <% if flash.any? %>
         <div class="flash-messages">
@@ -150,5 +152,16 @@
     <% if Rails.env.desktop? %>
       <div class="desktop-js-note">Desktop window controls are managed directly by the host application.</div>
     <% end %>
+
+    <script>
+      function hideMobileBanner() {
+        const banner = document.getElementById('mobile-install-banner');
+        if (banner) {
+          banner.classList.add('hidden');
+          // Set cookie to remember user dismissed the banner
+          document.cookie = 'hide_mobile_banner=true; path=/; max-age=' + (365 * 24 * 60 * 60); // 1 year
+        }
+      }
+    </script>
   </body>
 </html>

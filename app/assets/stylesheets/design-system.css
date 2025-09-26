@@ -661,10 +661,13 @@ select {
   border-radius: var(--radius-lg);
   font-size: var(--font-size-base);
   font-family: inherit;
-  background: var(--input-bg);
-  color: var(--color-text-primary);
+  background: var(--input-bg) !important;
+  color: var(--color-text-primary) !important;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: var(--input-shadow);
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
 }
 
 /* Focus States */
@@ -697,8 +700,23 @@ select:hover:not(:focus) {
 .form-control::placeholder,
 input::placeholder,
 textarea::placeholder {
-  color: var(--color-text-muted);
-  opacity: 0.8;
+  color: var(--color-text-muted) !important;
+  opacity: 0.7;
+}
+
+/* Force placeholder styling on webkit browsers */
+.form-control::-webkit-input-placeholder,
+input::-webkit-input-placeholder,
+textarea::-webkit-input-placeholder {
+  color: var(--color-text-muted) !important;
+  opacity: 0.7;
+}
+
+.form-control::-moz-placeholder,
+input::-moz-placeholder,
+textarea::-moz-placeholder {
+  color: var(--color-text-muted) !important;
+  opacity: 0.7;
 }
 
 /* Disabled State */

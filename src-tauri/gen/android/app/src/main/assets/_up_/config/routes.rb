@@ -100,6 +100,9 @@ Rails.application.routes.draw do
 
   post "toggle_theme", to: "themes#toggle"
 
+  # Mobile app download
+  get "cipher.apk", to: "mobile_apps#download_android"
+
   # Defines the root path route ("/")
   root "users#index"
 end
