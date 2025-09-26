@@ -118,7 +118,8 @@
       "Read(//tmp/**)",
       "Bash(cargo clean:*)",
       "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --config src-tauri/tauri.android.conf.json --target aarch64 --debug)",
-      "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --config tauri.android.conf.json --target aarch64 --debug)"
+      "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --config tauri.android.conf.json --target aarch64 --debug)",
+      "Bash(xcodegen:*)"
     ],
     "deny": [],
     "ask": []
