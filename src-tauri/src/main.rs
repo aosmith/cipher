@@ -41,10 +41,16 @@ fn main() {
             );
 
             if let Some(root) = rails_root {
+                // Get app data directory for user-writable storage
+                let app_data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .expect("failed to resolve app data directory");
+
                 // Start Rails server in bundled directory (localhost-only for security)
                 std::thread::spawn(move || {
-                    // First, ensure storage directory exists
-                    let storage_dir = root.join("storage");
+                    // First, ensure app data and storage directories exist
+                    let storage_dir = app_data_dir.join("storage");
                     if !storage_dir.exists() {
                         if let Err(e) = std::fs::create_dir_all(&storage_dir) {
                             println!("Failed to create storage directory: {}", e);
@@ -52,6 +58,11 @@ fn main() {
                             println!("Created storage directory at: {:?}", storage_dir);
                         }
                     }
+
+                    // Set database path to app data directory
+                    let db_path = storage_dir.join(format!("{}.sqlite3", platform));
+                    std::env::set_var("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()));
+                    println!("Database path set to: {:?}", db_path);
 
                     // Initialize the database with explicit steps
                     println!("Initializing database for {} environment...", platform);
@@ -66,6 +77,7 @@ fn main() {
                                 "db:create",
                             ])
                             .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .output()
                     } else {
@@ -75,6 +87,7 @@ fn main() {
                                 "db:create",
                             ])
                             .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .output()
                     };
@@ -104,6 +117,7 @@ fn main() {
                                 "db:schema:load",
                             ])
                             .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .output()
                     } else {
@@ -113,6 +127,7 @@ fn main() {
                                 "db:schema:load",
                             ])
                             .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .output()
                     };
@@ -134,6 +149,7 @@ fn main() {
                                             "db:migrate",
                                         ])
                                         .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                                         .current_dir(&root)
                                         .output()
                                 } else {
@@ -143,6 +159,7 @@ fn main() {
                                             "db:migrate",
                                         ])
                                         .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                                         .current_dir(&root)
                                         .output()
                                 };
@@ -177,6 +194,7 @@ fn main() {
                                 "require_relative 'config/environment'; puts User.table_exists? ? 'Database verified' : 'Database missing tables'",
                             ])
                             .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .output()
                     } else {
@@ -186,6 +204,7 @@ fn main() {
                                 "require_relative 'config/environment'; puts User.table_exists? ? 'Database verified' : 'Database missing tables'",
                             ])
                             .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .output()
                     };
@@ -215,6 +234,8 @@ fn main() {
                                 "-e",
                                 platform,
                             ])
+                            .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .spawn()
                     } else {
@@ -229,6 +250,8 @@ fn main() {
                                 "-e",
                                 platform,
                             ])
+                            .env("RAILS_ENV", platform)
+                            .env("DATABASE_URL", format!("sqlite3://{}", db_path.to_string_lossy()))
                             .current_dir(&root)
                             .spawn()
                     };

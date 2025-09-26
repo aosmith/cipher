@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cipher",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "identifier": "com.cipher.social",
   "build": {
     "beforeDevCommand": "bin/desktop_dev_server",
@@ -44,7 +44,7 @@
     "longDescription": "A zero-knowledge, end-to-end encrypted peer-to-peer social network built with Rails. Share posts, images, and media with complete privacy.",
     "resources": [
       "../app",
-      "../config", 
+      "../config",
       "../db",
       "../public",
       "../lib",
@@ -98,6 +98,9 @@
       "readText": true,
       "writeText": true
     },
-    "globalShortcut": {}
+    "globalShortcut": {},
+    "theme": {
+      "theme": true
+    }
   }
 }

@@ -119,7 +119,14 @@
       "Bash(cargo clean:*)",
       "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --config src-tauri/tauri.android.conf.json --target aarch64 --debug)",
       "Bash(ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk OPENSSL_STATIC=1 OPENSSL_VENDORED=1 npx tauri android build --config tauri.android.conf.json --target aarch64 --debug)",
-      "Bash(xcodegen:*)"
+      "Bash(xcodegen:*)",
+      "Bash(RAILS_ENV=desktop bin/rails test test/models/user_test.rb)",
+      "Bash(RAILS_ENV=desktop bin/rails db:version)",
+      "Bash(./test_desktop_app.sh:*)",
+      "Bash(log show:*)",
+      "Read(//Users/alex/Library/Logs/**)",
+      "Bash(defaults read:*)",
+      "Bash(npm run tauri:build:*)"
     ],
     "deny": [],
     "ask": []

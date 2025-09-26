@@ -1,4 +1,6 @@
 class ApplicationController < ActionController::Base
+  include ThemeHelper
+
   # Only allow modern browsers supporting webp images, web push, badges, import maps, CSS nesting, and CSS :has.
   # Skip browser check in test environment to allow test runners
   allow_browser versions: :modern unless Rails.env.test?
@@ -39,7 +41,6 @@ class ApplicationController < ActionController::Base
   private
 
   def set_theme
-    requested_theme = cookies[:theme]
-    @current_theme = %w[light dark].include?(requested_theme) ? requested_theme : "dark"
+    @current_theme = current_theme
   end
 end
