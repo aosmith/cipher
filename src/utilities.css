@@ -1,0 +1,279 @@
+/* CSS Utilities - Reusable Classes for Common Patterns */
+
+/* === GLASS EFFECT UTILITIES === */
+.glass-card {
+    background: var(--glass-clear);
+    backdrop-filter: blur(var(--blur-regular)) saturate(150%);
+    -webkit-backdrop-filter: blur(var(--blur-regular)) saturate(150%);
+    border: 1px solid var(--glass-clear-border);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-glass-sm);
+    transition: all var(--transition-smooth);
+}
+
+.glass-card--regular {
+    background: var(--glass-regular);
+    border-color: var(--glass-regular-border);
+}
+
+.glass-card--tinted {
+    background: var(--glass-tinted);
+    border-color: var(--glass-tinted-border);
+}
+
+.glass-card--accent {
+    background: var(--glass-accent);
+    border-color: var(--glass-accent-border);
+}
+
+/* === HOVER TRANSFORMS === */
+.hover-lift-sm {
+    transition: transform var(--transition-smooth);
+}
+.hover-lift-sm:hover {
+    transform: translateY(-2px);
+}
+
+.hover-lift-md {
+    transition: transform var(--transition-smooth);
+}
+.hover-lift-md:hover {
+    transform: translateY(-3px);
+}
+
+.hover-lift-lg {
+    transition: transform var(--transition-smooth);
+}
+.hover-lift-lg:hover {
+    transform: translateY(-4px);
+}
+
+.hover-slide {
+    transition: transform var(--transition-smooth);
+}
+.hover-slide:hover {
+    transform: translateX(4px);
+}
+
+/* === FLEXBOX UTILITIES === */
+.flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.flex-between {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.flex-col {
+    display: flex;
+    flex-direction: column;
+}
+
+.flex-col-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.flex-gap-sm {
+    gap: var(--spacing-sm);
+}
+
+.flex-gap-md {
+    gap: var(--spacing-md);
+}
+
+.flex-gap-lg {
+    gap: var(--spacing-lg);
+}
+
+/* === TEXT UTILITIES === */
+.text-ellipsis {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.text-wrap {
+    white-space: normal;
+    word-wrap: break-word;
+}
+
+/* === TRANSITION UTILITIES === */
+.transition-smooth {
+    transition: all var(--transition-smooth);
+}
+
+.transition-fast {
+    transition: all var(--transition-fast);
+}
+
+/* === BACKDROP UTILITIES === */
+.backdrop-blur {
+    backdrop-filter: blur(var(--blur-regular)) saturate(150%);
+    -webkit-backdrop-filter: blur(var(--blur-regular)) saturate(150%);
+}
+
+.backdrop-blur-strong {
+    backdrop-filter: blur(var(--blur-strong)) saturate(150%);
+    -webkit-backdrop-filter: blur(var(--blur-strong)) saturate(150%);
+}
+
+/* === SCROLLBAR UTILITIES === */
+.scrollbar-hidden {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+}
+
+/* === INTERACTIVE STATES === */
+.interactive {
+    cursor: pointer;
+    user-select: none;
+}
+
+.interactive:hover {
+    opacity: 0.9;
+}
+
+.interactive:active {
+    transform: scale(0.98);
+}
+
+/* === SPACING UTILITIES === */
+.p-sm { padding: var(--spacing-sm); }
+.p-md { padding: var(--spacing-md); }
+.p-lg { padding: var(--spacing-lg); }
+.p-xl { padding: var(--spacing-xl); }
+
+.m-sm { margin: var(--spacing-sm); }
+.m-md { margin: var(--spacing-md); }
+.m-lg { margin: var(--spacing-lg); }
+.m-xl { margin: var(--spacing-xl); }
+
+.mb-sm { margin-bottom: var(--spacing-sm); }
+.mb-md { margin-bottom: var(--spacing-md); }
+.mb-lg { margin-bottom: var(--spacing-lg); }
+.mb-xl { margin-bottom: var(--spacing-xl); }
+
+.mt-sm { margin-top: var(--spacing-sm); }
+.mt-md { margin-top: var(--spacing-md); }
+.mt-lg { margin-top: var(--spacing-lg); }
+.mt-xl { margin-top: var(--spacing-xl); }
+
+/* === MAX-WIDTH UTILITIES === */
+.max-w-content { max-width: var(--content-max-width); }
+.max-w-form { max-width: var(--form-max-width); }
+.max-w-auth { max-width: var(--auth-max-width); }
+.max-w-button { max-width: var(--button-max-width); }
+.max-w-full { max-width: 100%; }
+
+/* === COMMON LAYOUT PATTERNS === */
+.center-container {
+    max-width: var(--content-max-width);
+    width: 100%;
+    margin: 0 auto;
+}
+
+.form-container {
+    max-width: var(--form-max-width);
+    margin: 0 auto;
+}
+
+.auth-container {
+    max-width: var(--auth-max-width);
+    margin: 0 auto;
+    text-align: center;
+}
+
+.empty-state {
+    text-align: center;
+    padding: var(--spacing-3xl) var(--spacing-lg);
+}
+
+.button-group {
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: center;
+    margin-top: var(--spacing-xl);
+}
+
+.form-group-spacing {
+    margin: var(--spacing-lg) 0;
+}
+
+/* === VISIBILITY UTILITIES === */
+.hidden {
+    display: none !important;
+}
+
+.invisible {
+    visibility: hidden;
+}
+
+.opacity-0 {
+    opacity: 0;
+}
+
+/* === POSITION UTILITIES === */
+.relative {
+    position: relative;
+}
+
+.absolute {
+    position: absolute;
+}
+
+.sticky {
+    position: sticky;
+}
+
+/* === GRID UTILITIES === */
+.grid {
+    display: grid;
+}
+
+.grid-cols-1 {
+    grid-template-columns: repeat(1, 1fr);
+}
+
+.grid-cols-auto-fit {
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+/* === BORDER UTILITIES === */
+.rounded-sm {
+    border-radius: var(--border-radius-sm);
+}
+
+.rounded-md {
+    border-radius: var(--border-radius-md);
+}
+
+.rounded-lg {
+    border-radius: var(--border-radius-lg);
+}
+
+/* === SHADOW UTILITIES === */
+.shadow-sm {
+    box-shadow: var(--shadow-glass-sm);
+}
+
+.shadow-md {
+    box-shadow: var(--shadow-glass-md);
+}
+
+.shadow-lg {
+    box-shadow: var(--shadow-glass-lg);
+}

@@ -1,0 +1,54 @@
+use super::uuid::SqliteUuid;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct User {
+    pub id: SqliteUuid,
+    pub username: String,
+    pub public_key: Option<String>,
+    #[serde(skip_serializing)] // CRITICAL: Never serialize private keys
+    #[allow(dead_code)] // Field is used but not detected by dead code analysis
+    pub private_key: Option<String>,
+    pub encryption_public_key: Option<String>,
+    #[serde(skip_serializing)] // CRITICAL: Never serialize private keys
+    #[allow(dead_code)] // Field is used but not detected by dead code analysis
+    pub encryption_private_key: Option<String>,
+    pub device_id: Option<String>,
+    pub bio: Option<String>,
+    pub profile_picture: Option<String>,
+    #[serde(skip_serializing)] // Never serialize recovery phrase hash
+    #[allow(dead_code)] // Field is used but not detected by dead code analysis
+    pub recovery_phrase_hash: Option<String>,
+    pub recovery_phrase_shown: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPair {
+    pub public_key: String,
+    #[serde(skip_serializing)] // CRITICAL: Never serialize private keys
+    #[allow(dead_code)] // Field is used but not detected by dead code analysis
+    pub private_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewUser {
+    pub username: String, // Now used as display_name
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserWithRecoveryPhrase {
+    pub user: User,
+    pub recovery_phrase: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserRegistrationResponse {
+    pub user: User,
+    pub recovery_phrase: String,
+}

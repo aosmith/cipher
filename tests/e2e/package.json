@@ -1,0 +1,33 @@
+{
+  "name": "cipher-e2e-tests",
+  "version": "1.0.0",
+  "description": "End-to-end tests for Cipher app using Appium",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha --timeout 60000",
+    "test:mac": "TEST_PLATFORM=mac mocha --timeout 60000",
+    "test:android": "TEST_PLATFORM=android mocha --timeout 60000",
+    "test:ios": "TEST_PLATFORM=ios mocha --timeout 60000"
+  },
+  "keywords": [
+    "appium",
+    "e2e",
+    "testing",
+    "tauri"
+  ],
+  "author": "Cipher Team",
+  "license": "AGPL-3.0",
+  "devDependencies": {
+    "@types/chai": "^5.0.1",
+    "@types/mocha": "^10.0.10",
+    "appium": "^2.11.4",
+    "appium-mac2-driver": "^2.2.2",
+    "chai": "^5.1.2",
+    "mocha": "^10.8.2",
+    "webdriverio": "^9.2.24"
+  },
+  "dependencies": {
+    "chromedriver": "^140.0.4",
+    "selenium-webdriver": "^4.35.0"
+  }
+}

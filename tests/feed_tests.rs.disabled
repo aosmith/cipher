@@ -1,0 +1,353 @@
+// Feed and post tests for Cipher
+// Tests post creation, reactions, comments, sharing, and feed filtering
+
+use app::Database;
+use tempfile::TempDir;
+
+#[test]
+fn test_create_and_retrieve_post() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+
+    // Create post
+    let post = db.create_post(user.id, "My first post!", false).unwrap();
+    assert_eq!(post.content, "My first post!");
+    assert_eq!(post.user_id, user.id);
+
+    // Retrieve posts
+    let posts = db.get_posts(user.id).unwrap();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].content, "My first post!");
+}
+
+#[test]
+fn test_edit_post() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(user.id, "Original content", false).unwrap();
+
+    // Edit post
+    let edited = db.edit_post(post.id, user.id, "Updated content").unwrap();
+    assert_eq!(edited.content, "Updated content");
+    assert!(edited.edited, "Post should be marked as edited");
+}
+
+#[test]
+fn test_delete_post() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(user.id, "To be deleted", false).unwrap();
+
+    // Delete post
+    db.delete_post(post.id, user.id).unwrap();
+
+    // Verify deletion
+    let posts = db.get_posts(user.id).unwrap();
+    assert_eq!(posts.len(), 0);
+}
+
+#[test]
+fn test_post_reactions() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(alice.id, "Check out this post!", false).unwrap();
+
+    // Bob reacts with heart
+    db.add_post_reaction(post.id, bob.id, "❤️").unwrap();
+
+    // Get reactions
+    let reactions = db.get_post_reactions(post.id).unwrap();
+    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions[0].emoji, "❤️");
+    assert_eq!(reactions[0].user_id, bob.id);
+
+    // Get reaction summary
+    let summary = db.get_post_reaction_summary(post.id).unwrap();
+    let total_count: i32 = summary.iter().map(|(_, count)| count).sum();
+    assert_eq!(total_count, 1);
+}
+
+#[test]
+fn test_remove_post_reaction() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(alice.id, "Post", false).unwrap();
+
+    // Add reaction
+    db.add_post_reaction(post.id, bob.id, "👍").unwrap();
+
+    // Remove reaction
+    db.remove_post_reaction(post.id, bob.id, "👍").unwrap();
+
+    // Verify removal
+    let reactions = db.get_post_reactions(post.id).unwrap();
+    assert_eq!(reactions.len(), 0);
+}
+
+#[test]
+fn test_post_comments() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(alice.id, "Original post", false).unwrap();
+
+    // Bob comments
+    let comment = db.add_post_comment(post.id, bob.id, "Nice post!", None).unwrap();
+    assert_eq!(comment.content, "Nice post!");
+    assert_eq!(comment.post_id, post.id);
+
+    // Get comments
+    let comments = db.get_post_comments(post.id).unwrap();
+    assert_eq!(comments.len(), 1);
+
+    // Get comment count
+    let count = db.get_post_comment_count(post.id).unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_comment_replies() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (charlie, _) = db.create_user_first_launch("charlie".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(alice.id, "Post", false).unwrap();
+
+    // Bob comments
+    let bob_comment = db.add_post_comment(post.id, bob.id, "First!", None).unwrap();
+
+    // Charlie replies to Bob's comment
+    let conn = db.conn.lock().unwrap();
+    conn.execute(
+        "INSERT INTO post_comments (id, post_id, user_id, content, parent_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))",
+        rusqlite::params![
+            app::types::SqliteUuid::new(),
+            post.id,
+            charlie.id,
+            "Second!",
+            bob_comment.id
+        ]
+    ).unwrap();
+    drop(conn);
+
+    // Get replies to Bob's comment
+    let replies = db.get_comment_replies(bob_comment.id).unwrap();
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].content, "Second!");
+}
+
+#[test]
+fn test_delete_post_comment() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(alice.id, "Post", false).unwrap();
+    let comment = db.add_post_comment(post.id, alice.id, "Comment", None).unwrap();
+
+    // Delete comment
+    db.delete_post_comment(comment.id, alice.id).unwrap();
+
+    // Verify deletion
+    let comments = db.get_post_comments(post.id).unwrap();
+    assert_eq!(comments.len(), 0);
+}
+
+#[test]
+fn test_post_sharing() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let original_post = db.create_post(alice.id, "Original", false).unwrap();
+
+    // Bob shares Alice's post
+    let share = db.share_post(bob.id, original_post.id, Some("Check this out!".to_string())).unwrap();
+    assert_eq!(share.original_post_id, original_post.id);
+    assert_eq!(share.sharer_id, bob.id);
+
+    // Get shared post
+    let shared = db.get_shared_post(share.id).unwrap();
+    assert_eq!(shared.id, share.id);
+
+    // Get share count
+    let shares = db.get_post_shares(original_post.id).unwrap();
+    assert_eq!(shares.len(), 1);
+}
+
+#[test]
+fn test_get_all_posts() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Create multiple posts
+    db.create_post(alice.id, "Alice post 1", false).unwrap();
+    db.create_post(bob.id, "Bob post 1", false).unwrap();
+    db.create_post(alice.id, "Alice post 2", false).unwrap();
+
+    // Get all posts (use Alice's perspective to see all)
+    let all_posts = db.get_posts(alice.id).unwrap();
+    assert!(all_posts.len() >= 1, "Should have at least Alice's posts");
+}
+
+#[test]
+fn test_feed_filtering_by_friends() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (charlie, _) = db.create_user_first_launch("charlie".to_string(), Database::generate_device_id()).unwrap();
+
+    // Alice is friends with Bob, but not Charlie
+    db.add_friend(alice.id, bob.id).unwrap();
+
+    // Accept friendship
+    db.conn.lock().unwrap().execute(
+        "UPDATE p2p_connections SET status = 'accepted' WHERE user_id = ?1",
+        rusqlite::params![alice.id]
+    ).unwrap();
+
+    // Create posts
+    db.create_post(alice.id, "Alice's post", false).unwrap();
+    db.create_post(bob.id, "Bob's post", false).unwrap();
+    db.create_post(charlie.id, "Charlie's post", false).unwrap();
+
+    // Alice should see her own posts and Bob's posts (friend)
+    let alice_feed = db.get_posts(alice.id).unwrap();
+    // Alice sees her own post + Bob's post (friend)
+    assert!(alice_feed.len() >= 2, "Alice should see her own and friend's posts");
+}
+
+#[test]
+fn test_post_with_media_attachment() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+
+    // Create post
+    let post = db.create_post(user.id, "Post with image", false).unwrap();
+
+    // Upload media
+    let media = db.upload_media_file(
+        user.id,
+        None,
+        Some(post.id),
+        "image/jpeg".to_string(),
+        vec![1, 2, 3, 4, 5]
+    ).unwrap();
+
+    assert_eq!(media.post_id, Some(post.id));
+
+    // Get post media
+    let post_media = db.get_post_media(post.id).unwrap();
+    assert_eq!(post_media.len(), 1);
+    assert_eq!(post_media[0].mime_type, "image/jpeg");
+}
+
+#[test]
+fn test_post_chronological_ordering() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+
+    // Create posts with delays
+    let post1 = db.create_post(user.id, "First", false).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let post2 = db.create_post(user.id, "Second", false).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let post3 = db.create_post(user.id, "Third", false).unwrap();
+
+    // Get posts (should be chronological)
+    let posts = db.get_posts(user.id).unwrap();
+    assert!(posts[0].created_at <= posts[1].created_at);
+    assert!(posts[1].created_at <= posts[2].created_at);
+}
+
+#[test]
+fn test_post_persistence() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+
+    // Session 1: Create post
+    let user_id = {
+        let db = Database::new(&db_path.to_string_lossy()).unwrap();
+        let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+        db.create_post(user.id, "Persistent post", false).unwrap();
+        user.id
+    };
+
+    // Session 2: Verify post exists
+    {
+        let db = Database::new(&db_path.to_string_lossy()).unwrap();
+        let posts = db.get_posts(user_id).unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].content, "Persistent post");
+    }
+}
+
+#[test]
+fn test_multiple_reactions_on_same_post() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (charlie, _) = db.create_user_first_launch("charlie".to_string(), Database::generate_device_id()).unwrap();
+
+    let post = db.create_post(alice.id, "Popular post", false).unwrap();
+
+    // Multiple users react
+    db.add_post_reaction(post.id, bob.id, "❤️").unwrap();
+    db.add_post_reaction(post.id, charlie.id, "👍").unwrap();
+    db.add_post_reaction(post.id, alice.id, "🎉").unwrap();
+
+    let reactions = db.get_post_reactions(post.id).unwrap();
+    assert_eq!(reactions.len(), 3);
+
+    let summary = db.get_post_reaction_summary(post.id).unwrap();
+    let total_count: i32 = summary.iter().map(|(_, count)| count).sum();
+    assert_eq!(total_count, 3);
+}
+
+#[test]
+fn test_empty_feed() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    // No posts created
+    let (user, _) = db.create_user_first_launch("testuser".to_string(), Database::generate_device_id()).unwrap();
+    let posts = db.get_posts(user.id).unwrap();
+    assert_eq!(posts.len(), 0, "Empty feed should return no posts");
+}

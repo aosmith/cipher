@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Cipher - Encrypted Social Network</title>
+    <link rel="stylesheet" href="glass-utilities.css">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="utilities.css">
+</head>
+<body class="app-loading">
+    <input type="checkbox" id="color-mode-toggle" class="theme-toggle__checkbox" />
+    <script>
+        (function () {
+            var STORAGE_KEY = 'cipher-color-mode';
+            var root = document.documentElement;
+
+            function isValid(mode) {
+                return mode === 'light' || mode === 'dark';
+            }
+
+            function readStored() {
+                try {
+                    var stored = window.localStorage.getItem(STORAGE_KEY);
+                    if (isValid(stored)) {
+                        return stored;
+                    }
+                } catch (err) {}
+                return null;
+            }
+
+            function persist(mode) {
+                try {
+                    window.localStorage.setItem(STORAGE_KEY, mode);
+                } catch (err) {}
+            }
+
+            var mode = readStored();
+            if (!isValid(mode) && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+                mode = 'light';
+            }
+            if (!isValid(mode)) {
+                mode = 'dark';
+            }
+
+            root.dataset.theme = mode;
+
+            function syncToggle() {
+                var checkbox = document.getElementById('color-mode-toggle');
+                if (!checkbox) {
+                    return;
+                }
+                checkbox.checked = mode === 'light';
+                checkbox.addEventListener('change', function () {
+                    mode = checkbox.checked ? 'light' : 'dark';
+                    root.dataset.theme = mode;
+                    persist(mode);
+                });
+            }
+
+            persist(mode);
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', syncToggle, { once: true });
+            } else {
+                syncToggle();
+            }
+        })();
+    </script>
+    <div class="container">
+        <div class="content">
+            <!-- Unified Navigation Bar (loaded by navbar.js) -->
+            <div id="navbarContainer"></div>
+
+            <!-- Login Form -->
+            <div id="loginForm" class="hidden">
+                <div class="modal-content">
+                    <div class="modal-scrollable">
+                        <div class="auth-container">
+                            <div id="loginError" class="error hidden"></div>
+                            <div id="loginSuccess" class="success hidden"></div>
+
+                            <!-- Create New Account Section -->
+                            <div id="createAccountSection">
+                                <h3 style="text-align: center; margin-bottom: var(--spacing-lg);">Welcome to Cipher</h3>
+
+                                <form onsubmit="handleCreateAccount(); return false;">
+                                    <div class="form-group">
+                                        <input type="text" id="newDisplayName" placeholder="Choose your display name" tabindex="1" required>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">Create New Account</button>
+                                </form>
+
+                                <div class="text-center" style="margin-top: var(--spacing-lg);">
+                                    <button class="btn btn-secondary" onclick="showRestoreSection()">Restore Existing Account</button>
+                                </div>
+
+                                <div class="text-center" style="margin-top: var(--spacing-lg);">
+                                    <div class="key-derivation-well glass-card--regular">
+                                        <h4>🔐 Recovery Phrase Authentication</h4>
+                                        <p>Cipher generates your cryptographic keys from a 24-word recovery phrase.</p>
+                                        <p><strong>Save your recovery phrase securely</strong></p>
+                                        <p>You'll need it to restore your account on other devices.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Restore Account Section -->
+                            <div id="restoreAccountSection" class="hidden">
+                                <h3 style="text-align: center; margin-bottom: var(--spacing-lg);">Restore Account</h3>
+
+                                <form onsubmit="handleRestoreAccount(); return false;">
+                                    <div class="form-group">
+                                        <input type="text" id="restoreDisplayName" placeholder="Your display name" tabindex="1" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <textarea id="restoreRecoveryPhrase" class="textarea" placeholder="Enter your 24-word recovery phrase" rows="3" tabindex="2" required></textarea>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">Restore Account</button>
+                                </form>
+
+                                <div class="text-center" style="margin-top: var(--spacing-lg);">
+                                    <button class="btn btn-secondary" onclick="showCreateSection()">Back to Create Account</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dashboard -->
+            <div id="dashboard" class="hidden">
+                <!-- Posts Tab -->
+                <div id="postsTab" class="posts">
+                    <div class="modal-content" id="postsContent">
+                        <div class="modal-scrollable">
+                            <!-- Posts status message for empty state -->
+                            <div id="postsStatusMessage" class="text-center">
+                                <!-- Will show "No Content Yet" when no posts exist -->
+                            </div>
+                            <div id="posts">
+                                <!-- Posts will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Post Tab -->
+                <div id="createPostTab" class="hidden">
+                    <div class="modal-content" id="createPostContent">
+                        <div class="modal-scrollable">
+                            <div class="create-post-form form-container">
+                                <h3>Create Post</h3>
+                                <div class="form-group" style="margin: var(--spacing-lg) 0;">
+                                    <label for="createPostTextarea">What's on your mind?</label>
+                                    <textarea id="createPostTextarea" class="textarea" placeholder="Share your thoughts..." required style="min-height: 120px; margin-top: var(--spacing-md);"></textarea>
+                                </div>
+                                <div class="form-group" style="margin: var(--spacing-lg) 0;">
+                                    <label for="createPostAttachments">Attachments (optional)</label>
+                                    <div class="file-upload-wrapper" style="margin-top: var(--spacing-md);">
+                                        <input type="file" id="createPostAttachments" multiple accept="image/*,video/*,audio/*,.pdf,.txt,.doc,.docx" class="file-input">
+                                        <label for="createPostAttachments" class="file-upload-button">
+                                            📎 Choose Files
+                                        </label>
+                                        <span id="fileCount" class="file-count"></span>
+                                    </div>
+                                    <small style="color: rgba(255, 255, 255, 0.7); display: block; margin-top: var(--spacing-sm);">Select images, videos, documents, or other files to attach</small>
+                                </div>
+                                <div style="display: flex; gap: var(--spacing-lg); justify-content: center; margin-top: var(--spacing-xl);">
+                                    <button class="btn btn-primary" onclick="createPostFromPage()">Share Post</button>
+                                    <button class="btn btn-secondary" onclick="showPosts()">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Messages Tab -->
+                <div id="messagesTab" class="hidden">
+                    <div class="modal-content" id="messagesContent">
+                        <div class="modal-header">
+                            <h3 class="tab-header">Messages</h3>
+                            <!-- Send Message Form -->
+                            <div class="form-section">
+                                <h4>Send Encrypted Message</h4>
+                                <div class="form-group">
+                                    <label for="friendSearch">Find Friend</label>
+                                    <input type="text" id="friendSearch" placeholder="Search friends by username..." class="friend-search-input">
+                                    <div id="friendSearchResults" class="friend-search-results hidden">
+                                        <!-- Search results will appear here -->
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="selectedRecipient">Selected Recipient</label>
+                                    <div id="selectedRecipient" class="selected-recipient">
+                                        <span class="no-selection">No friend selected</span>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="messageContent">Message</label>
+                                    <textarea id="messageContent" class="textarea" placeholder="Enter your message" required></textarea>
+                                </div>
+                                <div class="message-input-actions">
+                                    <button class="btn" onclick="sendMessage()">Send Encrypted Message</button>
+                                    <button id="voiceRecordButton" class="btn btn-secondary" onclick="startVoiceRecording()">🎤 Record Voice Message</button>
+                                </div>
+                            </div>
+
+                            <!-- Message Search Section -->
+                            <div class="form-section">
+                                <h4>🔍 Search Messages</h4>
+                                <div class="form-group">
+                                    <label for="messageSearchInput">Search your messages</label>
+                                    <input type="text" id="messageSearchInput" placeholder="Enter search query..." class="search-input">
+                                    <div class="search-actions" style="margin-top: var(--spacing-md);">
+                                        <button class="btn btn-secondary" onclick="searchMessages()">Search</button>
+                                        <button class="btn btn-secondary" onclick="clearMessageSearch()">Clear</button>
+                                    </div>
+                                </div>
+                                <div id="searchResults" class="search-results hidden">
+                                    <!-- Search results will appear here -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="modal-scrollable">
+                            <div id="messages">
+                                <!-- Messages will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Friends Tab -->
+                <div id="friendsTab" class="hidden">
+                    <div class="modal-content" id="friendsContent">
+                        <div class="modal-scrollable">
+                            <!-- My QR Code Section -->
+                            <div style="text-align: center; margin-bottom: var(--spacing-xl); padding: var(--spacing-lg); background: var(--glass-regular); border-radius: var(--border-radius-lg);">
+                                <h4 style="margin-bottom: var(--spacing-md); color: var(--color-text-primary);">Share This Code</h4>
+                                <div id="myQrCode" style="display: inline-block; padding: var(--spacing-md); background: white; border-radius: var(--border-radius-md);">
+                                    <!-- QR code will be generated here -->
+                                </div>
+                                <p style="margin-top: var(--spacing-md); color: var(--color-text-secondary); font-size: var(--font-size-sm);">Have friends scan this to connect</p>
+                            </div>
+
+                            <!-- Add Friend Buttons -->
+                            <div style="display: flex; gap: var(--spacing-md); margin: 0 0 var(--spacing-xl) 0; flex-wrap: wrap; justify-content: center;">
+                                <button class="btn btn-primary" onclick="openCameraToScanQR()">Scan QR Code</button>
+                                <button class="btn btn-secondary" onclick="showManualAddFriend()">Add Manually</button>
+                            </div>
+                            <!-- Hidden file input for camera/gallery -->
+                            <input type="file" id="qrCodeCamera" accept="image/*" capture="environment" style="display: none;" onchange="handleQRCodeFromCamera(event)">
+
+                            <h4 style="margin-bottom: var(--spacing-md); color: var(--color-text-primary);">Your Friends</h4>
+                            <div id="friends">
+                                <!-- Friends will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Add Friend Tab -->
+                <div id="addFriendTab" class="hidden">
+                    <div class="modal-content" id="addFriendContent">
+                        <div class="modal-scrollable">
+                            <div class="create-post-form form-container">
+                                <h3>Add Friend</h3>
+                                <p class="public-key-help" style="margin-bottom: var(--spacing-lg);">Enter your friend's public key to add them to your network</p>
+
+                                <div class="form-group" style="margin: var(--spacing-lg) 0;">
+                                    <label for="addFriendPublicKey">Friend's Public Key</label>
+                                    <input type="text" id="addFriendPublicKey" class="textarea" placeholder="Paste your friend's public key here..." required style="margin-top: var(--spacing-md);">
+                                </div>
+
+                                <div style="display: flex; gap: var(--spacing-lg); justify-content: center; margin-top: var(--spacing-xl);">
+                                    <button class="btn btn-primary" onclick="addFriendFromTab()">Add Friend</button>
+                                    <button class="btn btn-secondary" onclick="showFriends()">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recovery Phrase Modal -->
+    <div id="recoveryPhraseModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.95); z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--spacing-lg);">
+        <div style="background: var(--glass-heavy); border-radius: var(--border-radius-lg); padding: var(--spacing-xl); max-width: 600px; width: 100%;">
+            <h2 style="text-align: center; margin-bottom: var(--spacing-lg); color: var(--color-text-primary);">🔐 Save Your Recovery Phrase</h2>
+
+            <div style="background: var(--glass-regular); border-radius: var(--border-radius-md); padding: var(--spacing-lg); margin-bottom: var(--spacing-lg);">
+                <p id="recoveryPhraseText" style="font-family: monospace; font-size: var(--font-size-base); line-height: 1.6; color: var(--color-text-primary); word-break: break-word; user-select: text; -webkit-user-select: text;">
+                    <!-- Recovery phrase will be inserted here -->
+                </p>
+            </div>
+
+            <div style="text-align: center; margin-bottom: var(--spacing-lg);">
+                <button class="btn btn-primary" onclick="copyRecoveryPhrase()" style="margin-bottom: var(--spacing-md);">📋 Copy to Clipboard</button>
+                <p style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">Write this down and keep it safe!</p>
+                <p style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">You'll need these 24 words to restore your account.</p>
+            </div>
+
+            <div style="text-align: center;">
+                <button class="btn btn-primary" onclick="confirmRecoveryPhraseSaved()">I've Saved My Recovery Phrase</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Camera QR Scanner Modal -->
+    <div id="qrScannerModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.95); z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+        <div style="position: relative; width: 90vw; max-width: 500px;">
+            <video id="qrVideo" style="width: 100%; border-radius: var(--border-radius-lg); display: block;"></video>
+            <canvas id="qrCanvas" style="display: none;"></canvas>
+            <div style="text-align: center; margin-top: var(--spacing-lg);">
+                <p style="color: white; margin-bottom: var(--spacing-md);">Point camera at QR code</p>
+                <button class="btn btn-secondary" onclick="closeCameraScanner()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- jsQR library for QR code scanning -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <!-- Navbar component -->
+    <script src="js/navbar.js"></script>
+    <!-- P2P networking -->
+    <script src="js/p2p.js"></script>
+    <!-- Pull-to-refresh -->
+    <script src="js/pull-to-refresh.js"></script>
+    <!-- Main application -->
+    <script src="js/main.js"></script>
+</body>
+</html>

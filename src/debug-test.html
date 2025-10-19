@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cipher Debug Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+            background: #0a0a0a;
+            color: #ffffff;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .debug {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .success { border-color: #00ff00; }
+        .error { border-color: #ff0000; }
+        button {
+            background: #007aff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            margin: 10px 0;
+            cursor: pointer;
+        }
+        input {
+            background: #1a1a1a;
+            color: white;
+            border: 1px solid #333;
+            padding: 10px;
+            border-radius: 6px;
+            margin: 5px 0;
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔐 Cipher Debug Test</h1>
+    <p>This is a minimal test to verify JavaScript execution in Tauri.</p>
+
+    <div id="status" class="debug">
+        Status: Page loaded, waiting for JavaScript...
+    </div>
+
+    <div class="debug">
+        <h3>Manual Test</h3>
+        <input type="text" id="username" placeholder="Username" value="testuser123">
+        <input type="password" id="password" placeholder="Password" value="testpass123">
+        <button onclick="testRegistration()">Test Registration</button>
+    </div>
+
+    <div id="logs" class="debug">
+        <strong>Debug Logs:</strong><br>
+        <div id="logOutput"></div>
+    </div>
+
+    <script>
+        // Immediate console log to test basic JavaScript execution
+        console.log('🚀 JavaScript is executing!');
+
+        let logCount = 0;
+        let logs = [];
+
+        function addLog(message) {
+            logCount++;
+            const timestamp = new Date().toLocaleTimeString();
+            const logMessage = `[${logCount}] ${timestamp}: ${message}`;
+            console.log(logMessage);
+
+            logs.push(logMessage);
+            const logOutput = document.getElementById('logOutput');
+            if (logOutput) {
+                logOutput.innerHTML = logs.join('<br>');
+            }
+
+            return logMessage;
+        }
+
+        function updateStatus(message, isError = false) {
+            const status = document.getElementById('status');
+            if (status) {
+                status.textContent = `Status: ${message}`;
+                status.className = `debug ${isError ? 'error' : 'success'}`;
+            }
+            addLog(`STATUS: ${message}`);
+        }
+
+        // Test basic JavaScript functionality
+        addLog('JavaScript execution confirmed!');
+        updateStatus('JavaScript is working!');
+
+        // Test DOM manipulation
+        addLog('Testing DOM manipulation...');
+        document.title = 'Cipher Debug Test - JS Working';
+        addLog('DOM manipulation working!');
+
+        // Test async functionality
+        async function testAsync() {
+            addLog('Testing async functions...');
+            await new Promise(resolve => setTimeout(resolve, 100));
+            addLog('Async functions working!');
+        }
+
+        testAsync();
+
+        // Test Tauri API availability
+        function checkTauriAPI() {
+            addLog('Checking Tauri API availability...');
+
+            if (window.__TAURI__) {
+                addLog('✅ window.__TAURI__ is available!');
+
+                if (window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                    addLog('✅ Modern Tauri API (core.invoke) available!');
+                    return window.__TAURI__.core.invoke;
+                } else if (window.__TAURI__.invoke) {
+                    addLog('✅ Legacy Tauri API (invoke) available!');
+                    return window.__TAURI__.invoke;
+                } else {
+                    addLog('❌ Tauri invoke function not found!');
+                }
+            } else if (window.__TAURI_INVOKE__) {
+                addLog('✅ Direct Tauri invoke available!');
+                return window.__TAURI_INVOKE__;
+            } else {
+                addLog('❌ No Tauri API found!');
+                addLog('Available window properties: ' + Object.keys(window).filter(k => k.includes('TAURI')).join(', '));
+            }
+
+            return null;
+        }
+
+        // Test registration function
+        async function testRegistration() {
+            addLog('🧪 Testing registration...');
+            updateStatus('Testing registration...');
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            addLog(`Username: ${username}, Password: ${password ? 'provided' : 'empty'}`);
+
+            if (!username || !password) {
+                updateStatus('Please enter username and password', true);
+                return;
+            }
+
+            try {
+                const tauriInvoke = checkTauriAPI();
+
+                if (!tauriInvoke) {
+                    throw new Error('Tauri API not available');
+                }
+
+                addLog('Calling register_user Tauri command...');
+                updateStatus('Calling Tauri backend...');
+
+                const result = await tauriInvoke('register_user', {
+                    username: username,
+                    email: null,
+                    password: password
+                });
+
+                addLog('✅ Registration successful!');
+                addLog(`Result: ${JSON.stringify(result)}`);
+                updateStatus('Registration successful!');
+
+            } catch (error) {
+                addLog(`❌ Registration failed: ${error.message}`);
+                updateStatus(`Registration failed: ${error.message}`, true);
+            }
+        }
+
+        // Test event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            addLog('DOMContentLoaded event fired!');
+            updateStatus('DOM ready, all systems operational!');
+        });
+
+        // Test if we can call Tauri commands on load
+        window.addEventListener('load', async function() {
+            addLog('Window load event fired!');
+
+            // Wait a bit for Tauri to initialize
+            setTimeout(() => {
+                checkTauriAPI();
+            }, 1000);
+        });
+
+        addLog('Script execution completed!');
+    </script>
+</body>
+</html>

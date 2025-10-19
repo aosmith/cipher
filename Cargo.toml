@@ -1,0 +1,92 @@
+[package]
+name = "cipher-social"
+version = "0.0.1"
+description = "Cipher - End-to-End Encrypted P2P Social Network"
+authors = ["Cipher Team"]
+license = "AGPL-3.0"
+repository = "https://github.com/aosmith/cipher"
+edition = "2021"
+
+[lib]
+name = "app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "2.4", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Remove devtools for production builds - saves significant space
+tauri = { version = "2.8.5", features = ["wry", "test"], default-features = false }
+tauri-plugin-shell = { version = "2.3", default-features = false }
+tauri-plugin-fs = { version = "2.4", default-features = false }
+# Core dependencies needed for all platforms
+rusqlite = { version = "0.31", features = ["bundled"] }
+bcrypt = "0.15"
+# Only include necessary chrono features
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+# Cryptography dependencies
+ed25519-dalek = { version = "2.0", features = ["rand_core"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+bytes = "1.10"
+lazy_static = "1.4"
+# QR Code and image processing - use minimal features
+qrcode = { version = "0.14", default-features = false }
+# Only include necessary image formats
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+urlencoding = "2.1"
+# Use only required tokio features instead of "full"
+tokio = { version = "1.0", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
+# Iroh for simpler, more reliable P2P networking with DHT discovery
+# Enable discovery-pkarr-dht for BitTorrent Mainline DHT (decentralized peer discovery)
+iroh = { version = "0.30", features = ["discovery-pkarr-dht"] }
+iroh-gossip = "0.30"
+futures = "0.3"
+uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
+url = "2.4"
+rqrr = "0.10.0"
+hex = "0.4.3"
+bip39 = "2.1"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2.0.0"
+
+# WebDriver support for testing
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
+tempfile = "3.8"
+hex = "0.4.3"
+anyhow = "1.0"
+futures-lite = "2.6"
+blake3 = "1.5"
+
+# Android builds use same Tauri config as other platforms
+# No TLS needed - client only talks to localhost server
+
+[features]
+# this features is used for production builds where `devPath` points to the filesystem
+# DO NOT remove this
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+# Enable mDNS local network discovery (experimental)
+mdns = ["iroh/discovery-local-network"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.24"
+objc = "0.2"
+
+[profile.release]
+opt-level = "z"          # Optimize for size
+lto = "thin"             # Use thin LTO for less memory usage
+codegen-units = 16       # Use multiple codegen units to reduce memory usage
+strip = true             # Strip symbols
+panic = "abort"          # Smaller panic handler
+incremental = false      # Disable incremental compilation for better optimization

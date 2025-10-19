@@ -1,0 +1,39 @@
+{
+  "name": "cipher-social",
+  "version": "0.18.5",
+  "description": "End-to-end encrypted P2P social network",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-barcode-scanner": "^2.4.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^9.3.3",
+    "@testing-library/jest-dom": "^6.1.4",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "roots": [
+      "<rootDir>/src"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.js",
+      "**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "src/js/**/*.js",
+      "!src/js/**/*.test.js"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/src/js/__tests__/setup.js"
+    ],
+    "moduleNameMapper": {
+      "\\.(css|less|scss|sass)$": "<rootDir>/src/js/__tests__/__mocks__/styleMock.js"
+    }
+  }
+}

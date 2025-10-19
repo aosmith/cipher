@@ -1,0 +1,318 @@
+// Messaging tests for Cipher
+// Tests direct messaging, reactions, threads, and message features
+
+use app::Database;
+use tempfile::TempDir;
+
+#[test]
+fn test_send_and_retrieve_encrypted_message() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let message_content = "Hello Bob!";
+    let message = db.send_encrypted_message(
+        alice.id,
+        bob.id,
+        message_content,
+        None
+    ).unwrap();
+
+    assert!(message.encrypted, "Message should be encrypted");
+    assert_ne!(message.content, message_content, "Encrypted content should differ from plaintext");
+    assert_eq!(message.sender_id, alice.id);
+    assert_eq!(message.recipient_id, bob.id);
+
+    // Retrieve messages
+    let messages = db.get_messages_for_user(bob.id).unwrap();
+    assert_eq!(messages.len(), 1);
+}
+
+#[test]
+fn test_decrypt_message_with_correct_keys() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let plaintext = "Secret message";
+    let message = db.send_encrypted_message(alice.id, bob.id, plaintext, None).unwrap();
+
+    // Bob decrypts
+    let decrypted = Database::decrypt_message(
+        &message.content,
+        alice.encryption_public_key.as_ref().unwrap(),
+        bob.encryption_private_key.as_ref().unwrap()
+    ).unwrap();
+
+    assert_eq!(decrypted, plaintext);
+}
+
+#[test]
+fn test_message_signature_verification() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let message_content = "Signed message";
+    let message = db.send_encrypted_message(alice.id, bob.id, message_content, None).unwrap();
+
+    assert!(message.signature.is_some(), "Message should have signature");
+
+    // Verify signature
+    let signature = message.signature.unwrap();
+    let is_valid = Database::verify_signature(
+        message_content,
+        &signature,
+        alice.public_key.as_ref().unwrap()
+    );
+
+    assert!(is_valid, "Signature should be valid");
+}
+
+#[test]
+#[ignore = "add_message_reaction and get_message_reactions APIs not implemented yet"]
+fn test_message_reactions() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let message = db.send_encrypted_message(alice.id, bob.id, "Test message", None).unwrap();
+
+    // Bob reacts with thumbs up
+    let reaction = db.add_message_reaction(bob.id, message.id, "👍".to_string()).unwrap();
+    assert_eq!(reaction.emoji, "👍");
+
+    // Get reactions
+    let reactions = db.get_message_reactions(message.id).unwrap();
+    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions[0].emoji, "👍");
+    assert_eq!(reactions[0].user_id, bob.id);
+}
+
+#[test]
+#[ignore = "reply_to_message and get_message_thread APIs not implemented yet"]
+fn test_message_threads() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Alice sends original message
+    let original = db.send_encrypted_message(alice.id, bob.id, "Original message", None).unwrap();
+
+    // Bob replies to Alice's message
+    let reply = db.reply_to_message(bob.id, alice.id, "Reply message", original.id).unwrap();
+    assert_eq!(reply.parent_id, Some(original.id));
+
+    // Get thread
+    let thread = db.get_message_thread(original.id).unwrap();
+    assert_eq!(thread.len(), 1, "Thread should have 1 reply");
+    assert_eq!(thread[0].id, reply.id);
+}
+
+#[test]
+#[ignore = "search_messages API not implemented yet"]
+fn test_message_search() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Send messages
+    db.send_encrypted_message(alice.id, bob.id, "Hello world", None).unwrap();
+    db.send_encrypted_message(alice.id, bob.id, "Goodbye world", None).unwrap();
+    db.send_encrypted_message(alice.id, bob.id, "Random message", None).unwrap();
+
+    // Search for "world"
+    let results = db.search_messages(bob.id, "world").unwrap();
+    assert_eq!(results.len(), 2, "Should find 2 messages containing 'world'");
+}
+
+#[test]
+#[ignore = "edit_message API not implemented yet"]
+fn test_message_editing() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let message = db.send_encrypted_message(alice.id, bob.id, "Original content", None).unwrap();
+
+    // Edit message
+    let edited = db.edit_message(message.id, "Updated content").unwrap();
+    assert_ne!(edited.content, "Original content");
+    assert!(edited.edited, "Message should be marked as edited");
+}
+
+#[test]
+#[ignore = "delete_message API not implemented yet"]
+fn test_message_deletion() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    let message = db.send_encrypted_message(alice.id, bob.id, "To be deleted", None).unwrap();
+
+    // Delete message
+    let result = db.delete_message(message.id);
+    assert!(result.is_ok(), "Message deletion should succeed");
+
+    // Verify deletion
+    let messages = db.get_messages_for_user(bob.id).unwrap();
+    assert_eq!(messages.len(), 0, "Message should be deleted");
+}
+
+#[test]
+#[ignore = "send_voice_message and get_voice_messages APIs not implemented yet"]
+fn test_voice_message_storage() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Send voice message
+    let voice_message = db.send_voice_message(
+        alice.id,
+        bob.id,
+        "voice_recording.webm".to_string(),
+        30 // 30 seconds
+    ).unwrap();
+
+    assert_eq!(voice_message.sender_id, alice.id);
+    assert_eq!(voice_message.recipient_id, bob.id);
+    assert_eq!(voice_message.file_path, "voice_recording.webm");
+    assert_eq!(voice_message.duration_seconds, 30);
+
+    // Retrieve voice messages
+    let voice_messages = db.get_voice_messages(bob.id, alice.id).unwrap();
+    assert_eq!(voice_messages.len(), 1);
+}
+
+#[test]
+fn test_message_persistence_across_sessions() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+
+    // Session 1: Create users and send message
+    {
+        let db = Database::new(&db_path.to_string_lossy()).unwrap();
+        let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+        let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+        db.send_encrypted_message(alice.id, bob.id, "Persistent message", None).unwrap();
+    }
+
+    // Session 2: Reopen database and verify message exists
+    {
+        let db = Database::new(&db_path.to_string_lossy()).unwrap();
+        let bob = db.find_user_by_username("bob").unwrap().unwrap();
+        let messages = db.get_messages_for_user(bob.id).unwrap();
+        assert_eq!(messages.len(), 1, "Message should persist across sessions");
+    }
+}
+
+#[test]
+fn test_message_ordering() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Send multiple messages
+    let msg1 = db.send_encrypted_message(alice.id, bob.id, "First", None).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let msg2 = db.send_encrypted_message(alice.id, bob.id, "Second", None).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let msg3 = db.send_encrypted_message(alice.id, bob.id, "Third", None).unwrap();
+
+    // Retrieve messages (should be ordered by timestamp)
+    let messages = db.get_messages_for_user(bob.id).unwrap();
+    assert_eq!(messages.len(), 3);
+
+    // Verify chronological order
+    assert!(messages[0].created_at <= messages[1].created_at);
+    assert!(messages[1].created_at <= messages[2].created_at);
+}
+
+#[test]
+fn test_disappearing_messages() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Send message with 1 second expiry
+    let message = db.send_encrypted_message(alice.id, bob.id, "Disappearing message", Some(1)).unwrap();
+    assert_eq!(message.ttl_seconds, Some(1));
+
+    // Wait for expiry
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Cleanup expired messages
+    db.cleanup_expired_messages().unwrap();
+
+    // Message should be gone
+    let messages = db.get_messages_for_user(bob.id).unwrap();
+    assert_eq!(messages.len(), 0, "Expired message should be deleted");
+}
+
+#[test]
+fn test_concurrent_message_sending() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Send multiple messages rapidly
+    for i in 0..10 {
+        db.send_encrypted_message(alice.id, bob.id, &format!("Message {}", i), None).unwrap();
+    }
+
+    let messages = db.get_messages_for_user(bob.id).unwrap();
+    assert_eq!(messages.len(), 10, "All messages should be stored");
+}
+
+#[test]
+#[ignore = "upload_media_file and get_media_attachments APIs not implemented yet"]
+fn test_message_with_media_attachments() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+
+    // Create message
+    let message = db.send_encrypted_message(alice.id, bob.id, "Message with image", None).unwrap();
+
+    // Upload media
+    let media = db.upload_media_file(
+        alice.id,
+        Some(message.id),
+        None, // no post_id
+        "image/jpeg".to_string(),
+        vec![1, 2, 3, 4, 5] // mock image data
+    ).unwrap();
+
+    assert_eq!(media.message_id, Some(message.id));
+    assert_eq!(media.mime_type, "image/jpeg");
+
+    // Retrieve attachments
+    let attachments = db.get_media_attachments(Some(message.id), None).unwrap();
+    assert_eq!(attachments.len(), 1);
+}
