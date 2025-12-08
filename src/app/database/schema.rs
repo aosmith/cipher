@@ -48,6 +48,8 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
             initiated_by BLOB NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            iroh_node_id TEXT,
+            friend_relay_url TEXT,
             FOREIGN KEY (user_id) REFERENCES users (id),
             FOREIGN KEY (friend_user_id) REFERENCES users (id),
             FOREIGN KEY (initiated_by) REFERENCES users (id),
@@ -187,38 +189,6 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
-    // Create call_logs table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS call_logs (
-            id BLOB PRIMARY KEY,
-            call_id TEXT UNIQUE NOT NULL,
-            caller_id BLOB NOT NULL,
-            callee_id BLOB NOT NULL,
-            call_type TEXT NOT NULL, -- 'audio' or 'video'
-            status TEXT NOT NULL, -- 'calling', 'connected', 'ended', 'rejected', 'missed'
-            started_at TEXT NOT NULL,
-            ended_at TEXT,
-            duration_seconds INTEGER,
-            FOREIGN KEY (caller_id) REFERENCES users (id),
-            FOREIGN KEY (callee_id) REFERENCES users (id)
-        )",
-        [],
-    )?;
-
-    // Create peer_addresses table for persistent P2P peer address book
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS peer_addresses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            peer_id TEXT NOT NULL,
-            multiaddr TEXT NOT NULL,
-            last_seen TEXT NOT NULL,
-            connection_success_count INTEGER NOT NULL DEFAULT 0,
-            connection_failure_count INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(peer_id, multiaddr)
-        )",
-        [],
-    )?;
-
     // Create devices table for multi-device sync
     conn.execute(
         "CREATE TABLE IF NOT EXISTS devices (
@@ -226,7 +196,9 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
             user_public_key TEXT NOT NULL,
             device_name TEXT,
             last_sync TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            iroh_node_id TEXT,
+            relay_url TEXT
         )",
         [],
     )?;
@@ -292,21 +264,6 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
-    // Create typing_indicators table for real-time typing status
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS typing_indicators (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id BLOB NOT NULL,
-            conversation_partner_id BLOB NOT NULL,
-            is_typing BOOLEAN DEFAULT 0,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users (id),
-            FOREIGN KEY (conversation_partner_id) REFERENCES users (id),
-            UNIQUE(user_id, conversation_partner_id)
-        )",
-        [],
-    )?;
-
     // Create pending_messages table for offline delivery queue
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pending_messages (
@@ -323,11 +280,74 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
+    // Create ratchet_states table for Double Ratchet (Phase 3)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ratchet_states (
+            id BLOB PRIMARY KEY,
+            user_id BLOB NOT NULL,
+            peer_public_key TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id),
+            UNIQUE(user_id, peer_public_key)
+        )",
+        [],
+    )?;
+
+    // Create message_cache table for relay cache & purging (Phase 4)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS message_cache (
+            id BLOB PRIMARY KEY,
+            message_id TEXT UNIQUE NOT NULL,
+            envelope_json TEXT NOT NULL,
+            sender_public_key TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    // Create prekeys table for X3DH pre-keys (Phase 5)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS prekeys (
+            id BLOB PRIMARY KEY,
+            user_id BLOB NOT NULL,
+            prekey_id INTEGER NOT NULL,
+            bundle_json TEXT NOT NULL,
+            private_key TEXT,
+            is_own INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id),
+            UNIQUE(user_id, prekey_id, is_own)
+        )",
+        [],
+    )?;
+
     Ok(())
 }
 
-pub fn run_migrations(_conn: &Connection) -> SqliteResult<()> {
-    // No migrations needed for v0.0.1 - this is the initial schema
-    // Future migrations will be added here as the schema evolves
+pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
+    // Migration: Add P2P columns to devices table
+    let _ = conn.execute(
+        "ALTER TABLE devices ADD COLUMN iroh_node_id TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE devices ADD COLUMN relay_url TEXT",
+        [],
+    );
+
+    // Migration: Add P2P columns to p2p_connections table
+    let _ = conn.execute(
+        "ALTER TABLE p2p_connections ADD COLUMN iroh_node_id TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE p2p_connections ADD COLUMN friend_relay_url TEXT",
+        [],
+    );
+
     Ok(())
 }

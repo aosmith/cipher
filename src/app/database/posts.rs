@@ -8,8 +8,9 @@ impl Database {
     pub fn get_posts(&self, current_user_id: SqliteUuid) -> SqliteResult<Vec<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT p.id, p.user_id, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+            "SELECT DISTINCT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
              FROM posts p
+             INNER JOIN users u ON p.user_id = u.id
              LEFT JOIN p2p_connections f1 ON p.user_id = f1.user_id AND f1.friend_user_id = ?1
              LEFT JOIN p2p_connections f2 ON p.user_id = f2.friend_user_id AND f2.user_id = ?1
              WHERE p.user_id = ?1 OR f1.friend_user_id = ?1 OR f2.user_id = ?1
@@ -20,6 +21,7 @@ impl Database {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
+                display_name: row.get("username")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,
@@ -52,9 +54,19 @@ impl Database {
             params![post_id, user_id, content, encrypted, false, &now, &now],
         )?;
 
+        // Get display name for the post author
+        let display_name: Option<String> = conn
+            .query_row(
+                "SELECT username FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get(0),
+            )
+            .ok();
+
         Ok(Post {
             id: post_id,
             user_id,
+            display_name,
             content: content.to_string(),
             encrypted,
             pinned: false,
@@ -89,9 +101,19 @@ impl Database {
             params![post_id, user_id, &original_content, false, false, original_post_id, share_comment, &now, &now],
         )?;
 
+        // Get display name for the post author
+        let display_name: Option<String> = conn
+            .query_row(
+                "SELECT username FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get(0),
+            )
+            .ok();
+
         Ok(Post {
             id: post_id,
             user_id,
+            display_name,
             content: original_content,
             encrypted: false,
             pinned: false,
@@ -106,14 +128,17 @@ impl Database {
     pub fn get_shared_post(&self, post_id: SqliteUuid) -> SqliteResult<Option<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, user_id, content, encrypted, pinned, shared_post_id, share_comment, created_at, updated_at
-             FROM posts WHERE id = ?1"
+            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+             FROM posts p
+             INNER JOIN users u ON p.user_id = u.id
+             WHERE p.id = ?1"
         )?;
 
         let result = stmt.query_row([post_id], |row| {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
+                display_name: row.get("username")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,
@@ -135,14 +160,17 @@ impl Database {
     pub fn get_post_shares(&self, original_post_id: SqliteUuid) -> SqliteResult<Vec<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, user_id, content, encrypted, pinned, shared_post_id, share_comment, created_at, updated_at
-             FROM posts WHERE shared_post_id = ?1 ORDER BY created_at DESC"
+            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+             FROM posts p
+             INNER JOIN users u ON p.user_id = u.id
+             WHERE p.shared_post_id = ?1 ORDER BY p.created_at DESC"
         )?;
 
         let post_iter = stmt.query_map([original_post_id], |row| {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
+                display_name: row.get("username")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,
@@ -413,13 +441,17 @@ impl Database {
 
         // Return updated post
         let mut stmt = conn.prepare(
-            "SELECT id, user_id, content, encrypted, pinned, shared_post_id, share_comment, created_at, updated_at FROM posts WHERE id = ?1"
+            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+             FROM posts p
+             INNER JOIN users u ON p.user_id = u.id
+             WHERE p.id = ?1"
         )?;
 
         stmt.query_row([post_id], |row| {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
+                display_name: row.get("username")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,

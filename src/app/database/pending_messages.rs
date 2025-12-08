@@ -4,6 +4,7 @@ use crate::app::Database;
 
 /// Pending message for offline delivery
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PendingMessage {
     pub id: SqliteUuid,
     pub user_id: SqliteUuid,
@@ -17,6 +18,7 @@ pub struct PendingMessage {
 
 impl Database {
     /// Queue a message for offline delivery
+    #[allow(dead_code)]
     pub fn queue_pending_message(
         &self,
         user_id: SqliteUuid,
@@ -42,6 +44,7 @@ impl Database {
     }
 
     /// Get all pending messages ready for retry
+    #[allow(dead_code)]
     pub fn get_pending_messages(&self, user_id: SqliteUuid) -> SqliteResult<Vec<PendingMessage>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -70,6 +73,7 @@ impl Database {
     }
 
     /// Mark a pending message as successfully sent and remove it
+    #[allow(dead_code)]
     pub fn mark_message_sent(&self, message_id: SqliteUuid) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -81,6 +85,7 @@ impl Database {
     }
 
     /// Increment retry count for a pending message
+    #[allow(dead_code)]
     pub fn increment_retry_count(&self, message_id: SqliteUuid) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
@@ -94,6 +99,7 @@ impl Database {
     }
 
     /// Remove message from queue (failed max retries)
+    #[allow(dead_code)]
     pub fn remove_pending_message(&self, message_id: SqliteUuid) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -108,6 +114,7 @@ impl Database {
     }
 
     /// Get pending message count for user
+    #[allow(dead_code)]
     pub fn get_pending_message_count(&self, user_id: SqliteUuid) -> SqliteResult<i64> {
         let conn = self.conn.lock().unwrap();
         let count: i64 = conn.query_row(
@@ -119,6 +126,7 @@ impl Database {
     }
 
     /// Clear all pending messages (manual sync)
+    #[allow(dead_code)]
     pub fn clear_pending_messages(&self, user_id: SqliteUuid) -> SqliteResult<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(

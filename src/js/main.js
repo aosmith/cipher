@@ -186,12 +186,27 @@ const Session = {
     async attemptAutoLogin() {
         const savedUser = this.load();
         if (savedUser) {
+            // Verify user exists in database (handles case where app data was cleared but localStorage wasn't)
+            try {
+                const dbUser = await TauriAPI.invoke('get_user_by_id', { userId: savedUser.id });
+                if (!dbUser) {
+                    console.log('Auto-login: User not found in database, clearing session');
+                    this.clear();
+                    return false;
+                }
+            } catch (error) {
+                console.error('Auto-login: Failed to verify user in database:', error);
+                this.clear();
+                return false;
+            }
+
             currentUser = savedUser;
 
             // Initialize P2P system for auto-logged in user (non-blocking)
+            const displayName = savedUser.username || 'User';
             const publicKey = savedUser.publicKey || savedUser.public_key; // Support both formats
             const deviceId = savedUser.deviceId || savedUser.device_id; // Support both formats
-            P2P.initialize(savedUser.id, publicKey, deviceId).then(() => {
+            P2P.initialize(savedUser.id, displayName, publicKey, deviceId).then(() => {
                 console.log('P2P system initialized during auto-login');
             }).catch((error) => {
                 console.error('Failed to initialize P2P during auto-login:', error);
@@ -288,13 +303,6 @@ const UI = {
             userPublicKey.textContent = currentUser.publicKey;
         }
 
-        // Update navbar public key display using Navbar module
-        console.log('[UI] currentUser object:', currentUser);
-        console.log('[UI] currentUser.publicKey:', currentUser.publicKey);
-        console.log('[UI] currentUser.id:', currentUser.id);
-        if (typeof Navbar !== 'undefined' && currentUser.publicKey) {
-            Navbar.updatePublicKey(currentUser.publicKey);
-        }
     }
 };
 
@@ -348,6 +356,7 @@ function showMessages() {
 }
 
 function showFriends() {
+    console.log('[SHOW-FRIENDS] showFriends() called');
     UI.showTab('friendsTab', 'friendsContent', 'friendsNavLink', loadFriends);
 }
 
@@ -444,15 +453,53 @@ function showEditProfile() {
     });
 }
 
-function showAddFriend() {
-    UI.showTab('addFriendTab', 'addFriendContent', 'addFriendNavLink', () => {
-        // Clear the input field when showing the tab
+async function showAddFriend() {
+    UI.showTab('addFriendTab', 'addFriendContent', 'addFriendNavLink', async () => {
+        // Clear the input field and error/success messages when showing the tab
         const input = document.getElementById('addFriendPublicKey');
         if (input) {
             input.value = '';
             setTimeout(() => input.focus(), 100);
         }
+
+        // Hide any previous error/success messages
+        const errorEl = document.getElementById('addFriendTabError');
+        const successEl = document.getElementById('addFriendTabSuccess');
+        if (errorEl) errorEl.classList.add('hidden');
+        if (successEl) successEl.classList.add('hidden');
+
+        // Load the user's invite link
+        const inviteLinkInput = document.getElementById('myInviteLink');
+        if (inviteLinkInput) {
+            try {
+                const inviteCode = await P2P.generateInvite();
+                inviteLinkInput.value = inviteCode;
+            } catch (error) {
+                console.error('Failed to generate invite link:', error);
+                inviteLinkInput.value = 'Error loading invite link';
+            }
+        }
     });
+}
+
+// Copy user's invite link to clipboard
+async function copyMyInviteLink() {
+    const inviteLinkInput = document.getElementById('myInviteLink');
+    if (!inviteLinkInput || !inviteLinkInput.value || inviteLinkInput.value === 'Loading...' || inviteLinkInput.value.startsWith('Error')) {
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(inviteLinkInput.value);
+        const successEl = document.getElementById('addFriendTabSuccess');
+        if (successEl) {
+            successEl.textContent = 'Invite link copied to clipboard!';
+            successEl.classList.remove('hidden');
+            setTimeout(() => successEl.classList.add('hidden'), 2000);
+        }
+    } catch (error) {
+        console.error('Failed to copy invite link:', error);
+    }
 }
 
 // Authentication
@@ -628,7 +675,7 @@ async function completeAuthentication(user) {
 
     // Initialize Iroh P2P system in background
     try {
-        await P2P.initialize(user.id, user.publicKey, user.deviceId);
+        await P2P.initialize(user.id, user.username || 'User', user.publicKey, user.deviceId);
         console.log('Iroh P2P system initialized successfully');
     } catch (error) {
         console.error('Failed to initialize P2P - Error name:', error.name);
@@ -979,7 +1026,7 @@ async function loadPosts() {
             postsContainer.innerHTML = postsWithMedia.map(post => `
                 <div class="post glass-card hover-lift-md" data-post-id="${post.id}">
                     <div class="post-meta">
-                        ${post.userId === currentUser.id ? currentUser.username : `User ${post.userId}`} • ${new Date(post.createdAt).toLocaleDateString()}
+                        ${post.displayName || 'Unknown User'} • ${new Date(post.createdAt).toLocaleDateString()}
                     </div>
                     ${post.mediaAttachments && post.mediaAttachments.length > 0 ? `
                         <div class="post-media">
@@ -1418,35 +1465,271 @@ function renderWaveform(waveformData) {
 }
 
 async function loadFriends() {
-    if (!currentUser) return;
+    console.log('[LOAD-FRIENDS] loadFriends() called');
+    console.log('[LOAD-FRIENDS] currentUser:', currentUser ? currentUser.username : 'null');
 
+    if (!currentUser) {
+        console.log('[LOAD-FRIENDS] No current user, returning early');
+        return;
+    }
+
+    console.log('[LOAD-FRIENDS] Starting to load friends...');
     try {
-        const friends = await TauriAPI.invoke('get_friends', { userId: currentUser.id });
-        const friendsContainer = document.getElementById('friends');
+        console.log('[LOAD-FRIENDS] Calling Tauri API for pending/outgoing/friends...');
+        // Load pending (incoming), outgoing, and accepted friends
+        const [pendingRequests, outgoingRequests, friends] = await Promise.all([
+            TauriAPI.invoke('get_pending_friend_requests', { userId: currentUser.id }),
+            TauriAPI.invoke('get_outgoing_friend_requests', { userId: currentUser.id }),
+            TauriAPI.invoke('get_friends', { userId: currentUser.id })
+        ]);
 
-        if (friends.length === 0) {
-            friendsContainer.innerHTML = '<p class="text-center">No friends yet. Add some friends to start connecting!</p>';
-        } else {
-            friendsContainer.innerHTML = friends.map(friend => `
-                <div class="post glass-card hover-lift-md">
-                    <div class="post-meta">
-                        ${Utils.escapeHtml(friend.friendUsername)} • Added ${new Date(friend.createdAt).toLocaleDateString()}
+        const friendsContainer = document.getElementById('friends');
+        let html = '';
+
+        // Show pending incoming friend requests first (with Accept/Decline)
+        if (pendingRequests && pendingRequests.length > 0) {
+            console.log('[FRIEND-REQUESTS] Raw pending requests:', JSON.stringify(pendingRequests, null, 2));
+            html += '<div class="friend-requests-section">';
+            html += `<h3>Pending Friend Requests (${pendingRequests.length})</h3>`;
+            html += pendingRequests.map(request => {
+                console.log('[FRIEND-REQUESTS] Request object:', request);
+                console.log('[FRIEND-REQUESTS] Request ID:', request.id, 'type:', typeof request.id);
+                return `
+                <div class="friend-request-card">
+                    <div class="friend-request-badge">Friend Request</div>
+                    <div class="friend-request-username">${Utils.escapeHtml(request.username || 'Unknown User')}</div>
+                    <div class="friend-request-message">wants to connect with you</div>
+                    <div class="public-key-display">
+                        ${request.publicKey ? request.publicKey.substring(0, 32) + '...' : 'No public key'}
                     </div>
-                    <div class="post-content">
-                        <strong>${Utils.escapeHtml(friend.friendUsername)}</strong>
-                        <br><small class="public-key-display" style="margin-top: var(--spacing-xs); padding: var(--spacing-xs); font-size: 0.75rem;">Public Key: ${friend.publicKey ? friend.publicKey.substring(0, 32) + '...' : 'None'}</small>
+                    <div class="friend-request-actions">
+                        <button class="btn btn-accept" data-accept-friend="${request.id}">Accept</button>
+                        <button class="btn btn-reject" data-reject-friend="${request.id}">Decline</button>
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
+            html += '</div>';
         }
 
+        // Show outgoing friend requests (with Cancel button)
+        if (outgoingRequests && outgoingRequests.length > 0) {
+            console.log('[FRIEND-REQUESTS] Outgoing requests:', JSON.stringify(outgoingRequests, null, 2));
+            html += '<div class="friend-requests-section outgoing-requests">';
+            html += `<h3>Sent Requests (${outgoingRequests.length})</h3>`;
+            html += outgoingRequests.map(request => {
+                return `
+                <div class="friend-request-card outgoing">
+                    <div class="friend-request-badge pending-badge">Pending</div>
+                    <div class="friend-request-username">${Utils.escapeHtml(request.username || 'Unknown User')}</div>
+                    <div class="friend-request-message">waiting for response</div>
+                    <div class="public-key-display">
+                        ${request.publicKey ? request.publicKey.substring(0, 32) + '...' : 'No public key'}
+                    </div>
+                    <div class="friend-request-actions">
+                        <button class="btn btn-reject" data-cancel-friend="${request.id}">Cancel</button>
+                    </div>
+                </div>
+            `;
+            }).join('');
+            html += '</div>';
+        }
+
+        // Show accepted friends
+        const hasPendingOrOutgoing = (pendingRequests && pendingRequests.length > 0) || (outgoingRequests && outgoingRequests.length > 0);
+        if (friends.length === 0 && !hasPendingOrOutgoing) {
+            html += `
+                <div class="friends-empty">
+                    <div class="friends-empty-icon">👥</div>
+                    <div class="friends-empty-title">No friends yet</div>
+                    <div class="friends-empty-message">Add friends using invite codes to start connecting!</div>
+                </div>
+            `;
+        } else if (friends.length > 0) {
+            html += '<div class="friends-section"><h3>Friends</h3>';
+            html += friends.map(friend => {
+                const initial = (friend.username || 'U').charAt(0).toUpperCase();
+                return `
+                <div class="friend-card">
+                    <div class="friend-avatar">${initial}</div>
+                    <div class="friend-info">
+                        <div class="friend-name">${Utils.escapeHtml(friend.username || 'Unknown')}</div>
+                        <div class="friend-meta">Added ${friend.createdAt ? new Date(friend.createdAt).toLocaleDateString() : 'Unknown'}</div>
+                        <div class="public-key-display" style="margin-top: var(--spacing-xs);">
+                            ${friend.publicKey ? friend.publicKey.substring(0, 24) + '...' : 'No public key'}
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+            html += '</div>';
+        }
+
+        friendsContainer.innerHTML = html;
+        console.log('[LOAD-FRIENDS] Friends HTML updated, calling generateMyQRCode...');
+
         await generateMyQRCode();
+        console.log('[LOAD-FRIENDS] generateMyQRCode completed');
         setTimeout(() => UI.updateModalLayout(document.getElementById('friendsContent')), 100);
     } catch (error) {
+        console.error('[LOAD-FRIENDS] ERROR:', error);
         UI.showError('dashboardError', 'Failed to load friends: ' + error);
     }
 }
 
+async function acceptFriendRequest(friendUserId) {
+    console.log('[ACCEPT-FRIEND] acceptFriendRequest called with friendUserId:', friendUserId);
+    console.log('[ACCEPT-FRIEND] currentUser:', currentUser);
+
+    if (!currentUser) {
+        console.error('[ACCEPT-FRIEND] No current user!');
+        return;
+    }
+
+    try {
+        console.log('[ACCEPT-FRIEND] Calling accept_friend_request with:', {
+            userId: currentUser.id,
+            friendUserId: friendUserId
+        });
+        await TauriAPI.invoke('accept_friend_request', {
+            userId: currentUser.id,
+            friendUserId: friendUserId
+        });
+        console.log('[ACCEPT-FRIEND] Friend request accepted!');
+        // Reload the friends list to show updated state
+        await loadFriends();
+    } catch (error) {
+        console.error('[ACCEPT-FRIEND] Failed to accept friend request:', error);
+        alert('Failed to accept friend request: ' + error);
+    }
+}
+
+async function rejectFriendRequest(friendUserId) {
+    if (!currentUser) return;
+
+    try {
+        await TauriAPI.invoke('reject_friend_request', {
+            userId: currentUser.id,
+            friendUserId: friendUserId
+        });
+        console.log('Friend request rejected');
+        // Reload the friends list to show updated state
+        await loadFriends();
+    } catch (error) {
+        console.error('Failed to reject friend request:', error);
+        alert('Failed to reject friend request: ' + error);
+    }
+}
+
+async function cancelFriendRequest(friendUserId) {
+    console.log('[CANCEL-FRIEND] cancelFriendRequest called with friendUserId:', friendUserId);
+    if (!currentUser) {
+        console.error('[CANCEL-FRIEND] No current user!');
+        return;
+    }
+
+    try {
+        await TauriAPI.invoke('cancel_friend_request', {
+            userId: currentUser.id,
+            friendUserId: friendUserId
+        });
+        console.log('[CANCEL-FRIEND] Friend request canceled');
+        // Reload the friends list to show updated state
+        await loadFriends();
+    } catch (error) {
+        console.error('[CANCEL-FRIEND] Failed to cancel friend request:', error);
+        alert('Failed to cancel friend request: ' + error);
+    }
+}
+
+// Window-scoped handlers for inline onclick (most reliable in Tauri WebViews)
+window.handleAcceptFriend = function(friendId) {
+    console.log('[WINDOW-HANDLER] Accept button clicked for friendId:', friendId);
+    acceptFriendRequest(friendId);
+};
+
+window.handleRejectFriend = function(friendId) {
+    console.log('[WINDOW-HANDLER] Reject button clicked for friendId:', friendId);
+    rejectFriendRequest(friendId);
+};
+
+window.handleCancelFriend = function(friendId) {
+    console.log('[WINDOW-HANDLER] Cancel button clicked for friendId:', friendId);
+    cancelFriendRequest(friendId);
+};
+
+// Event delegation for friend request buttons - handles dynamically added elements
+document.addEventListener('click', function(event) {
+    // Check for accept button
+    const acceptBtn = event.target.closest('[data-accept-friend]');
+    if (acceptBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        const friendId = acceptBtn.dataset.acceptFriend;
+        console.log('[DELEGATION] Accept button clicked for friendId:', friendId);
+        acceptFriendRequest(friendId);
+        return;
+    }
+
+    // Check for reject button
+    const rejectBtn = event.target.closest('[data-reject-friend]');
+    if (rejectBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        const friendId = rejectBtn.dataset.rejectFriend;
+        console.log('[DELEGATION] Reject button clicked for friendId:', friendId);
+        rejectFriendRequest(friendId);
+        return;
+    }
+
+    // Check for cancel button (outgoing requests)
+    const cancelBtn = event.target.closest('[data-cancel-friend]');
+    if (cancelBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        const friendId = cancelBtn.dataset.cancelFriend;
+        console.log('[DELEGATION] Cancel button clicked for friendId:', friendId);
+        cancelFriendRequest(friendId);
+        return;
+    }
+});
+console.log('[MAIN.JS] Event delegation for friend request buttons initialized');
+
+// Set up Tauri event listeners for P2P notifications
+function setupTauriEventListeners() {
+    if (!window.__TAURI__ || !window.__TAURI__.event) {
+        console.log('[EVENTS] Tauri event API not available');
+        return;
+    }
+
+    const { listen } = window.__TAURI__.event;
+
+    // Listen for incoming friend requests
+    listen('friend-request-received', (event) => {
+        console.log('[EVENT] Friend request received:', event.payload);
+        // Refresh friends list if on friends tab
+        const friendsTab = document.getElementById('friendsTab');
+        if (friendsTab && !friendsTab.classList.contains('hidden')) {
+            loadFriends();
+        }
+    });
+
+    // Listen for friend request acceptances
+    listen('friend-accepted', (event) => {
+        console.log('[EVENT] Friend request accepted:', event.payload);
+        // Refresh friends list if on friends tab
+        const friendsTab = document.getElementById('friendsTab');
+        if (friendsTab && !friendsTab.classList.contains('hidden')) {
+            loadFriends();
+        }
+        // Also refresh posts since we can now see their posts
+        const postsTab = document.getElementById('postsTab');
+        if (postsTab && !postsTab.classList.contains('hidden')) {
+            loadPosts();
+        }
+    });
+
+    console.log('[EVENTS] Tauri event listeners registered');
+}
 
 // Create post functions
 function showCreatePost() {
@@ -1648,50 +1931,6 @@ function clearSelectedRecipient() {
 }
 
 // Friend management
-async function addFriendByPublicKey() {
-    console.log('[ADD_FRIEND] Function called');
-    if (!currentUser) {
-        console.log('[ADD_FRIEND] No current user');
-        return;
-    }
-
-    const friendPublicKey = document.getElementById('friendPublicKey').value.trim();
-    console.log('[ADD_FRIEND] Public key input:', friendPublicKey);
-
-    if (!friendPublicKey) {
-        console.log('[ADD_FRIEND] No public key entered');
-        UI.showError('dashboardError', 'Please enter a valid public key');
-        return;
-    }
-
-    if (friendPublicKey === currentUser.publicKey) {
-        console.log('[ADD_FRIEND] Cannot add self');
-        UI.showError('dashboardError', 'You cannot add yourself as a friend');
-        return;
-    }
-
-    try {
-        console.log('[ADD_FRIEND] Calling add_friend_from_qr_code command');
-        // Use add_friend_from_qr_code which creates peer users if they don't exist
-        // We use a default username that can be overridden when the users sync
-        const friend = await TauriAPI.invoke('add_friend_from_qr_code', {
-            currentUserId: currentUser.id,
-            qrData: {
-                username: `User_${friendPublicKey.substring(0, 8)}`,  // Temporary username from key prefix
-                publicKey: friendPublicKey
-            }
-        });
-
-        console.log('[ADD_FRIEND] Friend added successfully:', friend);
-        document.getElementById('friendPublicKey').value = '';
-        UI.showSuccess('dashboardError', `Successfully added ${friend.username} as a friend!`);
-        loadFriends();
-    } catch (error) {
-        console.log('[ADD_FRIEND] Error:', error);
-        UI.showError('dashboardError', 'Failed to add friend: ' + error);
-    }
-}
-
 async function addFriendFromTab() {
     console.log('[ADD_FRIEND_TAB] Function called');
     if (!currentUser) {
@@ -1699,57 +1938,73 @@ async function addFriendFromTab() {
         return;
     }
 
-    const friendPublicKey = document.getElementById('addFriendPublicKey').value.trim();
-    console.log('[ADD_FRIEND_TAB] Public key input:', friendPublicKey);
+    const errorEl = document.getElementById('addFriendTabError');
+    const successEl = document.getElementById('addFriendTabSuccess');
+    errorEl.classList.add('hidden');
+    successEl.classList.add('hidden');
 
-    if (!friendPublicKey) {
-        console.log('[ADD_FRIEND_TAB] No public key entered');
-        UI.showError('dashboardError', 'Please enter a valid public key');
+    const inputValue = document.getElementById('addFriendPublicKey').value.trim();
+    console.log('[ADD_FRIEND_TAB] Input:', inputValue);
+
+    if (!inputValue) {
+        errorEl.textContent = 'Please paste an invite link';
+        errorEl.classList.remove('hidden');
         return;
     }
 
-    if (friendPublicKey === currentUser.publicKey) {
-        console.log('[ADD_FRIEND_TAB] Cannot add self');
-        UI.showError('dashboardError', 'You cannot add yourself as a friend');
+    // Only accept cipher:// invite links
+    if (!inputValue.startsWith('cipher://add-friend?')) {
+        errorEl.textContent = 'Invalid invite link. Must start with cipher://add-friend?';
+        errorEl.classList.remove('hidden');
         return;
     }
 
     try {
-        console.log('[ADD_FRIEND_TAB] Calling add_friend_from_qr_code command');
-        const friend = await TauriAPI.invoke('add_friend_from_qr_code', {
-            currentUserId: currentUser.id,
-            qrData: {
-                username: `User_${friendPublicKey.substring(0, 8)}`,
-                publicKey: friendPublicKey
-            }
+        // Parse the invite URI
+        const url = new URL(inputValue);
+        const publicKey = url.searchParams.get('key');
+        const nodeId = url.searchParams.get('node');
+        const relayUrl = url.searchParams.get('relay');
+
+        if (!publicKey) {
+            errorEl.textContent = 'Invalid invite link - missing key';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        if (!nodeId) {
+            errorEl.textContent = 'Invalid invite link - missing node ID';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        if (publicKey === currentUser.publicKey) {
+            errorEl.textContent = 'You cannot add yourself as a friend';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        console.log('[ADD_FRIEND_TAB] Adding friend:', { publicKey, nodeId, relayUrl });
+
+        // Use the P2P-enabled add friend command
+        await TauriAPI.invoke('iroh_add_friend_by_public_key', {
+            friendPublicKey: publicKey,
+            nodeId: nodeId,
+            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null
         });
 
-        console.log('[ADD_FRIEND_TAB] Friend added successfully:', friend);
         document.getElementById('addFriendPublicKey').value = '';
-        UI.showSuccess('dashboardError', `Successfully added ${friend.username} as a friend!`);
-        showFriends();
+        successEl.textContent = 'Friend added successfully!';
+        successEl.classList.remove('hidden');
+
+        // Go back to friends list after a short delay
+        setTimeout(() => {
+            showFriends();
+        }, 1500);
     } catch (error) {
         console.log('[ADD_FRIEND_TAB] Error:', error);
-        UI.showError('dashboardError', 'Failed to add friend: ' + error);
-    }
-}
-
-async function copyPublicKey() {
-    const publicKey = document.getElementById('userPublicKey').textContent;
-    try {
-        await navigator.clipboard.writeText(publicKey);
-
-        const copyBtn = document.querySelector('.btn-copy');
-        const originalText = copyBtn.textContent;
-        copyBtn.textContent = 'Copied!';
-        copyBtn.style.background = 'var(--color-success-light)';
-
-        setTimeout(() => {
-            copyBtn.textContent = originalText;
-            copyBtn.style.background = 'var(--glass-regular)';
-        }, 2000);
-    } catch (error) {
-        UI.showError('dashboardError', 'Failed to copy public key: ' + error);
+        errorEl.textContent = 'Failed to add friend: ' + error;
+        errorEl.classList.remove('hidden');
     }
 }
 
@@ -1758,14 +2013,21 @@ async function generateQRCode(containerId, options = {}) {
     if (!currentUser) return;
 
     const { maxWidth = '200px', showSuccess = false } = options;
+    const qrContainer = document.getElementById(containerId);
 
     try {
         console.log('═══════════════════════════════════════════════════════════════');
         console.log('🔵 FRONTEND: QR CODE GENERATION STARTED');
         console.log('═══════════════════════════════════════════════════════════════');
-        console.log('[QR-GEN] Calling iroh_generate_invite (includes NodeId + addresses)...');
-        // Use Iroh invite system (includes NodeId + relay URLs + direct addresses)
-        const inviteCode = await TauriAPI.invoke('iroh_generate_invite');
+
+        // Show loading state while waiting for P2P
+        if (qrContainer) {
+            qrContainer.innerHTML = '<p style="color: var(--color-text-muted); text-align: center;">Connecting to P2P network...</p>';
+        }
+
+        console.log('[QR-GEN] Calling P2P.generateInvite() (waits for P2P initialization)...');
+        // Use P2P.generateInvite() which properly waits for P2P initialization
+        const inviteCode = await P2P.generateInvite();
         console.log('[QR-GEN] ✓ Invite code received from backend');
         console.log('[QR-GEN]   Length:', inviteCode.length, 'chars');
         console.log('[QR-GEN]   First 30 chars:', inviteCode.substring(0, 30) + '...');
@@ -1778,7 +2040,6 @@ async function generateQRCode(containerId, options = {}) {
         console.log('✅ FRONTEND: QR CODE GENERATION COMPLETE');
         console.log('═══════════════════════════════════════════════════════════════');
 
-        const qrContainer = document.getElementById(containerId);
         if (qrContainer) {
             qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="Your QR Code" style="max-width: ${maxWidth}; max-height: ${maxWidth}; border-radius: var(--border-radius-md);">`;
         }
@@ -1788,15 +2049,22 @@ async function generateQRCode(containerId, options = {}) {
         }
     } catch (error) {
         console.error('[QR] Failed to generate QR code:', error);
+
+        // Show user-friendly error in the QR container
+        if (qrContainer) {
+            qrContainer.innerHTML = '<p style="color: var(--color-error); text-align: center;">P2P network not ready. Please wait a moment and try again.</p>';
+        }
+
         if (showSuccess) {
             UI.showError('dashboardError', 'Failed to generate QR code: ' + error);
-        } else {
-            console.error('Failed to generate QR code:', error);
         }
     }
 }
 
 // Convenience wrappers for backward compatibility
+// Store the last generated invite code for copy functionality
+let lastGeneratedInviteCode = null;
+
 async function generateMyQRCode() {
     console.log('[QR-GEN] generateMyQRCode() called');
 
@@ -1818,6 +2086,9 @@ async function generateMyQRCode() {
         const inviteCode = await P2P.generateInvite();
         console.log('[QR-GEN] Invite code received, length:', inviteCode?.length);
 
+        // Store for copy functionality
+        lastGeneratedInviteCode = inviteCode;
+
         // inviteCode is already in cipher:// format, no need to wrap it
         const qrData = inviteCode;
         console.log('[QR-GEN] QR data prepared, calling generate_qr_code...');
@@ -1830,6 +2101,12 @@ async function generateMyQRCode() {
             qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="Your QR Code" style="width: 90%; height: auto; max-width: 500px; border-radius: var(--border-radius-md);">`;
             console.log('[QR-GEN] QR code displayed successfully');
         }
+
+        // Show the copy button
+        const copyBtn = document.getElementById('copyInviteLinkBtn');
+        if (copyBtn) {
+            copyBtn.style.display = 'inline-block';
+        }
     } catch (error) {
         console.error('[QR-GEN] ERROR generating QR code:', error);
         console.error('[QR-GEN] Error name:', error?.name);
@@ -1841,6 +2118,61 @@ async function generateMyQRCode() {
             qrContainer.innerHTML = '<p style="color: var(--color-error);">P2P system not ready. Please wait a moment and try again.</p>';
             console.log('[QR-GEN] Error message displayed to user');
         }
+
+        // Hide the copy button on error
+        const copyBtn = document.getElementById('copyInviteLinkBtn');
+        if (copyBtn) {
+            copyBtn.style.display = 'none';
+        }
+    }
+}
+
+async function copyInviteLink() {
+    if (!lastGeneratedInviteCode) {
+        console.log('[COPY] No invite code available');
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(lastGeneratedInviteCode);
+        console.log('[COPY] Invite link copied to clipboard');
+
+        // Show feedback
+        const copyBtn = document.getElementById('copyInviteLinkBtn');
+        if (copyBtn) {
+            const originalText = copyBtn.textContent;
+            copyBtn.textContent = 'Copied!';
+            copyBtn.disabled = true;
+            setTimeout(() => {
+                copyBtn.textContent = originalText;
+                copyBtn.disabled = false;
+            }, 2000);
+        }
+    } catch (error) {
+        console.error('[COPY] Failed to copy:', error);
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = lastGeneratedInviteCode;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            const copyBtn = document.getElementById('copyInviteLinkBtn');
+            if (copyBtn) {
+                const originalText = copyBtn.textContent;
+                copyBtn.textContent = 'Copied!';
+                copyBtn.disabled = true;
+                setTimeout(() => {
+                    copyBtn.textContent = originalText;
+                    copyBtn.disabled = false;
+                }, 2000);
+            }
+        } catch (e) {
+            console.error('[COPY] Fallback copy failed:', e);
+        }
+        document.body.removeChild(textArea);
     }
 }
 
@@ -2205,6 +2537,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         await TauriAPI.waitForAPI();
         console.log('[INIT] Tauri API ready');
 
+        // Set up Tauri event listeners for P2P events
+        setupTauriEventListeners();
+
         console.log('[INIT] Attempting auto-login...');
         const autoLoggedIn = await Session.attemptAutoLogin();
         console.log('[INIT] Auto-login result:', autoLoggedIn);
@@ -2237,14 +2572,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         });
 
-        // Handle app coming back from background - announce presence
+        // Handle app coming back from background - check P2P health and announce presence
         document.addEventListener('visibilitychange', async () => {
             if (!document.hidden && P2P.initialized) {
-                console.log('App became visible, announcing presence...');
+                console.log('App became visible, checking P2P health and announcing presence...');
                 try {
+                    // Ensure Rust-side P2P is still initialized (may have been reset on mobile)
+                    await P2P.ensureInitialized();
                     await P2P.announcePresence();
                 } catch (error) {
-                    console.error('Failed to announce presence:', error);
+                    console.error('Failed to restore P2P or announce presence:', error);
                 }
             }
         });
@@ -2252,11 +2589,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Handle page focus (additional safeguard for mobile)
         window.addEventListener('focus', async () => {
             if (P2P.initialized && currentUser) {
-                console.log('Window focused, announcing presence...');
+                console.log('Window focused, checking P2P health and announcing presence...');
                 try {
+                    await P2P.ensureInitialized();
                     await P2P.announcePresence();
                 } catch (error) {
-                    console.error('Failed to announce presence:', error);
+                    console.error('Failed to restore P2P or announce presence:', error);
                 }
             }
         });
@@ -2594,27 +2932,59 @@ async function deletePost(postId) {
     }
 }
 
-// Add Enter key listener for login form
-document.addEventListener('DOMContentLoaded', () => {
-    const loginUsername = document.getElementById('loginUsername');
-    const loginPassword = document.getElementById('loginPassword');
-
-    if (loginUsername && loginPassword) {
-        [loginUsername, loginPassword].forEach(input => {
-            input.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    handleLogin();
-                }
-            });
-        });
-    }
-});
+// Note: Login form uses form onsubmit handlers (handleCreateAccount, handleRestoreAccount)
+// No additional Enter key listener needed - forms handle Enter key automatically
 
 // New QR Code and P2P Invite Functions
 let cameraStream = null;
 let scanningInterval = null;
 
 async function openCameraToScanQR() {
+    // Check if we're on mobile (Android/iOS) - use native Tauri scanner
+    const isMobile = window.__TAURI__?.core && (
+        navigator.userAgent.includes('Android') ||
+        navigator.userAgent.includes('iPhone') ||
+        navigator.userAgent.includes('iPad')
+    );
+
+    if (isMobile) {
+        try {
+            console.log('[QR] Using native Tauri barcode scanner');
+            // Use Tauri's native barcode scanner plugin
+            const { scan, cancel } = window.__TAURI__.barcodescanner || {};
+
+            if (!scan) {
+                // Try invoking directly if plugin not in global scope
+                const result = await TauriAPI.invoke('plugin:barcode-scanner|scan', {
+                    windowed: false,
+                    formats: ['QR_CODE']
+                });
+
+                if (result && result.content) {
+                    console.log('[QR] Native scan result:', result.content);
+                    await handleScannedQRCode(result.content);
+                }
+                return;
+            }
+
+            const result = await scan({ windowed: false, formats: ['QR_CODE'] });
+            if (result && result.content) {
+                console.log('[QR] Native scan result:', result.content);
+                await handleScannedQRCode(result.content);
+            }
+        } catch (error) {
+            console.error('[QR] Native scanner error:', error);
+            // Fallback to web-based scanner
+            await openWebCameraScanner();
+        }
+        return;
+    }
+
+    // Desktop: use web-based camera scanner
+    await openWebCameraScanner();
+}
+
+async function openWebCameraScanner() {
     const modal = document.getElementById('qrScannerModal');
     const video = document.getElementById('qrVideo');
     const canvas = document.getElementById('qrCanvas');
@@ -2678,7 +3048,8 @@ async function handleScannedQRCode(data) {
         let relayUrl = null;
         if (data.startsWith('cipher://add-friend?key=')) {
             const url = new URL(data);
-            publicKey = url.searchParams.get('key');
+            // URLSearchParams decodes '+' as space, but base64 uses '+' - restore it
+            publicKey = url.searchParams.get('key')?.replace(/ /g, '+');
             nodeId = url.searchParams.get('node');
             const encodedRelay = url.searchParams.get('relay');
             if (encodedRelay) {
@@ -2834,48 +3205,272 @@ async function showMyQRCode() {
 }
 
 async function showManualAddFriend() {
-    const friendKey = prompt('Enter your friend\'s public key:');
-    if (!friendKey || !friendKey.trim()) return;
+    // Show the Add Friend modal
+    const modal = document.getElementById('addFriendModal');
+    const input = document.getElementById('addFriendModalPublicKey');
+    const errorEl = document.getElementById('addFriendModalError');
+    const successEl = document.getElementById('addFriendModalSuccess');
 
-    const friendPublicKey = friendKey.trim();
+    // Clear previous state
+    if (input) input.value = '';
+    if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.classList.add('hidden');
+    }
+    if (successEl) {
+        successEl.textContent = '';
+        successEl.classList.add('hidden');
+    }
 
-    if (friendPublicKey === currentUser.publicKey) {
-        UI.showError('dashboardError', 'You cannot add yourself as a friend');
+    modal.classList.remove('hidden');
+
+    // Focus the input after a short delay
+    setTimeout(() => {
+        if (input) input.focus();
+    }, 100);
+}
+
+function closeAddFriendModal(event) {
+    // If called with event, only close if clicking the backdrop
+    if (event && event.target !== event.currentTarget) {
+        return;
+    }
+    const modal = document.getElementById('addFriendModal');
+    modal.classList.add('hidden');
+}
+
+async function addFriendFromModal() {
+    if (!currentUser) {
+        console.log('[ADD_FRIEND_MODAL] No current user');
+        return;
+    }
+
+    const input = document.getElementById('addFriendModalPublicKey');
+    const errorEl = document.getElementById('addFriendModalError');
+    const successEl = document.getElementById('addFriendModalSuccess');
+
+    const inputValue = input.value.trim();
+
+    // Hide previous messages
+    errorEl.classList.add('hidden');
+    successEl.classList.add('hidden');
+
+    if (!inputValue) {
+        errorEl.textContent = 'Please enter a valid input';
+        errorEl.classList.remove('hidden');
+        return;
+    }
+
+    // Only accept cipher:// invite links
+    if (!inputValue.startsWith('cipher://add-friend?')) {
+        errorEl.textContent = 'Invalid invite link. Must start with cipher://add-friend?';
+        errorEl.classList.remove('hidden');
         return;
     }
 
     try {
-        const friend = await TauriAPI.invoke('add_friend_from_qr_code', {
-            currentUserId: currentUser.id,
-            qrData: {
-                username: `User_${friendPublicKey.substring(0, 8)}`,
-                publicKey: friendPublicKey
-            }
-        });
+        // Parse the invite URI
+        const url = new URL(inputValue);
+        const publicKey = url.searchParams.get('key');
+        const nodeId = url.searchParams.get('node');
+        const relayUrl = url.searchParams.get('relay');
 
-        UI.showSuccess('dashboardError', `Successfully added ${friend.username} as a friend!`);
-
-        // Exchange P2P invite codes for bootstrapping
-        try {
-            const myInvite = await P2P.generateInvite();
-            console.log('Generated my invite code for friend:', myInvite);
-            // Note: In a real implementation, you'd send this invite to the friend
-        } catch (error) {
-            console.error('Failed to generate invite code:', error);
+        if (!publicKey) {
+            errorEl.textContent = 'Invalid invite link - missing key';
+            errorEl.classList.remove('hidden');
+            return;
         }
 
-        loadFriends();
+        if (!nodeId) {
+            errorEl.textContent = 'Invalid invite link - missing node ID';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        if (publicKey === currentUser.publicKey) {
+            errorEl.textContent = 'You cannot add yourself as a friend';
+            errorEl.classList.remove('hidden');
+            return;
+        }
+
+        console.log('[ADD_FRIEND_MODAL] Adding friend:', { publicKey, nodeId, relayUrl });
+
+        // Use the P2P-enabled add friend command
+        await TauriAPI.invoke('iroh_add_friend_by_public_key', {
+            friendPublicKey: publicKey,
+            nodeId: nodeId,
+            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null
+        });
+
+        successEl.textContent = 'Friend added successfully!';
+        successEl.classList.remove('hidden');
+        input.value = '';
+
+        // Close modal after a short delay and refresh friends list
+        setTimeout(() => {
+            closeAddFriendModal();
+            loadFriends();
+        }, 1500);
     } catch (error) {
-        UI.showError('dashboardError', 'Failed to add friend: ' + error);
+        errorEl.textContent = 'Failed to add friend: ' + error;
+        errorEl.classList.remove('hidden');
+    }
+}
+
+// Connection Status Modal Functions
+let connectionStatusInterval = null;
+
+async function showConnectionStatus() {
+    const modal = document.getElementById('connectionStatusModal');
+    modal.classList.remove('hidden');
+    await refreshConnectionStatus(true); // Show loading on first load
+
+    // Start real-time updates every 1 second
+    if (connectionStatusInterval) {
+        clearInterval(connectionStatusInterval);
+    }
+    connectionStatusInterval = setInterval(async () => {
+        // Only update if modal is still visible
+        if (!modal.classList.contains('hidden')) {
+            await refreshConnectionStatus();
+        } else {
+            clearInterval(connectionStatusInterval);
+            connectionStatusInterval = null;
+        }
+    }, 1000);
+}
+
+function closeConnectionStatus(event) {
+    // If called with event, only close if clicking the backdrop
+    if (event && event.target !== event.currentTarget) return;
+    const modal = document.getElementById('connectionStatusModal');
+    modal.classList.add('hidden');
+
+    // Stop real-time updates
+    if (connectionStatusInterval) {
+        clearInterval(connectionStatusInterval);
+        connectionStatusInterval = null;
+    }
+}
+
+async function refreshConnectionStatus(showLoading = false) {
+    const body = document.getElementById('connectionStatusBody');
+    if (showLoading) {
+        body.innerHTML = '<p style="text-align: center; color: var(--color-text-secondary);">Loading...</p>';
+    }
+
+    try {
+        // Add timeout to prevent hanging forever
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout')), 5000)
+        );
+        const status = await Promise.race([
+            TauriAPI.invoke('iroh_get_connection_status'),
+            timeoutPromise
+        ]);
+        console.log('[CONNECTION-STATUS] Received:', status);
+
+        const truncateId = (id, len = 8) => {
+            if (!id) return 'N/A';
+            return id.length > len * 2 ? `${id.substring(0, len)}...${id.substring(id.length - 4)}` : id;
+        };
+
+        // Online = listening AND has connected peers (consistent with navbar)
+        const isOnline = status.listening && (status.connected_peers || 0) > 0;
+        let html = `
+            <div class="status-section">
+                <div class="status-section-title">Network Status</div>
+                <div class="status-row">
+                    <span class="status-label">Status</span>
+                    <span class="status-value ${isOnline ? 'online' : 'offline'}">
+                        ${isOnline ? 'Online' : (status.listening ? 'Listening' : 'Offline')}
+                    </span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Connected Peers</span>
+                    <span class="status-value">${status.connected_peers || 0}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Active Peers</span>
+                    <span class="status-value">${status.active_peers?.length || 0}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Subscribed Topics</span>
+                    <span class="status-value">${status.topic_count || 0}</span>
+                </div>
+            </div>
+
+            <div class="status-section">
+                <div class="status-section-title">Identity</div>
+                <div class="status-row">
+                    <span class="status-label">Node ID</span>
+                    <span class="status-value" title="${status.node_id || ''}">${truncateId(status.node_id, 12)}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Public Key</span>
+                    <span class="status-value" title="${status.public_key || ''}">${truncateId(status.public_key, 12)}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Device ID</span>
+                    <span class="status-value">${status.device_id || 'N/A'}</span>
+                </div>
+            </div>
+
+            <div class="status-section">
+                <div class="status-section-title">Relay</div>
+                <div class="status-row">
+                    <span class="status-label">Relay URL</span>
+                    <span class="status-value">${status.relay_url ? status.relay_url.replace('https://', '').replace(/\/$/, '') : 'N/A'}</span>
+                </div>
+            </div>
+        `;
+
+        // Connected Peers section
+        if (status.peer_ids && status.peer_ids.length > 0) {
+            html += `
+                <div class="status-section">
+                    <div class="status-section-title">Connected Peers (${status.peer_ids.length})</div>
+                    <div class="status-list">
+                        ${status.peer_ids.map(id => `<div class="status-list-item">${truncateId(id, 16)}</div>`).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Subscribed Topics section
+        if (status.subscribed_topics && status.subscribed_topics.length > 0) {
+            html += `
+                <div class="status-section">
+                    <div class="status-section-title">Subscribed Topics (${status.subscribed_topics.length})</div>
+                    <div class="status-list">
+                        ${status.subscribed_topics.map(topic => `<div class="status-list-item">${topic}</div>`).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        body.innerHTML = html;
+    } catch (error) {
+        console.error('[CONNECTION-STATUS] Error:', error);
+        body.innerHTML = `
+            <div class="status-section">
+                <div class="status-section-title">Network Status</div>
+                <div class="status-row">
+                    <span class="status-label">Status</span>
+                    <span class="status-value offline">Not Connected</span>
+                </div>
+                <p class="status-empty">P2P network not initialized. Log in to connect.</p>
+            </div>
+        `;
     }
 }
 
 // Export functions to global scope for onclick handlers
 Object.assign(window, {
-    handleLogin, handleLogout, showLogin, showFeed, showPosts, showMessages,
+    handleLogout, showLogin, showFeed, showPosts, showMessages,
     showFriends, showAddFriend, showCreatePostPage, showCreatePost, createPost, cancelCreatePost,
-    createPostFromPage, sendMessage, addFriendByPublicKey, addFriendFromTab, copyPublicKey,
-    generateMyQRCode, generateProfileQRCode, scanQRCode, handleQRCodeFile, selectFriend,
+    createPostFromPage, sendMessage, addFriendFromTab,
+    generateMyQRCode, generateProfileQRCode, scanQRCode, handleQRCodeFile, selectFriend, copyInviteLink,
     viewMediaAttachment, showEditProfile, handleProfilePictureUpload, saveProfile,
     createFriendInvite, useFriendInvite, exportFriendsList, importFriendsList,
     searchMessages, clearMessageSearch, scrollToMessage, editMessage,
@@ -2883,8 +3478,13 @@ Object.assign(window, {
     // Hamburger menu functions
     toggleHamburgerMenu, closeHamburgerMenu,
     // New QR and P2P functions
-    openCameraToScanQR, closeCameraScanner, handleQRCodeFromCamera, showMyQRCode, showManualAddFriend
+    openCameraToScanQR, closeCameraScanner, handleQRCodeFromCamera, showMyQRCode, showManualAddFriend,
+    // Add Friend modal functions
+    closeAddFriendModal, addFriendFromModal,
+    // Friend request functions
+    acceptFriendRequest, rejectFriendRequest,
+    // Connection status functions
+    showConnectionStatus, closeConnectionStatus, refreshConnectionStatus
 });
 
 console.log('[MAIN.JS] Functions exported to window scope');
-console.log('[MAIN.JS] window.addFriendByPublicKey exists?', typeof window.addFriendByPublicKey);

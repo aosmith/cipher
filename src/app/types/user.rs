@@ -27,14 +27,15 @@ pub struct User {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct KeyPair {
     pub public_key: String,
     #[serde(skip_serializing)] // CRITICAL: Never serialize private keys
-    #[allow(dead_code)] // Field is used but not detected by dead code analysis
     pub private_key: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct NewUser {
     pub username: String, // Now used as display_name
 }
@@ -48,6 +49,7 @@ pub struct UserWithRecoveryPhrase {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct UserRegistrationResponse {
     pub user: User,
     pub recovery_phrase: String,

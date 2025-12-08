@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cipher",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "identifier": "com.cipher.social",
   "build": {
     "beforeDevCommand": "",
@@ -10,6 +10,9 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "security": {
+      "capabilities": ["default"]
+    },
     "windows": [
       {
         "label": "main",

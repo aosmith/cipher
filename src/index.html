@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Cipher - Encrypted Social Network</title>
-    <link rel="stylesheet" href="glass-utilities.css">
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="utilities.css">
 </head>
@@ -240,7 +239,8 @@
                                 <div id="myQrCode" style="display: inline-block; padding: var(--spacing-md); background: white; border-radius: var(--border-radius-md);">
                                     <!-- QR code will be generated here -->
                                 </div>
-                                <p style="margin-top: var(--spacing-md); color: var(--color-text-secondary); font-size: var(--font-size-sm);">Have friends scan this to connect</p>
+                                <p style="margin-top: var(--spacing-md); color: var(--color-text-secondary); font-size: var(--font-size-sm);">Have friends scan this or share the link</p>
+                                <button id="copyInviteLinkBtn" class="btn btn-secondary" onclick="copyInviteLink()" style="margin-top: var(--spacing-md); display: none;">Copy Invite Link</button>
                             </div>
 
                             <!-- Add Friend Buttons -->
@@ -265,12 +265,26 @@
                         <div class="modal-scrollable">
                             <div class="create-post-form form-container">
                                 <h3>Add Friend</h3>
-                                <p class="public-key-help" style="margin-bottom: var(--spacing-lg);">Enter your friend's public key to add them to your network</p>
 
-                                <div class="form-group" style="margin: var(--spacing-lg) 0;">
-                                    <label for="addFriendPublicKey">Friend's Public Key</label>
-                                    <input type="text" id="addFriendPublicKey" class="textarea" placeholder="Paste your friend's public key here..." required style="margin-top: var(--spacing-md);">
+                                <!-- Your Invite Link Section -->
+                                <div style="margin-bottom: var(--spacing-xl); padding: var(--spacing-lg); background: var(--glass-light); border-radius: var(--border-radius-md);">
+                                    <label style="display: block; margin-bottom: var(--spacing-sm); color: var(--color-text-secondary);">Your Invite Link</label>
+                                    <div style="display: flex; gap: var(--spacing-sm); align-items: stretch;">
+                                        <input type="text" id="myInviteLink" class="textarea" readonly style="flex: 1; font-size: var(--font-size-sm); background: var(--glass-regular);" placeholder="Loading...">
+                                        <button class="btn btn-primary" onclick="copyMyInviteLink()" style="white-space: nowrap;">Copy</button>
+                                    </div>
+                                    <p style="margin-top: var(--spacing-sm); font-size: var(--font-size-sm); color: var(--color-text-muted);">Share this link with friends to connect</p>
                                 </div>
+
+                                <!-- Add Friend Section -->
+                                <div class="form-group" style="margin: var(--spacing-lg) 0;">
+                                    <label for="addFriendPublicKey">Friend's Invite Link</label>
+                                    <textarea id="addFriendPublicKey" class="textarea" placeholder="cipher://add-friend?key=...&node=...&relay=..." rows="2" style="margin-top: var(--spacing-md);"></textarea>
+                                    <p style="margin-top: var(--spacing-sm); font-size: var(--font-size-sm); color: var(--color-text-muted);">Paste your friend's invite link to connect</p>
+                                </div>
+
+                                <div id="addFriendTabError" class="error hidden" style="margin-bottom: var(--spacing-md);"></div>
+                                <div id="addFriendTabSuccess" class="success hidden" style="margin-bottom: var(--spacing-md);"></div>
 
                                 <div style="display: flex; gap: var(--spacing-lg); justify-content: center; margin-top: var(--spacing-xl);">
                                     <button class="btn btn-primary" onclick="addFriendFromTab()">Add Friend</button>
@@ -303,6 +317,46 @@
 
             <div style="text-align: center;">
                 <button class="btn btn-primary" onclick="confirmRecoveryPhraseSaved()">I've Saved My Recovery Phrase</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connection Status Modal -->
+    <div id="connectionStatusModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.85); z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--spacing-lg);" onclick="closeConnectionStatus(event)">
+        <div class="connection-status-content" onclick="event.stopPropagation()">
+            <div class="connection-status-header">
+                <h2>Connection Status</h2>
+                <button class="connection-status-close" onclick="closeConnectionStatus()">&times;</button>
+            </div>
+            <div id="connectionStatusBody" class="connection-status-body">
+                <!-- Content populated by JavaScript -->
+            </div>
+            <div class="connection-status-footer">
+                <span style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">Updates automatically</span>
+                <button class="btn btn-primary" onclick="closeConnectionStatus()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Friend Modal -->
+    <div id="addFriendModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.85); z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--spacing-lg);" onclick="closeAddFriendModal(event)">
+        <div class="add-friend-modal-content" onclick="event.stopPropagation()">
+            <div class="add-friend-modal-header">
+                <h2>Add Friend</h2>
+                <button class="add-friend-modal-close" onclick="closeAddFriendModal()">&times;</button>
+            </div>
+            <div class="add-friend-modal-body">
+                <p class="add-friend-help">Paste your friend's invite link to connect</p>
+                <div class="form-group">
+                    <label for="addFriendModalPublicKey">Invite Link</label>
+                    <textarea id="addFriendModalPublicKey" class="textarea add-friend-textarea" placeholder="cipher://add-friend?key=...&node=...&relay=..." rows="3"></textarea>
+                </div>
+                <div id="addFriendModalError" class="error hidden"></div>
+                <div id="addFriendModalSuccess" class="success hidden"></div>
+            </div>
+            <div class="add-friend-modal-footer">
+                <button class="btn btn-secondary" onclick="closeAddFriendModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="addFriendFromModal()">Add Friend</button>
             </div>
         </div>
     </div>

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct Post {
     pub id: SqliteUuid,
     pub user_id: SqliteUuid,
+    pub display_name: Option<String>, // Display name of post author (not unique)
     pub content: String,
     pub encrypted: bool,
     pub pinned: bool,

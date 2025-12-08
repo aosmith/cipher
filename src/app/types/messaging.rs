@@ -15,6 +15,7 @@ pub struct Message {
     pub disappears_at: Option<String>, // Calculated timestamp when message will be deleted
     pub created_at: String,
     pub updated_at: String,
+    pub edited_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,3 @@
-use bcrypt::{hash, DEFAULT_COST};
 use chrono::Utc;
 use rusqlite::{params, Result as SqliteResult};
 
@@ -9,6 +8,7 @@ impl Database {
     /// Find user by username - ONLY for local authentication
     /// WARNING: Never use this for P2P user discovery! Use find_user_by_public_key instead.
     /// Usernames are not globally unique - public keys are the true identity in P2P.
+    #[allow(dead_code)]
     pub fn find_user_by_username(&self, username: &str) -> SqliteResult<Option<User>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -118,8 +118,7 @@ impl Database {
         let user_id = SqliteUuid::from_public_key(&signing_public);
 
         // Hash recovery phrase for storage (allows validation without storing plaintext)
-        let recovery_phrase_hash = hash(&recovery_phrase, DEFAULT_COST)
-            .map_err(|e| format!("Failed to hash recovery phrase: {}", e))?;
+        let recovery_phrase_hash = Self::hash_recovery_phrase_secure(&recovery_phrase)?;
 
         conn.execute(
             "INSERT INTO users (id, username, public_key, private_key, encryption_public_key, encryption_private_key, device_id, bio, profile_picture, recovery_phrase_hash, recovery_phrase_shown, created_at, updated_at)
@@ -187,8 +186,7 @@ impl Database {
         let user_id = SqliteUuid::from_public_key(&signing_public);
 
         // Hash recovery phrase for storage
-        let recovery_phrase_hash = hash(&recovery_phrase, DEFAULT_COST)
-            .map_err(|e| format!("Failed to hash recovery phrase: {}", e))?;
+        let recovery_phrase_hash = Self::hash_recovery_phrase_secure(&recovery_phrase)?;
 
         // Check if user already exists in database (multi-device or restore)
         let existing_user: Option<User> = {
@@ -288,6 +286,7 @@ impl Database {
     /// Sync a peer's user data via P2P - creates user record from their public keys
     /// This is used when discovering a new peer via their public key exchange
     /// Public keys are the ONLY way to identify users in P2P - usernames can duplicate!
+    #[allow(dead_code)]
     pub fn sync_peer_user(
         &self,
         username: &str,
@@ -420,6 +419,7 @@ impl Database {
     }
 
     /// Set device ID for current user
+    #[allow(dead_code)]
     pub fn set_device_id(&self, user_id: SqliteUuid, device_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
@@ -494,6 +494,35 @@ impl Database {
                     encryption_private_key.unwrap_or_default(),
                 ))
             },
+        )
+    }
+
+    /// Get user's encryption public key
+    /// Used for sealed box encryption in Phase 2
+    pub fn get_user_encryption_public_key(
+        &self,
+        user_id: SqliteUuid,
+    ) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT encryption_public_key FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Get user's encryption private key
+    /// SECURITY: This should ONLY be called for the current user, never for other users
+    /// Used for sealed box decryption in Phase 2
+    pub fn get_user_encryption_private_key(
+        &self,
+        user_id: SqliteUuid,
+    ) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT encryption_private_key FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
         )
     }
 }

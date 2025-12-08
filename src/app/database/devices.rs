@@ -139,6 +139,7 @@ impl Database {
     }
 
     /// Get Iroh NodeIds for all other devices with the same user (excluding current device)
+    #[allow(dead_code)]
     pub fn get_peer_node_ids(
         &self,
         user_public_key: &str,
@@ -160,6 +161,7 @@ impl Database {
     }
 
     /// Get all Iroh NodeIds from all devices in the database (for peer discovery)
+    #[allow(dead_code)]
     pub fn get_all_node_ids(&self) -> SqliteResult<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -183,6 +185,7 @@ impl Database {
     }
 
     /// Get all Iroh NodeIds with relay URLs from all devices (for peer discovery with full addressing)
+    #[allow(dead_code)]
     pub fn get_all_peer_addrs(&self) -> SqliteResult<Vec<(String, Option<String>)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -201,6 +204,7 @@ impl Database {
     }
 
     /// Get Iroh NodeIds with relay URLs for peer devices (same user, excluding current device)
+    #[allow(dead_code)]
     pub fn get_peer_addrs(
         &self,
         user_public_key: &str,

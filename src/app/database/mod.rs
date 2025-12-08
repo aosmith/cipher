@@ -31,18 +31,16 @@ impl Database {
 }
 
 // Module declarations
-mod crypto;
+pub mod crypto;
 mod devices;
 mod friends;
 mod media;
 mod messaging;
 mod notifications;
-mod p2p;
 mod pending_messages;
 mod posts;
 mod safety;
 mod schema;
 pub mod sync;
-mod typing;
 mod users;
 mod utils;

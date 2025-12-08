@@ -84,6 +84,7 @@ impl Database {
             disappears_at,
             created_at: now.clone(),
             updated_at: now,
+            edited_at: None,
         };
 
         // Broadcast notification for new message
@@ -119,6 +120,7 @@ impl Database {
                 disappears_at: row.get("disappears_at")?,
                 created_at: row.get("created_at")?,
                 updated_at: row.get("updated_at")?,
+                edited_at: None,
             })
         })?;
 

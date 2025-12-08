@@ -2,6 +2,8 @@
 const P2P = {
     peers: new Map(), // Map of peer_id -> peer info
     initialized: false,
+    initializationPromise: null, // Promise that resolves when initialization completes
+    initializationResolve: null, // Resolve function for the promise
     connectedPeers: 0, // Track number of connected peers
     presenceRetryCount: 0,
     presenceRetryTimer: null,
@@ -18,22 +20,33 @@ const P2P = {
     },
 
     // Initialize Iroh network (called on login)
-    async initialize(userId, publicKey, deviceId) {
-        if (this.initialized) {
+    async initialize(userId, displayName, publicKey, deviceId, force = false) {
+        if (this.initialized && !force) {
             console.log('P2P already initialized');
             return;
+        }
+
+        // Store credentials for potential re-initialization
+        this.userId = userId;
+        this.displayName = displayName;
+        this.publicKey = publicKey;
+        this.deviceId = deviceId;
+
+        // Create a promise that other methods can wait on
+        if (!this.initializationPromise || force) {
+            this.initializationPromise = new Promise((resolve) => {
+                this.initializationResolve = resolve;
+            });
         }
 
         try {
             this.updateStatus('connecting');
             console.log('Initializing Iroh P2P system...');
 
-            this.userId = userId;
-            this.publicKey = publicKey;
-
             // Initialize Iroh network (keypair derived on Rust side from public key)
             await TauriAPI.invoke('iroh_initialize', {
                 userId: userId,
+                displayName: displayName,
                 publicKey: publicKey,
                 deviceId: deviceId
             });
@@ -81,10 +94,19 @@ const P2P = {
 
             console.log('Iroh P2P system initialized');
 
+            // Resolve the initialization promise so waiting callers can proceed
+            if (this.initializationResolve) {
+                this.initializationResolve();
+            }
+
             return true;
         } catch (error) {
             console.error('Failed to initialize P2P:', error);
             this.updateStatus('offline');
+            // Still resolve the promise (with failure state) so waiters don't hang forever
+            if (this.initializationResolve) {
+                this.initializationResolve();
+            }
             throw error;
         }
     },
@@ -446,6 +468,80 @@ const P2P = {
         }, delay);
     },
 
+    // Ensure P2P is initialized on Rust side (handles resume/state mismatch)
+    async ensureInitialized(retryCount = 0) {
+        const maxRetries = 10;
+        const retryDelay = 500; // 500ms between retries
+
+        // If already initialized, we're good
+        if (this.initialized) {
+            return;
+        }
+
+        // If there's an initialization in progress, wait for it
+        if (this.initializationPromise) {
+            console.log('P2P initialization in progress, waiting...');
+            await this.initializationPromise;
+            // After waiting, check if we're now initialized
+            if (this.initialized) {
+                console.log('P2P initialization completed while waiting');
+                return;
+            }
+        }
+
+        // Check if Rust-side is actually initialized by checking connection status
+        try {
+            const status = await TauriAPI.invoke('iroh_get_connection_status');
+
+            // Case 1: Rust is listening but JS thinks we're not initialized
+            // This can happen if the promise resolved but UI navigated away
+            if (status.listening && !this.initialized) {
+                console.log('P2P state mismatch - Rust initialized but JS not, syncing state...');
+                this.initialized = true;
+                this.startPeerPolling();
+                this.startPresencePolling();
+                return;
+            }
+
+            // Case 2: JS thinks we're initialized but Rust side was reset
+            if (!status.listening && this.initialized) {
+                console.log('P2P state mismatch detected - Rust side not initialized, reinitializing...');
+                // Force re-initialization
+                await this.initialize(this.userId, this.displayName, this.publicKey, this.deviceId, true);
+                return;
+            }
+
+            // Case 3: Neither side is initialized - wait and retry if initialization may be in progress
+            if (!status.listening && !this.initialized) {
+                // If we have credentials stored, initialization may be happening - wait and retry
+                if (retryCount < maxRetries) {
+                    console.log(`P2P not ready yet, waiting... (attempt ${retryCount + 1}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                    return this.ensureInitialized(retryCount + 1);
+                }
+                console.log('P2P not initialized after retries, giving up');
+                throw new Error('Iroh not initialized');
+            }
+        } catch (error) {
+            // If the call fails entirely, assume not initialized
+            if (this.initialized && this.userId && this.publicKey) {
+                console.log('P2P health check failed, attempting reinitialization...');
+                await this.initialize(this.userId, this.displayName, this.publicKey, this.deviceId, true);
+            } else if (error.message === 'Iroh not initialized') {
+                // Re-throw our own error
+                throw error;
+            } else if (retryCount < maxRetries) {
+                // Network or other transient error - retry
+                console.log(`P2P health check failed, retrying... (attempt ${retryCount + 1}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+                return this.ensureInitialized(retryCount + 1);
+            } else {
+                // Re-throw the error so caller knows P2P isn't ready
+                throw error;
+            }
+        }
+    },
+
     // Request manual sync (triggered by pull-to-refresh)
     // Device sync happens automatically via presence announcements,
     // so this just triggers an immediate presence announcement
@@ -457,6 +553,9 @@ const P2P = {
     // Generate invite code for peer discovery
     // Privacy-preserving: User controls who gets their NodeId
     async generateInvite() {
+        // Ensure Rust-side is initialized (handles app resume)
+        await this.ensureInitialized();
+
         try {
             const inviteCode = await TauriAPI.invoke('iroh_generate_invite');
             console.log('Generated invite code');

@@ -1,12 +1,12 @@
 // Tauri commands for Iroh P2P networking
+// Global mesh architecture: all nodes on cipher/content/v1
 
 use lazy_static::lazy_static;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use tauri::{Manager, State};
 
-use super::iroh_network::{IrohNetwork, P2PMessage};
+use super::iroh_network::{IrohNetwork, P2PMessage, CONTENT_TOPIC};
 use super::types::SqliteUuid;
 use super::Database;
 
@@ -15,17 +15,12 @@ lazy_static! {
     pub static ref IROH_NETWORK: StdMutex<Option<Arc<IrohNetwork>>> = StdMutex::new(None);
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PeerInfo {
-    pub peer_id: String,
-    pub is_connected: bool,
-}
-
 /// Initialize Iroh network
 #[tauri::command]
 pub async fn iroh_initialize(
     app_handle: tauri::AppHandle,
     user_id: SqliteUuid,
+    display_name: String,
     public_key: String,
     device_id: Option<String>,
     db: tauri::State<'_, Database>,
@@ -33,6 +28,7 @@ pub async fn iroh_initialize(
     println!("========================================");
     println!("iroh_initialize called");
     println!("   User ID: {}", user_id);
+    println!("   Display Name: {}", display_name);
     println!("   Public Key: {}", public_key);
     println!("   Device ID: {:?}", device_id);
     println!("========================================");
@@ -81,6 +77,7 @@ pub async fn iroh_initialize(
     println!("[IROH-INIT] Creating IrohNetwork...");
     let network = IrohNetwork::new(
         user_id,
+        display_name,
         public_key.clone(),
         device_id,
         &seed,
@@ -94,10 +91,9 @@ pub async fn iroh_initialize(
     network.initialize().await?;
     println!("[IROH-INIT] Endpoint and gossip initialized");
 
-    // CRITICAL: Subscribe to discovery topics so we can receive presence announcements
-    println!("[IROH-INIT] Subscribing to discovery topics...");
-    network.ensure_discovery_subscribed().await?;
-    println!("[IROH-INIT] Discovery topics subscribed");
+    // GLOBAL MESH: Node is now subscribed to cipher/content/v1
+    // All discovery, presence, and content flows through the single global topic
+    println!("[IROH-INIT] Global mesh initialized - node joined {}", CONTENT_TOPIC);
 
     println!("[IROH-INIT] Storing network globally...");
     let network_arc = Arc::new(network);
@@ -111,8 +107,13 @@ pub async fn iroh_initialize(
 }
 
 /// Subscribe to a friend's topic to receive their updates
+/// GLOBAL MESH: This is now a no-op as all nodes are on cipher/content/v1
+/// Kept for backwards compatibility with frontend code
 #[tauri::command]
-pub async fn iroh_subscribe_friend(friend_public_key: String) -> Result<String, String> {
+pub async fn iroh_subscribe_friend(
+    friend_public_key: String,
+    db: tauri::State<'_, crate::app::database::Database>,
+) -> Result<String, String> {
     let network = IROH_NETWORK
         .lock()
         .unwrap()
@@ -120,18 +121,40 @@ pub async fn iroh_subscribe_friend(friend_public_key: String) -> Result<String, 
         .ok_or("Iroh not initialized")?
         .clone();
 
-    // Subscribe to friend's topic (based on their public key)
-    let topic = format!("cipher/user/{}", friend_public_key);
-    network.subscribe_topic(&topic).await?;
+    // GLOBAL MESH: No per-friend topics needed
+    // All content is broadcast to cipher/content/v1
+    println!("[IROH] iroh_subscribe_friend called for {} - using global mesh", friend_public_key);
 
-    Ok("Subscribed to friend's topic".to_string())
+    // Still try to add friend's node address for better connectivity
+    let peer_info = db.get_friend_peer_info_by_public_key(network.user_id, &friend_public_key).ok().flatten();
+    if let Some((node_id, relay_url)) = peer_info {
+        println!("[IROH] Adding friend peer info: NodeId={}, Relay={}", node_id, relay_url);
+        if let Ok(peer_node_id) = node_id.parse::<iroh::NodeId>() {
+            if let Ok(relay_url_parsed) = relay_url.parse::<url::Url>() {
+                let node_addr = iroh::NodeAddr::from_parts(
+                    peer_node_id,
+                    Some(iroh::RelayUrl::from(relay_url_parsed)),
+                    vec![],
+                );
+                let endpoint_guard = network.endpoint.lock().await;
+                if let Some(endpoint) = endpoint_guard.as_ref() {
+                    let _ = endpoint.add_node_addr(node_addr);
+                    println!("[IROH] Added friend node address to endpoint");
+                }
+                drop(endpoint_guard);
+            }
+        }
+    }
+
+    Ok("Friend added to global mesh".to_string())
 }
 
 /// Send a direct message to a user
+/// GLOBAL MESH: Message broadcast to all, only recipient can decrypt
 #[tauri::command]
 pub async fn iroh_send_message(
     to_user_id: SqliteUuid,
-    to_public_key: String,
+    _to_public_key: String, // Not used in global mesh - filtering by to_user_id
     encrypted_content: String,
 ) -> Result<String, String> {
     let network = IROH_NETWORK
@@ -152,14 +175,14 @@ pub async fn iroh_send_message(
         device_id: network.device_id.clone(),
     };
 
-    // Publish to the recipient's topic
-    let topic = format!("cipher/user/{}", to_public_key);
-    network.publish_message(&topic, message).await?;
+    // GLOBAL MESH: Broadcast to all nodes, recipient filters by to_user_id
+    network.publish_message(CONTENT_TOPIC, message).await?;
 
     Ok(message_id)
 }
 
-/// Publish a post to your own topic
+/// Publish a post to the global mesh
+/// PHASE 2: Encrypts post with sealed boxes for each friend
 #[tauri::command]
 pub async fn iroh_publish_post(
     content: String,
@@ -176,19 +199,59 @@ pub async fn iroh_publish_post(
     // Get post attachments from database
     let attachments = db.get_post_media(post_id).ok();
 
-    let message = P2PMessage::Post {
-        user_id: network.user_id,
-        content,
-        timestamp: chrono::Utc::now().timestamp(),
-        device_id: network.device_id.clone(),
+    // Get our encryption keys
+    let our_encryption_public_key = db
+        .get_user_encryption_public_key(network.user_id)
+        .map_err(|e| format!("Failed to get encryption public key: {}", e))?
+        .ok_or("No encryption public key found")?;
+
+    let our_encryption_private_key = db
+        .get_user_encryption_private_key(network.user_id)
+        .map_err(|e| format!("Failed to get encryption private key: {}", e))?
+        .ok_or("No encryption private key found")?;
+
+    // Get friend encryption public keys
+    let friend_encryption_keys = network.get_friend_encryption_public_keys();
+
+    if friend_encryption_keys.is_empty() {
+        // No friends yet - still create post locally but don't broadcast encrypted content
+        // Just broadcast the legacy Post message for backwards compatibility
+        println!("[IROH] No friends with encryption keys - sending legacy Post");
+        let message = P2PMessage::Post {
+            user_id: network.user_id,
+            public_key: network.public_key.clone(),
+            content,
+            timestamp: chrono::Utc::now().timestamp(),
+            device_id: network.device_id.clone(),
+            attachments,
+        };
+        network.publish_message(CONTENT_TOPIC, message).await?;
+        return Ok("Post published (legacy)".to_string());
+    }
+
+    // PHASE 2: Create sealed envelope with boxes for each friend
+    println!("[IROH] Creating sealed envelope for {} friends", friend_encryption_keys.len());
+
+    let envelope = crate::app::crypto::GossipEnvelope::new_post(
+        &our_encryption_public_key,
+        &content,
         attachments,
-    };
+        &friend_encryption_keys,
+        &our_encryption_private_key,
+    ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
 
-    // Publish to our own topic
-    let topic = format!("cipher/user/{}", network.public_key);
-    network.publish_message(&topic, message).await?;
+    // Serialize envelope to JSON
+    let envelope_json = serde_json::to_string(&envelope)
+        .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
 
-    Ok("Post published".to_string())
+    // Create SealedEnvelope message
+    let message = P2PMessage::SealedEnvelope { envelope_json };
+
+    // Broadcast to global mesh
+    network.publish_message(CONTENT_TOPIC, message).await?;
+
+    println!("[IROH] ✓ Sealed post published to {} friends", friend_encryption_keys.len());
+    Ok("Post published (sealed)".to_string())
 }
 
 /// Get connection status
@@ -236,7 +299,7 @@ pub async fn iroh_announce_presence() -> Result<String, String> {
 
 /// Generate a friend request QR code
 /// Returns a cipher:// URI with compact addressing info (public key, NodeId, relay)
-/// Omits direct IP addresses to keep QR code scannable
+/// GLOBAL MESH: All nodes on cipher/content/v1 - just share connection info
 #[tauri::command]
 pub async fn iroh_generate_invite() -> Result<String, String> {
     println!("[IROH] Generating friend request QR code...");
@@ -248,25 +311,9 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
         .ok_or("Iroh not initialized")?
         .clone();
 
-    // CRITICAL: Subscribe to cipher/presence topic to receive discovery announcements
-    network.ensure_discovery_subscribed().await?;
-
-    // CRITICAL: Subscribe to our own topic when generating QR code
-    // This ensures we can receive Presence messages when friends scan our QR
-    let our_topic = format!("cipher/user/{}", network.public_key);
-    if !network.is_topic_subscribed(&our_topic).await {
-        println!("[IROH] Subscribing to our own topic to receive friend Presence messages...");
-        match network.subscribe_topic(&our_topic).await {
-            Ok(_) => {
-                println!("[IROH] ✓ Subscribed to our own topic: {}", our_topic);
-            }
-            Err(e) => {
-                return Err(format!("Failed to subscribe to own topic: {}", e));
-            }
-        }
-    } else {
-        println!("[IROH] Already subscribed to our own topic");
-    }
+    // GLOBAL MESH: Already subscribed to cipher/content/v1 on init
+    // Just need to share our connection info
+    println!("[IROH] Generating invite - node already on global mesh");
 
     // Get current NodeAddr from endpoint
     let endpoint_guard = network.endpoint.lock().await;
@@ -305,7 +352,7 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
 }
 
 /// Add a friend by public key with optional compact node info
-/// Creates friendship in database, subscribes to their topic, and establishes peer connection
+/// GLOBAL MESH: Creates friendship in database and sends FriendRequest to global mesh
 #[tauri::command]
 pub async fn iroh_add_friend_by_public_key(
     friend_public_key: String,
@@ -313,7 +360,7 @@ pub async fn iroh_add_friend_by_public_key(
     relay_url: Option<String>,
     db: State<'_, Database>,
 ) -> Result<String, String> {
-    println!("[IROH] Adding friend by public key: {}", friend_public_key);
+    println!("[IROH] Adding friend by public key: {} (global mesh)", friend_public_key);
 
     let network = IROH_NETWORK
         .lock()
@@ -349,11 +396,12 @@ pub async fn iroh_add_friend_by_public_key(
         )
         .map_err(|e| format!("Failed to create user: {}", e))?;
 
-    // 2. Create friendship (bidirectional, status = 'accepted')
-    println!("[IROH] Creating friendship in database...");
+    // 2. Create outgoing friend request (status = 'pending', we initiated it)
+    // The friend must accept before it becomes 'accepted'
+    println!("[IROH] Creating outgoing friend request in database...");
     db.conn.lock().unwrap().execute(
         "INSERT OR IGNORE INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'accepted', ?2, ?4, ?5)",
+         VALUES (?1, ?2, ?3, 'pending', ?2, ?4, ?5)",
         rusqlite::params![
             super::types::SqliteUuid::new(),
             network.user_id,
@@ -361,217 +409,105 @@ pub async fn iroh_add_friend_by_public_key(
             &now,
             &now
         ],
-    ).map_err(|e| format!("Failed to create friendship: {}", e))?;
+    ).map_err(|e| format!("Failed to create friend request: {}", e))?;
 
-    // 3. If node info provided, add peer to endpoint for gossip bootstrap
-    // Store peer address add success state to determine if we can use peer as bootstrap
-    let peer_added = if let (Some(node_id_str), Some(relay_url_str)) = (&node_id, &relay_url) {
-        println!("[IROH] Node info provided - establishing immediate peer connection...");
+    // 3. If node info provided, add peer to endpoint for better connectivity
+    if let (Some(node_id_str), Some(relay_url_str)) = (&node_id, &relay_url) {
+        println!("[IROH] Node info provided - adding to endpoint...");
 
         // Parse NodeId
-        let peer_node_id: iroh::NodeId = node_id_str
-            .parse()
-            .map_err(|e| format!("Failed to parse NodeId: {}", e))?;
+        if let Ok(peer_node_id) = node_id_str.parse::<iroh::NodeId>() {
+            // Parse relay URL
+            if let Ok(relay_url_parsed) = relay_url_str.parse::<url::Url>() {
+                // Construct minimal NodeAddr with just NodeId and relay
+                let node_addr = iroh::NodeAddr::from_parts(
+                    peer_node_id,
+                    Some(relay_url_parsed.into()),
+                    vec![],
+                );
 
-        // Parse relay URL
-        let relay_url_parsed: url::Url = relay_url_str
-            .parse()
-            .map_err(|e| format!("Failed to parse relay URL: {}", e))?;
-
-        // Construct minimal NodeAddr with just NodeId and relay
-        let node_addr = iroh::NodeAddr::from_parts(
-            peer_node_id,
-            Some(relay_url_parsed.into()), // Convert Url to RelayUrl
-            vec![],                        // No direct addresses - let relay handle it
-        );
-
-        println!("[IROH-CONNECT] 🔗 Attempting connection to peer...");
-        println!("[IROH-CONNECT]   Peer NodeId: {}", peer_node_id);
-        println!("[IROH-CONNECT]   Relay: {:?}", node_addr.relay_url());
-        println!("[IROH-CONNECT]   ALPN: {}", std::str::from_utf8(&iroh_gossip::ALPN).unwrap_or("invalid utf8"));
-
-        // Add NodeAddr to endpoint
-        // IMPORTANT: Following iroh-gossip chat example pattern - do NOT manually call endpoint.connect()
-        // Only add_node_addr() and let the gossip protocol handle connections internally
-        // Manual connections may interfere with gossip protocol's internal connection management
-        let endpoint_guard = network.endpoint.lock().await;
-        let addr_added = if let Some(endpoint) = endpoint_guard.as_ref() {
-            println!("[IROH-CONNECT] Adding peer address to endpoint (gossip protocol will handle connection)...");
-            if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
-                println!("[IROH-CONNECT] ✗ Failed to add node address: {}", e);
-                false
-            } else {
-                println!("[IROH-CONNECT] ✓ Node address added to endpoint");
-                println!("[IROH-CONNECT]   Following iroh-gossip chat example: NOT manually connecting");
-                println!("[IROH-CONNECT]   The gossip protocol will establish connections when subscribe_and_join() is called");
-                true
-            }
-        } else {
-            println!("[IROH-CONNECT] ✗ Endpoint not initialized!");
-            false
-        };
-        drop(endpoint_guard);
-
-        if addr_added {
-            // CRITICAL: Save peer address for persistent reconnection on app restart
-            println!("[IROH-CONNECT] Saving friend peer address to database...");
-            if let Err(e) = db.save_friend_peer_address(
-                network.user_id,
-                friend_user_id,
-                node_id_str,
-                relay_url_str,
-            ) {
-                println!("[IROH-CONNECT] ✗ Failed to save friend peer address: {}", e);
-            } else {
-                println!("[IROH-CONNECT] ✓ Friend peer address saved successfully");
-            }
-        }
-
-        addr_added
-    } else {
-        println!("[IROH] No node info provided - will discover peer via presence");
-        false
-    };
-
-    // 4. Subscribe to friend's topic WITH peer as bootstrap
-    // This ensures we join the same gossip mesh as the friend
-    let friend_topic = format!("cipher/user/{}", friend_public_key);
-    if peer_added {
-        if let Some(node_id_str) = &node_id {
-            if let Ok(peer_node_id) = node_id_str.parse::<iroh::NodeId>() {
-                // CRITICAL: Resubscribe to shared topics WITH friend as bootstrap FIRST
-                // This tears down our isolated root subscriptions and joins friend's mesh
-                // Do this BEFORE subscribing to friend's topic for maximum mesh formation chance
-                println!("[IROH] Resubscribing to shared topics WITH friend as bootstrap...");
-                println!("[IROH] This will unsubscribe from isolated subscriptions and join friend's mesh");
-
-                if let Err(e) = network.resubscribe_with_bootstrap("cipher/presence", vec![peer_node_id]).await {
-                    println!("[IROH] ⚠️  Failed to resubscribe to cipher/presence: {}", e);
-                } else {
-                    println!("[IROH] ✓ Resubscribed to cipher/presence with friend - mesh should form!");
+                // Add NodeAddr to endpoint
+                let endpoint_guard = network.endpoint.lock().await;
+                if let Some(endpoint) = endpoint_guard.as_ref() {
+                    if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
+                        println!("[IROH] Warning: Failed to add node address: {}", e);
+                    } else {
+                        println!("[IROH] ✓ Node address added to endpoint");
+                    }
                 }
+                drop(endpoint_guard);
 
-                if let Err(e) = network.resubscribe_with_bootstrap("cipher/discovery/v1", vec![peer_node_id]).await {
-                    println!("[IROH] ⚠️  Failed to resubscribe to cipher/discovery/v1: {}", e);
-                } else {
-                    println!("[IROH] ✓ Resubscribed to cipher/discovery/v1 with friend - mesh should form!");
-                }
-
-                // Now subscribe to friend's topic
-                println!("[IROH] Subscribing to friend's topic WITH peer as bootstrap...");
-                match network
-                    .subscribe_with_bootstrap(&friend_topic, vec![peer_node_id])
-                    .await
-                {
+                // CRITICAL FIX: Resubscribe to global topic WITH the new friend as bootstrap
+                // This actually forms the gossip mesh between us and the friend.
+                // Without this, we're isolated root nodes that can't see each other's messages.
+                println!("[IROH] Resubscribing to global mesh with new friend as bootstrap...");
+                match network.resubscribe_with_bootstrap(CONTENT_TOPIC, vec![peer_node_id]).await {
                     Ok(_) => {
-                        println!("[IROH] ✓ Subscribed to {} with bootstrap", friend_topic);
-
-                        // 5. Send Presence to friend's topic via gossip
-                        // Friend is already subscribed to their own topic, so they'll receive it
-                        println!("[IROH] Sending Presence to friend's topic via gossip...");
-
-                        let endpoint_guard = network.endpoint.lock().await;
-                        if let Some(endpoint) = endpoint_guard.as_ref() {
-                            if let Ok(our_node_addr) = endpoint.node_addr().await {
-                                drop(endpoint_guard);
-
-                                let presence = super::iroh_network::P2PMessage::Presence {
-                                    user_id: network.user_id,
-                                    public_key: network.public_key.clone(),
-                                    device_id: network
-                                        .device_id
-                                        .clone()
-                                        .unwrap_or_else(|| "unknown".to_string()),
-                                    node_addr: our_node_addr.clone(),
-                                    timestamp: chrono::Utc::now().timestamp(),
-                                };
-
-                                match network.publish_message(&friend_topic, presence).await {
-                                    Ok(_) => {
-                                        println!("[IROH] ✓ Presence sent via gossip to friend's topic!");
-                                        println!("[IROH] Friend will receive and process our Presence");
-                                    }
-                                    Err(e) => {
-                                        println!("[IROH] Warning: Failed to publish Presence: {}", e);
-                                    }
-                                }
-
-                                // Send FriendAdded message to create bidirectional friendship
-                                // Alice will receive this and auto-add Bob as a friend
-                                println!("[IROH] Sending FriendAdded message for bidirectional friendship...");
-                                let friend_added = super::iroh_network::P2PMessage::FriendAdded {
-                                    from_public_key: network.public_key.clone(),
-                                    from_user_id: network.user_id,
-                                    from_node_id: our_node_addr.node_id.to_string(),
-                                    from_relay_url: our_node_addr
-                                        .relay_url()
-                                        .map(|url| url.to_string())
-                                        .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string()),
-                                    to_public_key: friend_public_key.clone(),
-                                    timestamp: chrono::Utc::now().timestamp(),
-                                };
-
-                                match network.publish_message(&friend_topic, friend_added).await {
-                                    Ok(_) => {
-                                        println!("[IROH] ✓ FriendAdded message sent - friend will auto-add us!");
-                                    }
-                                    Err(e) => {
-                                        println!("[IROH] Warning: Failed to send FriendAdded: {}", e);
-                                    }
-                                }
-                            } else {
-                                drop(endpoint_guard);
-                            }
-                        } else {
-                            drop(endpoint_guard);
-                        }
+                        println!("[IROH] ✓ Successfully joined gossip mesh with friend!");
+                        network.add_connected_peer(peer_node_id).await;
                     }
                     Err(e) => {
-                        println!("[IROH] Warning: Failed to subscribe with bootstrap: {}", e);
-                        println!("[IROH] Falling back to ensure_discovery_subscribed");
-                        network.ensure_discovery_subscribed().await?;
+                        println!("[IROH] Warning: Failed to resubscribe with bootstrap: {}", e);
+                        println!("[IROH]   Friend may not be online yet, will retry via discovery");
+                        // Still add as connected peer for tracking, gossip may still work
+                        network.add_connected_peer(peer_node_id).await;
                     }
+                }
+
+                // Save peer address for persistent reconnection
+                if let Err(e) = db.save_friend_peer_address(
+                    network.user_id,
+                    friend_user_id,
+                    node_id_str,
+                    relay_url_str,
+                ) {
+                    println!("[IROH] Warning: Failed to save friend peer address: {}", e);
+                } else {
+                    println!("[IROH] ✓ Friend peer address saved");
                 }
             }
         }
-    } else {
-        println!("[IROH] No peer connection - subscribing to friend's topic WITHOUT bootstrap...");
-        // Even without bootstrap, subscribe to friend's topic so we receive their posts
-        // When they connect and send Presence, handle_message will re-subscribe WITH them as bootstrap
-        match network.subscribe_topic(&friend_topic).await {
-            Ok(_) => {
-                println!("[IROH] ✓ Subscribed to friend's topic (will update to bootstrap when they connect)");
-            }
-            Err(e) => {
-                println!("[IROH] Warning: Failed to subscribe to friend's topic: {}", e);
-            }
-        }
-        network.ensure_discovery_subscribed().await?;
     }
 
-    // CRITICAL: Ensure we're subscribed to our own topic so friend can reach us
-    // This is essential for manual adds where we might not have generated QR yet
-    let our_topic = format!("cipher/user/{}", network.public_key);
-    if !network.is_topic_subscribed(&our_topic).await {
-        println!("[IROH] Ensuring our own topic is subscribed...");
-        match network.subscribe_topic(&our_topic).await {
-            Ok(_) => {
-                println!("[IROH] ✓ Subscribed to our own topic");
+    // 4. GLOBAL MESH: Send FriendRequest via global content topic
+    println!("[IROH] Sending FriendRequest via global mesh...");
+    let endpoint_guard = network.endpoint.lock().await;
+    if let Some(endpoint) = endpoint_guard.as_ref() {
+        if let Ok(our_node_addr) = endpoint.node_addr().await {
+            drop(endpoint_guard);
+
+            let friend_request = P2PMessage::FriendRequest {
+                from_public_key: network.public_key.clone(),
+                from_user_id: network.user_id,
+                from_display_name: network.display_name.clone(),
+                from_node_id: our_node_addr.node_id.to_string(),
+                from_relay_url: our_node_addr
+                    .relay_url()
+                    .map(|url| url.to_string())
+                    .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string()),
+                to_public_key: friend_public_key.clone(),
+                timestamp: chrono::Utc::now().timestamp(),
+            };
+
+            match network.publish_message(CONTENT_TOPIC, friend_request).await {
+                Ok(_) => {
+                    println!("[IROH] ✓ FriendRequest sent via global mesh!");
+                    println!("[IROH]   Target: {}", friend_public_key);
+                    println!("[IROH]   All nodes see it, only target processes it");
+                }
+                Err(e) => {
+                    println!("[IROH] Warning: Failed to send FriendRequest: {}", e);
+                }
             }
-            Err(e) => {
-                println!("[IROH] Warning: Failed to subscribe to our own topic: {}", e);
-            }
+        } else {
+            drop(endpoint_guard);
         }
     } else {
-        println!("[IROH] Already subscribed to our own topic");
+        drop(endpoint_guard);
     }
 
-    // Note: Friend's topic subscription handled above (with or without bootstrap)
-    println!("[IROH] Gossip mesh connection complete!");
-
-    println!("[IROH] ✓ Friend added successfully!");
+    println!("[IROH] ✓ Friend request sent successfully!");
     println!("[IROH]   User ID: {}", friend_user_id);
-    println!("[IROH]   Topic: {}", friend_topic);
 
     Ok(friend_public_key)
 }

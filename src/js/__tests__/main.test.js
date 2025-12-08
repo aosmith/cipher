@@ -9,7 +9,7 @@ require('./setup');
 global.Navbar = {
     init: jest.fn(),
     updateLoginState: jest.fn(),
-    updatePublicKey: jest.fn()
+    copyInviteLink: jest.fn()
 };
 
 global.P2P = {
@@ -294,7 +294,6 @@ describe('UI State Management', () => {
 
         expect(document.getElementById('userGreeting').textContent).toBe('testuser');
         expect(document.getElementById('userPublicKey').textContent).toBe('test-public-key');
-        expect(Navbar.updatePublicKey).toHaveBeenCalledWith('test-public-key');
     });
 });
 
@@ -544,47 +543,6 @@ describe('Friend Management', () => {
     beforeEach(() => {
         global.currentUser = { id: '123', username: 'testuser', publicKey: 'my-key' };
         global.__TAURI__ = { invoke: jest.fn() };
-    });
-
-    test('addFriendByPublicKey should validate input', async () => {
-        document.getElementById('friendPublicKey').value = '';
-
-        await addFriendByPublicKey();
-
-        const error = document.getElementById('dashboardError');
-        expect(error.textContent).toBe('Please enter a valid public key');
-        expect(global.__TAURI__.invoke).not.toHaveBeenCalled();
-    });
-
-    test('addFriendByPublicKey should prevent adding self', async () => {
-        document.getElementById('friendPublicKey').value = 'my-key';
-
-        await addFriendByPublicKey();
-
-        const error = document.getElementById('dashboardError');
-        expect(error.textContent).toBe('You cannot add yourself as a friend');
-        expect(global.__TAURI__.invoke).not.toHaveBeenCalled();
-    });
-
-    test('addFriendByPublicKey should add friend successfully', async () => {
-        const mockFriend = { id: '456', username: 'friend1' };
-        global.__TAURI__.invoke.mockResolvedValue(mockFriend);
-
-        document.getElementById('friendPublicKey').value = 'friend-key';
-
-        await addFriendByPublicKey();
-
-        expect(global.__TAURI__.invoke).toHaveBeenCalledWith('add_friend_from_qr_code', {
-            currentUserId: '123',
-            qrData: {
-                username: 'User_friend-k',
-                publicKey: 'friend-key'
-            }
-        });
-
-        const success = document.getElementById('dashboardError');
-        expect(success.textContent).toBe('Successfully added friend1 as a friend!');
-        expect(document.getElementById('friendPublicKey').value).toBe('');
     });
 
     test('selectFriend should set selectedRecipient', () => {
@@ -1116,7 +1074,7 @@ describe('Window Export', () => {
         expect(typeof window.showLogin).toBe('function');
         expect(typeof window.showFeed).toBe('function');
         expect(typeof window.sendMessage).toBe('function');
-        expect(typeof window.addFriendByPublicKey).toBe('function');
+        expect(typeof window.addFriendFromTab).toBe('function');
         expect(typeof window.toggleHamburgerMenu).toBe('function');
     });
 });

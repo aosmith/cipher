@@ -11,7 +11,7 @@ Cipher is a Tauri/Rust end-to-end encrypted peer-to-peer social network. Local-f
 - Iroh for P2P networking (DHT discovery, gossip protocol)
 - Glassmorphism UI with dark theme
 
-**Current Version**: 0.22.0
+**Current Version**: 0.0.2
 
 ## Key Commands
 
@@ -32,9 +32,30 @@ env ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk \
 cargo tauri ios build                                                     # iOS
 ```
 
-**Android Installation:**
+**Android Fresh Install (wipe cached data):**
 ```bash
-adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+adb shell am force-stop com.cipher.social                                     # Force stop app
+adb shell pm clear com.cipher.social                                          # Wipe ALL data including WebView localStorage
+adb uninstall com.cipher.social                                               # Uninstall completely
+adb install gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+```
+
+**Desktop Fresh Install (wipe cached data):**
+```bash
+rm -rf ~/Library/Application\ Support/com.cipher.social                       # macOS - wipe all data
+rm -rf ~/Library/WebKit/com.cipher.social                                     # WebKit storage
+rm -rf ~/Library/Caches/com.cipher.social                                     # Caches
+```
+
+**IMPORTANT:** The `pm clear` command is essential for Android - it wipes WebView localStorage which stores the user session. Without it, the app will auto-login with stale cached credentials even after reinstall.
+
+**Icon Management:**
+```bash
+# After updating icons/icon.png, regenerate Android launcher icons:
+./scripts/generate-android-icons.sh
+
+# To remove whitespace from icon:
+magick icons/icon.png -trim icons/icon.png
 ```
 
 **Release Management:**
@@ -77,7 +98,7 @@ adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-d
 - **No extra work** - do what's asked, nothing more
 - **P2P testing** - requires 2+ instances running simultaneously
 - **Private key security** - never log or transmit over P2P
-- wipe the devices cache and local storage before reinstalling.
+- **Wipe before reinstall** - always clear app data/database before reinstalling to avoid schema conflicts
 - We want to implement as many signaling routes as possible, they should fail over.
 - The startup log should include the current version
 - you need to calculate coorindates, the screenshots have different coordinates.

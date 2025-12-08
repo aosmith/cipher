@@ -534,26 +534,6 @@ describe('Tauri API Commands - Friends', () => {
         expect(result).toEqual(mockResponse);
     });
 
-    test('add_friend_from_qr_code command', async () => {
-        const mockFriend = {
-            id: '456',
-            username: 'newfriend',
-            publicKey: 'friend-public-key'
-        };
-
-        global.__TAURI__.invoke.mockResolvedValue(mockFriend);
-
-        const result = await TauriAPI.invoke('add_friend_from_qr_code', {
-            currentUserId: '123',
-            qrData: {
-                username: 'newfriend',
-                publicKey: 'friend-public-key'
-            }
-        });
-
-        expect(result).toEqual(mockFriend);
-    });
-
     test('create_friend_invite command', async () => {
         const mockInvite = {
             inviteCode: 'ABC123',

@@ -23,6 +23,9 @@ use ::uuid::Uuid;
 pub mod iroh_commands;
 pub mod iroh_network;
 
+// Crypto module for sealed box encryption
+pub mod crypto;
+
 // Database module
 pub mod database;
 pub use database::Database;
@@ -126,13 +129,23 @@ pub async fn validate_recovery_phrase(phrase: String) -> Result<bool, String> {
 pub async fn create_post(
     user_id: SqliteUuid,
     content: String,
-    _attachments: Option<Vec<String>>,
+    attachments: Option<Vec<String>>,
     db: State<'_, Database>,
 ) -> Result<Post, String> {
+    println!("[CREATE_POST] Command called with user_id: {}, content length: {}, has_attachments: {}",
+        user_id, content.len(), attachments.is_some());
+
+    println!("[CREATE_POST] About to call db.create_post()...");
+
     // Create the post locally in the database
     let post = db
         .create_post(user_id, &content, false)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            println!("[CREATE_POST] Error creating post: {}", e);
+            e.to_string()
+        })?;
+
+    println!("[CREATE_POST] Post created successfully with id: {}", post.id);
 
     // Automatically broadcast the post to the P2P network
     // Access the global Iroh network instance
@@ -152,6 +165,7 @@ pub async fn create_post(
 
         let message = iroh_network::P2PMessage::Post {
             user_id: network.user_id,
+            public_key: network.public_key.clone(),
             content: content.clone(),
             timestamp: chrono::Utc::now().timestamp(),
             device_id: network.device_id.clone(),
@@ -228,6 +242,124 @@ pub async fn get_friends_of_friends(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_pending_friend_requests(
+    user_id: SqliteUuid,
+    db: State<'_, Database>,
+) -> Result<Vec<User>, String> {
+    db.get_pending_friend_requests(user_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn accept_friend_request(
+    user_id: SqliteUuid,
+    friend_user_id: SqliteUuid,
+    db: State<'_, Database>,
+) -> Result<(), String> {
+    println!("[ACCEPT-CMD] accept_friend_request called: user={} friend={}", user_id, friend_user_id);
+
+    // Clone db for use in spawn_blocking (Database is Clone)
+    let db_clone = db.inner().clone();
+    let user_id_clone = user_id;
+    let friend_user_id_clone = friend_user_id;
+
+    // Run the blocking database operation on a separate thread pool
+    tokio::task::spawn_blocking(move || {
+        db_clone.accept_friend_request(user_id_clone, friend_user_id_clone)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| {
+        println!("[ACCEPT-CMD] DB error: {}", e);
+        e.to_string()
+    })?;
+
+    println!("[ACCEPT-CMD] Database updated successfully");
+
+    // Send FriendAccepted message to the requester over P2P (non-blocking)
+    // Spawn this in a separate task so it doesn't block the response
+    use crate::app::iroh_commands::IROH_NETWORK;
+
+    let network_opt = IROH_NETWORK.lock().unwrap().as_ref().cloned();
+    if let Some(network) = network_opt {
+        // Get the friend's public key - also use spawn_blocking for this DB call
+        let db_clone2 = db.inner().clone();
+        let friend_opt = tokio::task::spawn_blocking(move || {
+            db_clone2.find_user_by_id(friend_user_id)
+        })
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .flatten();
+
+        if let Some(friend) = friend_opt {
+            if let Some(friend_public_key) = friend.public_key {
+                // Spawn P2P notification in background - don't block the accept
+                let friend_key = friend_public_key.clone();
+                tokio::spawn(async move {
+                    // Get our node address with a timeout
+                    let endpoint_guard = network.endpoint.lock().await;
+                    let (node_id_str, relay_url_str) = if let Some(endpoint) = endpoint_guard.as_ref() {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            endpoint.node_addr()
+                        ).await {
+                            Ok(Ok(node_addr)) => {
+                                let node_id = node_addr.node_id.to_string();
+                                let relay_url = node_addr.relay_url()
+                                    .map(|url| url.to_string())
+                                    .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string());
+                                (node_id, relay_url)
+                            }
+                            _ => {
+                                (endpoint.node_id().to_string(), "https://euw1-1.relay.iroh.network.".to_string())
+                            }
+                        }
+                    } else {
+                        (String::new(), String::new())
+                    };
+                    drop(endpoint_guard);
+
+                    let message = iroh_network::P2PMessage::FriendAccepted {
+                        from_user_id: network.user_id,
+                        from_public_key: network.public_key.clone(),
+                        from_display_name: network.display_name.clone(),
+                        from_node_id: node_id_str,
+                        from_relay_url: relay_url_str,
+                        to_public_key: friend_key.clone(),
+                    };
+
+                    // GLOBAL MESH: Publish to global content topic
+                    if let Err(e) = network.publish_message(iroh_network::CONTENT_TOPIC, message).await {
+                        println!("[FRIEND-ACCEPT] Warning: Failed to send FriendAccepted message: {}", e);
+                    } else {
+                        println!("[FRIEND-ACCEPT] Sent FriendAccepted via global mesh to {}", friend_key);
+                    }
+                });
+            }
+        }
+    }
+
+    println!("[ACCEPT-CMD] Returning success");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reject_friend_request(
+    user_id: SqliteUuid,
+    friend_user_id: SqliteUuid,
+    db: State<'_, Database>,
+) -> Result<(), String> {
+    let db_clone = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db_clone.reject_friend_request(user_id, friend_user_id)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| e.to_string())
+}
+
 /// Search for friends by username
 /// This only searches within existing friendships for security
 #[tauri::command]
@@ -238,6 +370,32 @@ pub async fn search_friends(
 ) -> Result<Option<User>, String> {
     db.find_friend_by_username(user_id, &username)
         .map_err(|e| e.to_string())
+}
+
+/// Get outgoing friend requests (requests we sent that are still pending)
+#[tauri::command]
+pub async fn get_outgoing_friend_requests(
+    user_id: SqliteUuid,
+    db: State<'_, Database>,
+) -> Result<Vec<User>, String> {
+    db.get_outgoing_friend_requests(user_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Cancel an outgoing friend request
+#[tauri::command]
+pub async fn cancel_friend_request(
+    user_id: SqliteUuid,
+    friend_user_id: SqliteUuid,
+    db: State<'_, Database>,
+) -> Result<(), String> {
+    let db_clone = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db_clone.cancel_friend_request(user_id, friend_user_id)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -441,66 +599,6 @@ pub async fn generate_friend_qr_code(
     generate_qr_code(friend_url)
 }
 
-/// Add a friend from scanned QR code data
-/// This creates or finds the user by public key and establishes friendship
-#[tauri::command]
-pub async fn add_friend_from_qr_code(
-    current_user_id: SqliteUuid,
-    qr_data: QrCodeData,
-    db: State<'_, Database>,
-) -> Result<User, String> {
-    let username = qr_data.username;
-    let public_key = qr_data.public_key;
-
-    // Check if user exists by public key
-    let friend_user = match db
-        .find_user_by_public_key(&public_key)
-        .map_err(|e| e.to_string())?
-    {
-        Some(user) => user,
-        None => {
-            // User doesn't exist locally - create a peer user record
-            // This is safe because we're creating from a public key (P2P discovery)
-            db.sync_peer_user(&username, &public_key, "")
-                .map_err(|e| e.to_string())?
-        }
-    };
-
-    // Check if already friends
-    let conn = db.conn.lock().unwrap();
-    let friend_check: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM p2p_connections
-             WHERE (user_id = ?1 AND friend_user_id = ?2)
-             OR (user_id = ?2 AND friend_user_id = ?1)",
-            params![current_user_id, friend_user.id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if friend_check > 0 {
-        return Err("Already friends with this user".to_string());
-    }
-
-    // Create friendship
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'accepted', ?2, ?4, ?5)",
-        params![SqliteUuid::new(), current_user_id, friend_user.id, &now, &now],
-    ).map_err(|e| e.to_string())?;
-
-    // Create reverse connection
-    conn.execute(
-        "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'accepted', ?3, ?4, ?5)",
-        params![SqliteUuid::new(), friend_user.id, current_user_id, &now, &now],
-    ).map_err(|e| e.to_string())?;
-
-    drop(conn); // Release lock
-
-    Ok(friend_user)
-}
 
 #[tauri::command]
 pub async fn upload_media_file(
@@ -770,6 +868,7 @@ pub async fn reply_to_message(
         disappears_at: None,
         created_at: now.clone(),
         updated_at: now,
+        edited_at: None,
     })
 }
 
@@ -780,7 +879,7 @@ pub async fn get_message_thread(
 ) -> Result<Vec<Message>, String> {
     let conn = db.conn.lock().unwrap();
     let mut stmt = conn
-        .prepare("SELECT id, sender_id, recipient_id, content, encrypted, signature, thread_id, disappear_after_seconds, disappears_at, created_at, updated_at
+        .prepare("SELECT id, sender_id, recipient_id, content, encrypted, signature, thread_id, disappear_after_seconds, disappears_at, created_at, updated_at, edited_at
                   FROM messages WHERE (id = ?1 OR thread_id = ?1) AND (disappears_at IS NULL OR disappears_at > datetime('now')) ORDER BY created_at ASC")
         .map_err(|e| e.to_string())?;
 
@@ -798,6 +897,7 @@ pub async fn get_message_thread(
                 disappears_at: row.get(8)?,
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
+                edited_at: row.get(11)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1153,7 +1253,7 @@ pub async fn search_messages(
 
     // Search in decrypted messages - first get all messages for the user
     let mut stmt = conn.prepare(
-        "SELECT m.id, m.sender_id, m.recipient_id, m.content, m.encrypted, m.signature, m.thread_id, m.disappear_after_seconds, m.disappears_at, m.created_at, m.updated_at
+        "SELECT m.id, m.sender_id, m.recipient_id, m.content, m.encrypted, m.signature, m.thread_id, m.disappear_after_seconds, m.disappears_at, m.created_at, m.updated_at, m.edited_at
          FROM messages m
          WHERE (m.sender_id = ?1 OR m.recipient_id = ?1) AND (m.disappears_at IS NULL OR m.disappears_at > datetime('now'))
          ORDER BY m.created_at DESC"
@@ -1173,6 +1273,7 @@ pub async fn search_messages(
                 disappears_at: row.get(8)?,
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
+                edited_at: row.get(11)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1316,7 +1417,8 @@ pub async fn edit_message(
         disappear_after_seconds: None,
         disappears_at: None,
         created_at: "".to_string(), // We'll get this from DB if needed
-        updated_at: now,
+        updated_at: now.clone(),
+        edited_at: Some(now),
     })
 }
 
@@ -1827,41 +1929,3 @@ pub async fn get_sync_status(
         .map_err(|e| e.to_string())
 }
 
-// Typing Indicator Commands
-
-#[tauri::command]
-pub async fn set_typing_indicator(
-    user_id: SqliteUuid,
-    conversation_partner_id: SqliteUuid,
-    is_typing: bool,
-    db: State<'_, Database>,
-) -> Result<(), String> {
-    db.set_typing_indicator(user_id, conversation_partner_id, is_typing)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn get_typing_indicator(
-    user_id: SqliteUuid,
-    conversation_partner_id: SqliteUuid,
-    db: State<'_, Database>,
-) -> Result<bool, String> {
-    db.get_typing_indicator(user_id, conversation_partner_id)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn clear_typing_indicator(
-    user_id: SqliteUuid,
-    conversation_partner_id: SqliteUuid,
-    db: State<'_, Database>,
-) -> Result<(), String> {
-    db.clear_typing_indicator(user_id, conversation_partner_id)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn cleanup_old_typing_indicators(db: State<'_, Database>) -> Result<(), String> {
-    db.cleanup_old_typing_indicators()
-        .map_err(|e| e.to_string())
-}

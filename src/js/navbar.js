@@ -13,13 +13,12 @@ const Navbar = {
                     </div>
                     <!-- Right side controls -->
                     <div class="nav-controls">
-                        <!-- Public key (logged in only) -->
-                        <div class="navbar-public-key logged-in-only hidden" onclick="copyPublicKey()" title="Click to copy your public key">
-                            <span class="key-icon">🔑</span>
-                            <span id="navbarPublicKey" class="navbar-key-text">Loading...</span>
-                        </div>
+                        <!-- Invite Friend button (logged in only) -->
+                        <button id="navInviteBtn" class="nav-invite-btn logged-in-only hidden" onclick="Navbar.copyInviteLink()" title="Copy invite link">
+                            <span class="invite-icon">+</span>
+                        </button>
                         <!-- Combined P2P & Sync Status (logged in only) -->
-                        <div id="p2pStatus" class="p2p-status logged-in-only hidden" title="P2P & Sync Status">
+                        <div id="p2pStatus" class="p2p-status logged-in-only hidden" title="Click for connection details" onclick="showConnectionStatus()">
                             <span class="p2p-status-dot offline"></span>
                             <span class="p2p-status-text">Offline</span>
                         </div>
@@ -107,18 +106,38 @@ const Navbar = {
         });
     },
 
-    // Update public key display in navbar
-    updatePublicKey: function(publicKey) {
-        const navbarPublicKey = document.getElementById('navbarPublicKey');
-        if (navbarPublicKey && publicKey) {
-            // Debug log to see what we're receiving
-            console.log('[Navbar] Updating public key display with:', publicKey);
-            const truncated = publicKey.length > 16
-                ? publicKey.substring(0, 8) + '...' + publicKey.substring(publicKey.length - 4)
-                : publicKey;
-            navbarPublicKey.textContent = truncated;
-        } else {
-            console.warn('[Navbar] updatePublicKey called with invalid value:', publicKey);
+    // Copy invite link to clipboard
+    async copyInviteLink() {
+        const btn = document.getElementById('navInviteBtn');
+        const originalContent = btn.innerHTML;
+
+        try {
+            // Show loading state
+            btn.innerHTML = '<span class="invite-icon">...</span>';
+            btn.disabled = true;
+
+            // Generate invite code using P2P
+            const inviteCode = await P2P.generateInvite();
+
+            // Copy to clipboard
+            await navigator.clipboard.writeText(inviteCode);
+
+            // Show success state
+            btn.innerHTML = '<span class="invite-icon">✓</span>';
+
+            // Reset after 2 seconds
+            setTimeout(() => {
+                btn.innerHTML = originalContent;
+                btn.disabled = false;
+            }, 2000);
+
+        } catch (error) {
+            console.error('Failed to copy invite link:', error);
+            btn.innerHTML = '<span class="invite-icon">!</span>';
+            setTimeout(() => {
+                btn.innerHTML = originalContent;
+                btn.disabled = false;
+            }, 2000);
         }
     },
 

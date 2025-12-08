@@ -10,7 +10,7 @@ const { screen, fireEvent, waitFor } = require('@testing-library/dom');
 global.Navbar = {
     init: jest.fn(),
     updateLoginState: jest.fn(),
-    updatePublicKey: jest.fn()
+    copyInviteLink: jest.fn()
 };
 
 global.P2P = {
@@ -670,44 +670,6 @@ describe('Keyboard Shortcuts', () => {
 
         // Check navigation occurred
         expect(currentTab).toBe(1);
-    });
-});
-
-describe('Copy to Clipboard', () => {
-    beforeEach(() => {
-        document.body.innerHTML = `
-            <div id="userPublicKey">test-public-key-123</div>
-            <button class="btn-copy" onclick="copyPublicKey()">Copy Key</button>
-            <div id="dashboardError" class="error hidden"></div>
-        `;
-
-        // Mock clipboard API
-        global.navigator.clipboard = {
-            writeText: jest.fn().mockResolvedValue()
-        };
-    });
-
-    test('should copy public key to clipboard', async () => {
-        const button = document.querySelector('.btn-copy');
-
-        await copyPublicKey();
-
-        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('test-public-key-123');
-        expect(button.textContent).toBe('Copied!');
-
-        // Wait for button to reset
-        await new Promise(resolve => setTimeout(resolve, 2100));
-        expect(button.textContent).toContain('Copy');
-    });
-
-    test('should handle clipboard error gracefully', async () => {
-        navigator.clipboard.writeText.mockRejectedValue(new Error('Clipboard access denied'));
-
-        await copyPublicKey();
-
-        const error = document.getElementById('dashboardError');
-        expect(error.textContent).toContain('Failed to copy public key');
-        expect(error.classList.contains('hidden')).toBe(false);
     });
 });
 

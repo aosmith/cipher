@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, Result as SqliteResult};
+use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 
 use crate::app::types::{FriendInvite, P2pConnection, SqliteUuid, User};
 use crate::app::Database;
@@ -212,7 +212,17 @@ impl Database {
     }
 
     pub fn get_friends(&self, user_id: SqliteUuid) -> SqliteResult<Vec<User>> {
+        println!("[DB] get_friends called for user_id: {}", user_id);
         let conn = self.conn.lock().unwrap();
+
+        // Debug: count connections
+        let conn_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM p2p_connections WHERE user_id = ?1 OR friend_user_id = ?1",
+            [user_id],
+            |row| row.get(0)
+        ).unwrap_or(0);
+        println!("[DB] Total p2p_connections for user: {}", conn_count);
+
         let mut stmt = conn.prepare(
             "SELECT DISTINCT u.id, u.username, u.public_key, u.encryption_public_key,
                     u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
@@ -245,6 +255,136 @@ impl Database {
             users.push(user?);
         }
         Ok(users)
+    }
+
+    /// Get pending incoming friend requests (requests TO this user that they haven't accepted yet)
+    pub fn get_pending_friend_requests(&self, user_id: SqliteUuid) -> SqliteResult<Vec<User>> {
+        println!("[DB] get_pending_friend_requests called for user_id: {}", user_id);
+        let conn = self.conn.lock().unwrap();
+
+        // Find pending requests where:
+        // - user_id = current user (we're the recipient)
+        // - initiated_by = friend_user_id (they initiated it, not us)
+        // - status = 'pending'
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT u.id, u.username, u.public_key, u.encryption_public_key,
+                    u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
+             FROM users u
+             INNER JOIN p2p_connections p ON (p.user_id = ?1 AND p.friend_user_id = u.id AND p.initiated_by = u.id)
+             WHERE p.status = 'pending'",
+        )?;
+
+        let user_iter = stmt.query_map([user_id], |row| {
+            Ok(User {
+                id: row.get("id")?,
+                username: row.get("username")?,
+                public_key: row.get("public_key")?,
+                private_key: None,
+                encryption_public_key: row.get("encryption_public_key")?,
+                encryption_private_key: None,
+                device_id: row.get("device_id")?,
+                bio: row.get("bio")?,
+                profile_picture: row.get("profile_picture")?,
+                recovery_phrase_hash: None,
+                recovery_phrase_shown: false,
+                created_at: row.get("created_at")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })?;
+
+        let mut users = Vec::new();
+        for user in user_iter {
+            users.push(user?);
+        }
+        println!("[DB] Found {} pending friend requests", users.len());
+        Ok(users)
+    }
+
+    /// Accept a friend request - updates status to 'accepted'
+    pub fn accept_friend_request(&self, user_id: SqliteUuid, friend_user_id: SqliteUuid) -> SqliteResult<()> {
+        println!("[DB] accept_friend_request: user {} accepting friend {}", user_id, friend_user_id);
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Update the pending request to accepted
+        let rows_updated = conn.execute(
+            "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1
+             WHERE user_id = ?2 AND friend_user_id = ?3 AND status = 'pending'",
+            rusqlite::params![&now, user_id, friend_user_id],
+        )?;
+
+        println!("[DB] Updated {} rows to accepted", rows_updated);
+        Ok(())
+    }
+
+    /// Reject/delete a friend request
+    pub fn reject_friend_request(&self, user_id: SqliteUuid, friend_user_id: SqliteUuid) -> SqliteResult<()> {
+        println!("[DB] reject_friend_request: user {} rejecting friend {}", user_id, friend_user_id);
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "DELETE FROM p2p_connections WHERE user_id = ?1 AND friend_user_id = ?2 AND status = 'pending'",
+            rusqlite::params![user_id, friend_user_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get outgoing pending friend requests (requests FROM this user that haven't been accepted yet)
+    pub fn get_outgoing_friend_requests(&self, user_id: SqliteUuid) -> SqliteResult<Vec<User>> {
+        println!("[DB] get_outgoing_friend_requests called for user_id: {}", user_id);
+        let conn = self.conn.lock().unwrap();
+
+        // Find pending requests where:
+        // - user_id = current user (we made the connection record)
+        // - initiated_by = current user (we initiated it)
+        // - status = 'pending'
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT u.id, u.username, u.public_key, u.encryption_public_key,
+                    u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
+             FROM users u
+             INNER JOIN p2p_connections p ON (p.user_id = ?1 AND p.friend_user_id = u.id AND p.initiated_by = ?1)
+             WHERE p.status = 'pending'",
+        )?;
+
+        let user_iter = stmt.query_map([user_id], |row| {
+            Ok(User {
+                id: row.get("id")?,
+                username: row.get("username")?,
+                public_key: row.get("public_key")?,
+                private_key: None,
+                encryption_public_key: row.get("encryption_public_key")?,
+                encryption_private_key: None,
+                device_id: row.get("device_id")?,
+                bio: row.get("bio")?,
+                profile_picture: row.get("profile_picture")?,
+                recovery_phrase_hash: None,
+                recovery_phrase_shown: false,
+                created_at: row.get("created_at")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })?;
+
+        let mut users = Vec::new();
+        for user in user_iter {
+            users.push(user?);
+        }
+        println!("[DB] Found {} outgoing friend requests", users.len());
+        Ok(users)
+    }
+
+    /// Cancel an outgoing friend request (delete a pending request that we initiated)
+    pub fn cancel_friend_request(&self, user_id: SqliteUuid, friend_user_id: SqliteUuid) -> SqliteResult<()> {
+        println!("[DB] cancel_friend_request: user {} canceling request to {}", user_id, friend_user_id);
+        let conn = self.conn.lock().unwrap();
+
+        // Only delete if we initiated it (initiated_by = user_id)
+        conn.execute(
+            "DELETE FROM p2p_connections WHERE user_id = ?1 AND friend_user_id = ?2 AND initiated_by = ?1 AND status = 'pending'",
+            rusqlite::params![user_id, friend_user_id],
+        )?;
+
+        Ok(())
     }
 
     /// Check if two users are friends (bidirectional check)
@@ -314,6 +454,7 @@ impl Database {
 
     /// Get public keys of all accepted friends
     /// Used for subscribing to friend topics on app startup
+    #[allow(dead_code)]
     pub fn get_friend_public_keys(&self, user_id: SqliteUuid) -> Result<Vec<String>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -362,6 +503,7 @@ impl Database {
 
     /// Get all friend peer addresses (NodeId + relay URL) for a user
     /// Used to pre-populate endpoint with known peer addresses on app startup
+    #[allow(dead_code)]
     pub fn get_all_friend_peer_addresses(
         &self,
         user_id: SqliteUuid,
@@ -382,5 +524,35 @@ impl Database {
             .collect::<Result<Vec<(String, String)>, _>>()?;
 
         Ok(peer_addrs)
+    }
+
+    /// Get a friend's node ID and relay URL by their public key
+    /// Returns (node_id, relay_url) if available
+    pub fn get_friend_peer_info_by_public_key(
+        &self,
+        user_id: SqliteUuid,
+        friend_public_key: &str,
+    ) -> SqliteResult<Option<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.iroh_node_id, p.friend_relay_url
+             FROM p2p_connections p
+             INNER JOIN users u ON (p.friend_user_id = u.id OR p.user_id = u.id)
+             WHERE ((p.user_id = ?1 OR p.friend_user_id = ?1)
+                    AND u.public_key = ?2
+                    AND p.status = 'accepted'
+                    AND p.iroh_node_id IS NOT NULL
+                    AND p.friend_relay_url IS NOT NULL)",
+        )?;
+
+        let result = stmt
+            .query_row(rusqlite::params![user_id, friend_public_key], |row| {
+                let node_id: String = row.get("iroh_node_id")?;
+                let relay_url: String = row.get("friend_relay_url")?;
+                Ok((node_id, relay_url))
+            })
+            .optional()?;
+
+        Ok(result)
     }
 }

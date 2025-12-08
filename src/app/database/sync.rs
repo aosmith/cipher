@@ -34,10 +34,11 @@ impl Database {
 
         // Get posts created/updated since last sync
         let mut post_stmt = conn.prepare(
-            "SELECT id, user_id, content, encrypted, pinned, shared_post_id, share_comment, created_at, updated_at
-             FROM posts
-             WHERE user_id = ?1 AND (updated_at > ?2 OR created_at > ?2)
-             ORDER BY updated_at ASC"
+            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+             FROM posts p
+             INNER JOIN users u ON p.user_id = u.id
+             WHERE p.user_id = ?1 AND (p.updated_at > ?2 OR p.created_at > ?2)
+             ORDER BY p.updated_at ASC"
         )?;
 
         let posts = post_stmt
@@ -45,6 +46,7 @@ impl Database {
                 Ok(Post {
                     id: row.get("id")?,
                     user_id: row.get("user_id")?,
+                    display_name: row.get("username")?,
                     content: row.get("content")?,
                     encrypted: row.get("encrypted")?,
                     pinned: row.get("pinned")?,
@@ -79,6 +81,7 @@ impl Database {
                     disappears_at: row.get("disappears_at")?,
                     created_at: row.get("created_at")?,
                     updated_at: row.get("updated_at")?,
+                    edited_at: None,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

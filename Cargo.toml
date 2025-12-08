@@ -1,11 +1,12 @@
 [package]
 name = "cipher-social"
-version = "0.0.1"
+version = "0.0.2"
 description = "Cipher - End-to-End Encrypted P2P Social Network"
 authors = ["Cipher Team"]
 license = "AGPL-3.0"
 repository = "https://github.com/aosmith/cipher"
 edition = "2021"
+default-run = "cipher-social"
 
 [lib]
 name = "app"
@@ -33,7 +34,11 @@ ed25519-dalek = { version = "2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
+argon2 = "0.5"
 sha2 = "0.10"
+hkdf = "0.12"
+blake3 = "1.5"
+regex = "1.10"
 rand = "0.8"
 base64 = "0.22"
 bytes = "1.10"

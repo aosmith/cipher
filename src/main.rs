@@ -4,26 +4,27 @@
 mod app;
 
 use app::{
-    add_friend, add_friend_from_qr_code, add_message_reaction, add_post_comment, add_post_reaction,
-    block_user, cleanup_expired_messages, cleanup_expired_mutes, cleanup_old_notifications,
-    create_friend_invite, create_new_user, create_notification, create_post, debug_log,
-    decrypt_message_for_user, delete_message, delete_notification, delete_post,
-    delete_post_comment, delete_voice_message, edit_message,
-    edit_post, export_friends_list, generate_friend_qr_code, generate_qr_code,
-    generate_recovery_phrase, get_all_posts, get_blocked_users, get_comment_replies, get_friends,
-    get_friends_of_friends, get_media_attachments, get_media_file_data, get_message_reactions,
-    get_message_thread, get_messages_for_user, get_mute_settings, get_muted_users,
-    get_notifications, get_platform, get_post_comment_count, get_post_comments,
-    get_post_reaction_summary, get_post_reactions, get_post_shares, get_recent_contacts,
-    get_shared_post, get_unread_notification_count, get_unread_notifications, get_user_by_id,
-    get_user_by_public_key, get_voice_messages, get_websocket_port, import_friends_list,
-    is_blocked_either_way, is_user_blocked, is_user_muted, mark_all_notifications_read,
-    mark_notification_read, mute_user, parse_qr_code_data, remove_post_reaction, reply_to_message,
-    restore_from_recovery_phrase, scan_qr_code_from_image, search_friends, search_messages,
-    send_encrypted_message, send_voice_message, share_post, start_notification_server,
-    unblock_user, unmute_user, update_mute_settings, update_recent_contact, update_user_profile,
-    upload_media_file, upload_profile_picture, use_friend_invite, validate_recovery_phrase,
-    verify_message_signature, Database,
+    accept_friend_request, add_friend, add_message_reaction, add_post_comment, add_post_reaction,
+    block_user, cancel_friend_request, cleanup_expired_messages, cleanup_expired_mutes,
+    cleanup_old_notifications, create_friend_invite, create_new_user, create_notification,
+    create_post, debug_log, decrypt_message_for_user, delete_message, delete_notification,
+    delete_post, delete_post_comment, delete_voice_message, edit_message, edit_post,
+    export_friends_list, generate_friend_qr_code, generate_qr_code, generate_recovery_phrase,
+    get_all_posts, get_blocked_users, get_comment_replies, get_friends, get_friends_of_friends,
+    get_media_attachments, get_media_file_data, get_message_reactions, get_message_thread,
+    get_messages_for_user, get_mute_settings, get_muted_users, get_notifications,
+    get_outgoing_friend_requests, get_pending_friend_requests, get_platform, get_post_comment_count,
+    get_post_comments, get_post_reaction_summary, get_post_reactions, get_post_shares,
+    get_recent_contacts, get_shared_post, get_unread_notification_count, get_unread_notifications,
+    get_user_by_id, get_user_by_public_key, get_voice_messages, get_websocket_port,
+    import_friends_list, is_blocked_either_way, is_user_blocked, is_user_muted,
+    mark_all_notifications_read, mark_notification_read, mute_user, parse_qr_code_data,
+    reject_friend_request, remove_post_reaction, reply_to_message, restore_from_recovery_phrase,
+    scan_qr_code_from_image, search_friends, search_messages, send_encrypted_message,
+    send_voice_message, share_post, start_notification_server, unblock_user, unmute_user,
+    update_mute_settings, update_recent_contact, update_user_profile, upload_media_file,
+    upload_profile_picture, use_friend_invite, validate_recovery_phrase, verify_message_signature,
+    Database,
 };
 use tauri::Manager;
 
@@ -42,12 +43,6 @@ use app::{
 
 // Device-to-device sync commands
 use app::{apply_sync_data, get_sync_data, get_sync_status, update_all_sync_timestamps};
-
-// Typing indicator commands
-use app::{
-    cleanup_old_typing_indicators, clear_typing_indicator, get_typing_indicator,
-    set_typing_indicator,
-};
 
 /// Initialize the database for the Tauri application
 fn init_database(app: &tauri::App) -> Database {
@@ -124,6 +119,11 @@ fn main() {
             // Friends
             add_friend,
             get_friends,
+            get_pending_friend_requests,
+            get_outgoing_friend_requests,
+            accept_friend_request,
+            reject_friend_request,
+            cancel_friend_request,
             search_friends,
             create_friend_invite,
             use_friend_invite,
@@ -189,7 +189,6 @@ fn main() {
             parse_qr_code_data,
             scan_qr_code_from_image,
             generate_friend_qr_code,
-            add_friend_from_qr_code,
             // System
             get_platform,
             debug_log,
@@ -209,11 +208,6 @@ fn main() {
             apply_sync_data,
             update_all_sync_timestamps,
             get_sync_status,
-            // Typing Indicators
-            set_typing_indicator,
-            get_typing_indicator,
-            clear_typing_indicator,
-            cleanup_old_typing_indicators,
             // P2P Networking (Iroh-based)
             iroh_initialize,
             iroh_subscribe_friend,

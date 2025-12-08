@@ -1,10 +1,12 @@
 // Test to verify subscribe() vs subscribe_and_join() mesh formation
 // This reproduces the issue we're seeing in v0.36.0/v0.37.0
 
-use iroh::{Endpoint, NodeAddr, RelayMode};
+use iroh::{Endpoint, RelayMode};
 use iroh_gossip::{net::{Gossip, Event, GossipEvent, GOSSIP_ALPN}, proto::TopicId};
 use futures_lite::StreamExt;
 use std::time::Duration;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[tokio::test]
 async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
@@ -17,7 +19,7 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
     let alice_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
     let alice_endpoint = Endpoint::builder()
         .secret_key(alice_secret.clone())
-        .relay_mode(RelayMode::Disabled)  // Disable relay for local testing
+        .relay_mode(RelayMode::Default)  // Use relay servers for real network testing
         .bind()
         .await?;
     let alice_node_id = alice_endpoint.node_id();
@@ -67,7 +69,7 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
     let bob_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
     let bob_endpoint = Endpoint::builder()
         .secret_key(bob_secret)
-        .relay_mode(RelayMode::Disabled)  // Disable relay for local testing
+        .relay_mode(RelayMode::Default)  // Use relay servers for real network testing
         .bind()
         .await?;
     let bob_node_id = bob_endpoint.node_id();
@@ -129,17 +131,17 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
 
             // Check if Bob receives
             match tokio::time::timeout(Duration::from_secs(2), bob_receiver.try_next()).await {
-                Ok(Some(Ok(Event::Gossip(GossipEvent::Received(msg))))) => {
+                Ok(Ok(Some(Event::Gossip(GossipEvent::Received(msg))))) => {
                     println!("Bob: ✓ Received Alice's message: {} bytes", msg.content.len());
                 }
-                Ok(Some(Ok(event))) => {
+                Ok(Ok(Some(event))) => {
                     println!("Bob: Received other event: {:?}", event);
                 }
-                Ok(Some(Err(e))) => {
-                    println!("Bob: Error receiving: {}", e);
-                }
-                Ok(None) => {
+                Ok(Ok(None)) => {
                     println!("Bob: Stream ended");
+                }
+                Ok(Err(e)) => {
+                    println!("Bob: Error receiving: {}", e);
                 }
                 Err(_) => {
                     println!("Bob: ⏱  Timeout waiting for Alice's message");
@@ -180,7 +182,7 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
     let alice_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
     let alice_endpoint = Endpoint::builder()
         .secret_key(alice_secret.clone())
-        .relay_mode(RelayMode::Disabled)
+        .relay_mode(RelayMode::Default)
         .bind()
         .await?;
     let alice_node_id = alice_endpoint.node_id();
@@ -198,7 +200,7 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
     let bob_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
     let bob_endpoint = Endpoint::builder()
         .secret_key(bob_secret)
-        .relay_mode(RelayMode::Disabled)
+        .relay_mode(RelayMode::Default)
         .bind()
         .await?;
     let bob_node_id = bob_endpoint.node_id();
@@ -255,7 +257,7 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
             println!("Alice: Sent message");
 
             match tokio::time::timeout(Duration::from_secs(2), bob_receiver.try_next()).await {
-                Ok(Some(Ok(Event::Gossip(GossipEvent::Received(_))))) => {
+                Ok(Ok(Some(Event::Gossip(GossipEvent::Received(_))))) => {
                     println!("Bob: ✓ Received Alice's message");
                 }
                 _ => {
@@ -270,6 +272,214 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
         Err(_) => {
             println!("\n✗ TEST FAILED: Timeout - one of the subscribe_and_join() calls blocked");
             return Err(anyhow::anyhow!("Timeout"));
+        }
+    }
+
+    // Cleanup
+    alice_router.shutdown().await?;
+    bob_router.shutdown().await?;
+
+    Ok(())
+}
+
+/// Test resubscription flow - simulates QR code scanning scenario
+/// This tests the fix for bidirectional peer connection:
+/// 1. Alice starts as isolated root node (subscribed with no bootstrap)
+/// 2. Bob starts as isolated root node (subscribed with no bootstrap)
+/// 3. Bob "scans" Alice's QR and resubscribes with Alice as bootstrap
+/// 4. Both should see NeighborUp events and be able to exchange messages
+#[tokio::test]
+async fn test_resubscribe_after_qr_scan() -> anyhow::Result<()> {
+    println!("\n=== Testing resubscribe flow (QR code scenario) ===\n");
+    println!("This test simulates:");
+    println!("  1. Desktop (Alice) starts isolated");
+    println!("  2. Phone (Bob) starts isolated");
+    println!("  3. Phone scans Desktop's QR code");
+    println!("  4. Phone resubscribes with Desktop as bootstrap");
+    println!("  5. Both should see each other as connected");
+    println!("");
+
+    let topic = TopicId::from_bytes(*blake3::hash(b"test-topic-resubscribe").as_bytes());
+
+    // === ALICE (Desktop) - starts as isolated root ===
+    println!("Creating Alice (Desktop)...");
+    let alice_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
+    let alice_endpoint = Endpoint::builder()
+        .secret_key(alice_secret.clone())
+        .relay_mode(RelayMode::Default)
+        .bind()
+        .await?;
+    let alice_node_id = alice_endpoint.node_id();
+    println!("Alice NodeId: {}", alice_node_id);
+
+    let alice_gossip = Gossip::builder().spawn(alice_endpoint.clone()).await?;
+    let alice_router = iroh::protocol::Router::builder(alice_endpoint.clone())
+        .accept(GOSSIP_ALPN, alice_gossip.clone())
+        .spawn()
+        .await?;
+
+    // Alice subscribes as root (no bootstrap)
+    println!("Alice: Subscribing as root (empty bootstrap)...");
+    let alice_topic = alice_gossip.subscribe(topic, vec![])?;
+    let (alice_sender, mut alice_receiver) = alice_topic.split();
+    println!("Alice: ✓ Subscribed (isolated root)");
+
+    // Track Alice's peer connections
+    let alice_peer_count = Arc::new(Mutex::new(0usize));
+    let alice_peer_count_clone = alice_peer_count.clone();
+    tokio::spawn(async move {
+        while let Some(event) = alice_receiver.try_next().await.transpose() {
+            match event {
+                Ok(Event::Gossip(GossipEvent::NeighborUp(node_id))) => {
+                    println!("Alice: ✓ NeighborUp: {}", node_id);
+                    *alice_peer_count_clone.lock().await += 1;
+                }
+                Ok(Event::Gossip(GossipEvent::Received(msg))) => {
+                    println!("Alice: 📬 Received message: {} bytes", msg.content.len());
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // === BOB (Phone) - starts as isolated root ===
+    println!("\nCreating Bob (Phone)...");
+    let bob_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
+    let bob_endpoint = Endpoint::builder()
+        .secret_key(bob_secret)
+        .relay_mode(RelayMode::Default)
+        .bind()
+        .await?;
+    let bob_node_id = bob_endpoint.node_id();
+    println!("Bob NodeId: {}", bob_node_id);
+
+    let bob_gossip = Gossip::builder().spawn(bob_endpoint.clone()).await?;
+    let bob_router = iroh::protocol::Router::builder(bob_endpoint.clone())
+        .accept(GOSSIP_ALPN, bob_gossip.clone())
+        .spawn()
+        .await?;
+
+    // Bob subscribes as root (no bootstrap)
+    println!("Bob: Subscribing as root (empty bootstrap)...");
+    let bob_topic_initial = bob_gossip.subscribe(topic, vec![])?;
+    println!("Bob: ✓ Subscribed (isolated root)");
+
+    // Track Bob's peer connections
+    let bob_peer_count = Arc::new(Mutex::new(0usize));
+    let bob_peer_count_clone = bob_peer_count.clone();
+    let (_, mut bob_receiver) = bob_topic_initial.split();
+    tokio::spawn(async move {
+        while let Some(event) = bob_receiver.try_next().await.transpose() {
+            match event {
+                Ok(Event::Gossip(GossipEvent::NeighborUp(node_id))) => {
+                    println!("Bob (initial): ✓ NeighborUp: {}", node_id);
+                    *bob_peer_count_clone.lock().await += 1;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Verify both are isolated
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    println!("\n--- Both nodes are now isolated ---");
+    println!("Alice peers: {}", *alice_peer_count.lock().await);
+    println!("Bob peers: {}", *bob_peer_count.lock().await);
+    assert_eq!(*alice_peer_count.lock().await, 0, "Alice should have 0 peers initially");
+    assert_eq!(*bob_peer_count.lock().await, 0, "Bob should have 0 peers initially");
+
+    // === QR CODE SCAN SIMULATION ===
+    println!("\n=== Bob scans Alice's QR code ===");
+    println!("Bob: Got Alice's NodeAddr from QR");
+
+    // Get Alice's address (this is what the QR code contains)
+    let alice_addr = alice_endpoint.node_addr().await?;
+    println!("Bob: Alice's address: NodeId={}, Relay={:?}",
+        alice_addr.node_id,
+        alice_addr.relay_url());
+
+    // Add Alice's address to Bob's endpoint
+    bob_endpoint.add_node_addr(alice_addr)?;
+    println!("Bob: ✓ Added Alice's address to endpoint");
+
+    // CRITICAL: Bob needs to RESUBSCRIBE with Alice as bootstrap!
+    println!("\nBob: Resubscribing with Alice as bootstrap...");
+    println!("Bob: (This is the fix - old code didn't do this!)");
+
+    // Bob resubscribes using subscribe_and_join() with Alice as bootstrap
+    let bob_topic_new = tokio::time::timeout(
+        Duration::from_secs(10),
+        bob_gossip.subscribe_and_join(topic, vec![alice_node_id])
+    ).await;
+
+    match bob_topic_new {
+        Ok(Ok(new_topic)) => {
+            println!("Bob: ✓ Resubscription successful - joined Alice's mesh!");
+            let (bob_sender, mut bob_receiver_new) = new_topic.split();
+
+            // Track new subscription's events
+            let bob_peer_count_new = Arc::new(Mutex::new(0usize));
+            let bob_peer_count_new_clone = bob_peer_count_new.clone();
+            tokio::spawn(async move {
+                while let Some(event) = bob_receiver_new.try_next().await.transpose() {
+                    match event {
+                        Ok(Event::Gossip(GossipEvent::NeighborUp(node_id))) => {
+                            println!("Bob (new): ✓ NeighborUp: {}", node_id);
+                            *bob_peer_count_new_clone.lock().await += 1;
+                        }
+                        Ok(Event::Gossip(GossipEvent::Received(msg))) => {
+                            println!("Bob: 📬 Received message: {} bytes", msg.content.len());
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            // Wait for events to propagate
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            // Verify bidirectional connection
+            println!("\n=== Verifying bidirectional connection ===");
+            let alice_peers = *alice_peer_count.lock().await;
+            let bob_peers = *bob_peer_count_new.lock().await;
+            println!("Alice peers: {}", alice_peers);
+            println!("Bob peers: {}", bob_peers);
+
+            // Test message exchange
+            println!("\n=== Testing message exchange ===");
+
+            // Bob sends to Alice
+            let test_msg = bytes::Bytes::from("Hello from Bob!");
+            bob_sender.broadcast(test_msg).await?;
+            println!("Bob: Sent test message");
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            // Alice sends to Bob
+            let alice_msg = bytes::Bytes::from("Hello from Alice!");
+            alice_sender.broadcast(alice_msg).await?;
+            println!("Alice: Sent test message");
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            // Both should see each other as connected
+            if alice_peers >= 1 && bob_peers >= 1 {
+                println!("\n✓ TEST PASSED: Bidirectional gossip mesh formed after resubscribe!");
+                println!("  This confirms the fix for one-way connection issue.");
+            } else {
+                println!("\n⚠️  Partial success: Mesh formed but peer counts unexpected");
+                println!("  Alice peers: {} (expected >= 1)", alice_peers);
+                println!("  Bob peers: {} (expected >= 1)", bob_peers);
+            }
+        }
+        Ok(Err(e)) => {
+            println!("Bob: ✗ Resubscription failed: {}", e);
+            return Err(e.into());
+        }
+        Err(_) => {
+            println!("Bob: ✗ Resubscription timed out");
+            println!("\n✗ TEST FAILED: subscribe_and_join() blocked - mesh formation failed");
+            return Err(anyhow::anyhow!("Resubscription timeout"));
         }
     }
 

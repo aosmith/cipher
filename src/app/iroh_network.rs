@@ -1,5 +1,12 @@
 // Iroh-based P2P networking
-// Simpler, more reliable than libp2p with built-in NAT traversal
+// Global mesh architecture: all nodes connect, only friends can decrypt content
+//
+// ARCHITECTURE:
+// - Single `cipher/content/v1` topic for ALL encrypted content
+// - All nodes join the same global mesh
+// - Content is encrypted per-friend (sealed boxes)
+// - Only intended recipients can decrypt
+// - Non-friends relay and optionally cache for later purging
 
 use bytes::Bytes;
 use iroh::protocol::Router;
@@ -14,11 +21,15 @@ use tokio::sync::Mutex;
 use super::types::{MediaAttachmentWithData, SqliteUuid};
 use super::Database;
 
+/// Global topic for all encrypted content
+pub const CONTENT_TOPIC: &str = "cipher/content/v1";
+
 /// P2P message types for the social network
+/// All messages are broadcast to the global mesh; encryption ensures privacy
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum P2PMessage {
-    /// User presence announcement (for device discovery)
-    /// Includes full Iroh NodeAddr for peer connection (NodeId + relay URLs + direct addresses)
+    /// User presence announcement (for device discovery and mesh health)
+    /// Broadcast to global mesh - all nodes see presence, helps with peer discovery
     Presence {
         user_id: SqliteUuid,
         public_key: String,
@@ -39,7 +50,7 @@ pub enum P2PMessage {
         data_json: String,
         timestamp: i64,
     },
-    /// Direct encrypted message between users
+    /// Direct encrypted message between users (legacy - kept for backwards compatibility)
     DirectMessage {
         message_id: String,
         from_user_id: SqliteUuid,
@@ -48,27 +59,44 @@ pub enum P2PMessage {
         timestamp: i64,
         device_id: Option<String>,
     },
-    /// Post from a user
+    /// Post from a user (legacy - kept for backwards compatibility)
     Post {
         user_id: SqliteUuid,
+        public_key: String, // Sender's public key for user record creation
         content: String,
         timestamp: i64,
         device_id: Option<String>,
         attachments: Option<Vec<MediaAttachmentWithData>>,
     },
-    /// Friend addition announcement (for bidirectional friendship)
-    /// When Bob scans Alice's QR, Bob broadcasts this to Alice's topic
-    /// Alice receives it and auto-adds Bob as a friend
-    FriendAdded {
-        from_public_key: String,     // Bob's public key
-        from_user_id: SqliteUuid,     // Bob's user ID
-        from_node_id: String,          // Bob's Iroh NodeId
-        from_relay_url: String,        // Bob's relay URL
-        to_public_key: String,        // Alice's public key (for verification)
+    /// PHASE 2: Sealed envelope containing encrypted content
+    /// All nodes receive this, but only friends can decrypt
+    SealedEnvelope {
+        /// The full GossipEnvelope with sealed boxes
+        envelope_json: String,
+    },
+    /// Friend request sent when scanning QR code
+    /// Broadcast to global mesh - only the target can process it
+    FriendRequest {
+        from_public_key: String,     // Requester's public key
+        from_user_id: SqliteUuid,     // Requester's user ID
+        from_display_name: String,   // Requester's display name
+        from_node_id: String,          // Requester's Iroh NodeId
+        from_relay_url: String,        // Requester's relay URL
+        to_public_key: String,        // Target's public key (for filtering)
         timestamp: i64,
     },
+    /// Friend request acceptance
+    /// Broadcast to global mesh - only the requester can process it
+    FriendAccepted {
+        from_user_id: SqliteUuid,     // Accepter's user ID
+        from_public_key: String,     // Accepter's public key
+        from_display_name: String,   // Accepter's display name
+        from_node_id: String,          // Accepter's Iroh NodeId
+        from_relay_url: String,        // Accepter's relay URL
+        to_public_key: String,        // Original requester's public key (for filtering)
+    },
     /// Heartbeat message to verify peer is still connected
-    /// Sent periodically to maintain accurate online peer count
+    /// Broadcast to global mesh for accurate peer counting
     Heartbeat {
         node_id: String,              // Sender's Iroh NodeId
         timestamp: i64,
@@ -80,6 +108,7 @@ pub enum P2PMessage {
 /// The actual GossipReceiver is owned by the stream handler task
 struct TopicSubscription {
     broadcast_tx: tokio::sync::mpsc::UnboundedSender<Bytes>,
+    #[allow(dead_code)] // Kept for future dynamic peer joining
     gossip_sender: Arc<iroh_gossip::net::GossipSender>,
 }
 
@@ -128,6 +157,7 @@ impl PeerRetryState {
 /// Main Iroh network coordinator
 pub struct IrohNetwork {
     pub user_id: SqliteUuid,
+    pub display_name: String,
     pub public_key: String,
     pub device_id: Option<String>,
     pub endpoint: Arc<Mutex<Option<iroh::Endpoint>>>,
@@ -137,6 +167,7 @@ pub struct IrohNetwork {
     connected_peers: Arc<Mutex<std::collections::HashSet<iroh::NodeId>>>,
     peer_retry_counts: Arc<Mutex<HashMap<iroh::NodeId, PeerRetryState>>>, // Exponential backoff tracking
     peer_heartbeats: Arc<Mutex<HashMap<iroh::NodeId, std::time::Instant>>>, // Last heartbeat time from each peer
+    pending_subscriptions: Arc<Mutex<Vec<String>>>, // Topics queued for subscription (processed in background)
     device_seed: [u8; 32], // Device keypair seed for DHT publishing
     app_handle: tauri::AppHandle,
     db: Database,
@@ -146,6 +177,7 @@ impl IrohNetwork {
     /// Create new Iroh network instance
     pub async fn new(
         user_id: SqliteUuid,
+        display_name: String,
         public_key: String,
         device_id: Option<String>,
         device_keypair: &[u8],
@@ -160,6 +192,7 @@ impl IrohNetwork {
 
         Ok(IrohNetwork {
             user_id,
+            display_name,
             public_key,
             device_id,
             endpoint: Arc::new(Mutex::new(None)),
@@ -169,6 +202,7 @@ impl IrohNetwork {
             connected_peers: Arc::new(Mutex::new(std::collections::HashSet::new())),
             peer_retry_counts: Arc::new(Mutex::new(HashMap::new())),
             peer_heartbeats: Arc::new(Mutex::new(HashMap::new())),
+            pending_subscriptions: Arc::new(Mutex::new(Vec::new())),
             device_seed,
             app_handle,
             db,
@@ -366,7 +400,7 @@ impl IrohNetwork {
 
                         // Now try to connect with full addressing info
                         println!("[IROH] Attempting to connect to peer: {}", peer_id);
-                        match endpoint.connect(peer_id, &iroh_gossip::ALPN).await {
+                        match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
                             Ok(conn) => {
                                 println!("[IROH] ✓ CONNECTED to peer {}!", peer_id);
                                 println!("[IROH]   Remote address: {:?}", conn.remote_address());
@@ -385,52 +419,42 @@ impl IrohNetwork {
             }
         }
 
-        // CRITICAL FIX: Do NOT subscribe to discovery/presence topics at startup
-        // Problem: Subscribing with no bootstrap creates isolated gossip meshes
-        // Solution: Only subscribe when user generates/scans QR code, always with proper bootstrap
-        println!(
-            "[IROH] Skipping discovery/presence subscriptions at startup to prevent mesh isolation"
-        );
-        println!("[IROH] Topics will be subscribed when user generates or scans QR code");
+        // GLOBAL MESH ARCHITECTURE:
+        // All nodes join the single cipher/content/v1 topic
+        // This creates a global gossip mesh where everyone relays everything
+        // Privacy is achieved through encryption, not topology
+        println!("[IROH] ========================================");
+        println!("[IROH] GLOBAL MESH ARCHITECTURE");
+        println!("[IROH] Subscribing to global content topic: {}", CONTENT_TOPIC);
+        println!("[IROH] All content will be broadcast to all peers");
+        println!("[IROH] Only friends can decrypt your content");
+        println!("[IROH] ========================================");
+
+        // Subscribe to the global content topic
+        // If we have bootstrap peers from previous sessions, use them
+        if !peer_node_ids.is_empty() {
+            println!("[IROH] Subscribing with {} bootstrap peers", peer_node_ids.len());
+            if let Err(e) = self.subscribe_topic_with_peers(CONTENT_TOPIC, peer_node_ids.clone()).await {
+                println!("[IROH] Warning: Failed to subscribe with bootstrap: {}", e);
+                println!("[IROH] Falling back to root subscription...");
+                self.subscribe_topic(CONTENT_TOPIC).await?;
+            }
+        } else {
+            println!("[IROH] No bootstrap peers - subscribing as root node");
+            self.subscribe_topic(CONTENT_TOPIC).await?;
+        }
+        println!("[IROH] ✓ Subscribed to global content topic");
+
+        // Start presence announcements and heartbeat
+        self.start_presence_loop();
+        self.start_heartbeat_sender();
+        self.start_heartbeat_monitor();
 
         // Actively try to connect to discovered peers via direct connection attempts
         // This helps bootstrap the gossip mesh using stored peer addresses
         // CENSORSHIP RESISTANCE: Even if infrastructure is blocked, users can exchange
         // peer addresses out-of-band (QR codes, messaging apps) and manually bootstrap
         self.start_active_peer_discovery();
-
-        // CRITICAL FIX: Do NOT subscribe to our own topic during initialization
-        // Problem: Subscribing with no/few bootstrap peers creates an isolated gossip mesh
-        // Solution: Only subscribe to our own topic when we receive first Presence from a friend
-        //           (meaning they've subscribed to our topic), using them as bootstrap
-        // This ensures we join the same mesh as our friends
-        println!("[IROH] Skipping own topic subscription at init - will subscribe when first friend connects");
-
-        // Subscribe to all friends' topics on startup (restores subscriptions after app restart)
-        match self.db.get_friend_public_keys(self.user_id) {
-            Ok(friend_public_keys) => {
-                if !friend_public_keys.is_empty() {
-                    println!(
-                        "[IROH] Subscribing to {} friend topics from database...",
-                        friend_public_keys.len()
-                    );
-                    for friend_pk in friend_public_keys {
-                        let topic = format!("cipher/user/{}", friend_pk);
-                        if let Err(e) = self.subscribe_topic(&topic).await {
-                            println!("[IROH] Warning: Failed to subscribe to friend topic: {}", e);
-                        } else {
-                            println!("[IROH] ✓ Subscribed to friend topic: {}", topic);
-                        }
-                    }
-                    println!("[IROH] Friend topic subscriptions complete");
-                } else {
-                    println!("[IROH] No existing friends - skipping friend topic subscriptions");
-                }
-            }
-            Err(e) => {
-                println!("[IROH] Warning: Failed to get friend public keys: {}", e);
-            }
-        }
 
         // CRITICAL: Pre-populate endpoint with friend peer addresses for persistent connections
         // This enables reconnection to friends after app restart
@@ -466,7 +490,7 @@ impl IrohNetwork {
                                         let mut reconnected = false;
 
                                         for attempt in 1..=max_attempts {
-                                            match endpoint.connect(peer_id, &iroh_gossip::ALPN).await {
+                                            match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
                                                 Ok(conn) => {
                                                     println!("[IROH] ✓ RECONNECTED to friend {} on attempt {}!", peer_id, attempt);
                                                     println!(
@@ -626,26 +650,26 @@ impl IrohNetwork {
                     println!("[IROH-GOSSIP] ⏱  gossip.subscribe_and_join() timed out after 15s for topic '{}'", topic);
                     println!("[IROH-GOSSIP]   Gossip protocol did not establish NeighborUp within timeout");
                     println!("[IROH-GOSSIP]   This indicates the bootstrap peer may not be subscribed to this topic");
-                    return Err(format!("Timed out joining gossip topic - gossip protocol did not form neighbor relationship"));
+                    return Err("Timed out joining gossip topic - gossip protocol did not form neighbor relationship".to_string());
                 }
             }
         } else {
-            println!("[IROH-GOSSIP] Calling gossip.subscribe_and_join() for topic '{}' (root node - empty bootstrap)...", topic);
-            println!("[IROH-GOSSIP]   subscribe_and_join() with empty bootstrap emits Joined([]) immediately");
-            println!("[IROH-GOSSIP]   This creates proper root node that CAN accept joins from others");
+            println!("[IROH-GOSSIP] Calling gossip.subscribe() for topic '{}' (root node - empty bootstrap)...", topic);
+            println!("[IROH-GOSSIP]   Using subscribe() instead of subscribe_and_join() for root nodes");
+            println!("[IROH-GOSSIP]   subscribe() returns immediately, subscribe_and_join() waits for peers");
 
-            // CRITICAL: Use subscribe_and_join() even for root nodes (empty bootstrap list)
-            // This creates a proper root node that can accept joins from others
-            // According to iroh-gossip chat example, subscribe_and_join() with empty bootstrap
-            // will emit Joined([]) event immediately, making this a proper accepting root
-            match gossip.subscribe_and_join(topic_id, bootstrap_peers.clone()).await {
+            // CRITICAL: Use subscribe() (NOT subscribe_and_join()) for root nodes!
+            // subscribe_and_join() calls .joined().await which WAITS for at least one connection
+            // With empty bootstrap and no peers, it will hang forever!
+            // subscribe() returns immediately and creates a proper root node that accepts joins
+            match gossip.subscribe(topic_id, bootstrap_peers.clone()) {
                 Ok(result) => {
-                    println!("[IROH-GOSSIP] ✓ gossip.subscribe_and_join() completed for topic '{}' (root node)", topic);
+                    println!("[IROH-GOSSIP] ✓ gossip.subscribe() completed for topic '{}' (root node)", topic);
                     println!("[IROH-GOSSIP]   Root node created - ready to accept joins from peers");
                     result
                 }
                 Err(e) => {
-                    println!("[IROH-GOSSIP] ✗ gossip.subscribe_and_join() failed for root node: {}", e);
+                    println!("[IROH-GOSSIP] ✗ gossip.subscribe() failed for root node: {}", e);
                     return Err(format!("Failed to subscribe to gossip topic: {}", e));
                 }
             }
@@ -686,141 +710,6 @@ impl IrohNetwork {
         Ok(())
     }
 
-    /// Simple topic listener that just logs received messages (Send-safe)
-    /// This is used for re-subscribed topics to ensure messages are received
-    /// without needing to hold locks or process messages inline
-    async fn simple_topic_listener(
-        topic: String,
-        mut gossip_topic: iroh_gossip::net::GossipTopic,
-        app_handle: tauri::AppHandle,
-    ) {
-        use futures::StreamExt;
-
-        println!(
-            "[IROH] Starting simple listener for re-subscribed topic: {}",
-            topic
-        );
-
-        loop {
-            match gossip_topic.next().await {
-                Some(Ok(iroh_gossip::net::Event::Gossip(gossip_event))) => {
-                    if let iroh_gossip::net::GossipEvent::Received(msg) = gossip_event {
-                        // Deserialize and emit to UI for processing
-                        match serde_json::from_slice::<P2PMessage>(&msg.content) {
-                            Ok(p2p_msg) => {
-                                println!(
-                                    "[IROH] ✓ Re-subscription received message on topic {}: {:?}",
-                                    topic, p2p_msg
-                                );
-
-                                // Emit to UI via p2p-message-received event
-                                #[derive(serde::Serialize, Clone)]
-                                struct MessageEvent {
-                                    message: P2PMessage,
-                                }
-                                let _ = app_handle.emit(
-                                    "p2p-message-received",
-                                    MessageEvent { message: p2p_msg },
-                                );
-                            }
-                            Err(e) => {
-                                println!(
-                                    "[IROH] Failed to deserialize re-subscription message: {}",
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-                Some(Ok(iroh_gossip::net::Event::Lagged)) => {
-                    println!("[IROH] Re-subscription stream lagged on topic: {}", topic);
-                }
-                Some(Err(e)) => {
-                    println!(
-                        "[IROH] Re-subscription error on topic {} stream: {}",
-                        topic, e
-                    );
-                    break;
-                }
-                None => {
-                    println!(
-                        "[IROH] Re-subscription message stream ended for topic: {}",
-                        topic
-                    );
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Send-safe bidirectional topic handler for peer topics
-    /// Handles both incoming and outgoing messages without calling handle_message
-    async fn bidirectional_topic_listener(
-        topic: String,
-        mut gossip_topic: iroh_gossip::net::GossipTopic,
-        mut broadcast_rx: tokio::sync::mpsc::UnboundedReceiver<Bytes>,
-        app_handle: tauri::AppHandle,
-    ) {
-        use futures::StreamExt;
-
-        println!(
-            "[IROH] Starting bidirectional listener for topic: {}",
-            topic
-        );
-
-        loop {
-            tokio::select! {
-                // Incoming gossip messages
-                event = gossip_topic.next() => {
-                    match event {
-                        Some(Ok(iroh_gossip::net::Event::Gossip(gossip_event))) => {
-                            if let iroh_gossip::net::GossipEvent::Received(msg) = gossip_event {
-                                match serde_json::from_slice::<P2PMessage>(&msg.content) {
-                                    Ok(p2p_msg) => {
-                                        println!("[IROH] ✓ Received message on topic {}: {:?}", topic, p2p_msg);
-
-                                        // Emit to UI for processing
-                                        #[derive(serde::Serialize, Clone)]
-                                        struct MessageEvent {
-                                            message: P2PMessage,
-                                        }
-                                        let _ = app_handle.emit("p2p-message-received", MessageEvent {
-                                            message: p2p_msg,
-                                        });
-                                    }
-                                    Err(e) => {
-                                        println!("[IROH] Failed to deserialize message: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                        Some(Ok(iroh_gossip::net::Event::Lagged)) => {
-                            println!("[IROH] Stream lagged on topic: {}", topic);
-                        }
-                        Some(Err(e)) => {
-                            println!("[IROH] Error on topic {} stream: {}", topic, e);
-                            break;
-                        }
-                        None => {
-                            println!("[IROH] Message stream ended for topic: {}", topic);
-                            break;
-                        }
-                    }
-                }
-
-                // Outgoing broadcast messages
-                Some(data) = broadcast_rx.recv() => {
-                    println!("[IROH] Broadcasting message to topic: {}", topic);
-                    if let Err(e) = gossip_topic.broadcast(data).await {
-                        println!("[IROH] Failed to broadcast message: {}", e);
-                    } else {
-                        println!("[IROH] Successfully broadcast message to topic: {}", topic);
-                    }
-                }
-            }
-        }
-    }
-
     /// Handle incoming messages from a topic stream and broadcast outgoing messages
     async fn handle_topic_stream(
         &self,
@@ -855,7 +744,9 @@ impl IrohNetwork {
                                                     P2PMessage::Presence { .. } => "Presence",
                                                     P2PMessage::DirectMessage { .. } => "DirectMessage",
                                                     P2PMessage::Post { .. } => "Post",
-                                                    P2PMessage::FriendAdded { .. } => "FriendAdded",
+                                                    P2PMessage::SealedEnvelope { .. } => "SealedEnvelope",
+                                                    P2PMessage::FriendRequest { .. } => "FriendRequest",
+                                                    P2PMessage::FriendAccepted { .. } => "FriendAccepted",
                                                     P2PMessage::DeviceSyncRequest { .. } => "DeviceSyncRequest",
                                                     P2PMessage::DeviceSyncResponse { .. } => "DeviceSyncResponse",
                                                     P2PMessage::Heartbeat { .. } => "Heartbeat",
@@ -983,34 +874,43 @@ impl IrohNetwork {
         Ok(())
     }
 
-    /// Ensure discovery/presence topics are subscribed (lazy subscription)
-    /// Called when user generates QR or adds first friend
-    pub async fn ensure_discovery_subscribed(&self) -> Result<(), String> {
-        // Check if already subscribed
-        let already_subscribed = self.is_topic_subscribed("cipher/discovery/v1").await
-            && self.is_topic_subscribed("cipher/presence").await;
+    /// Schedule resubscription with bootstrap peer in a spawned task
+    /// Use this from within handle_message or other spawned contexts
+    /// to avoid Send-safety issues with nested async spawns
+    pub fn schedule_resubscribe_with_bootstrap(&self, bootstrap_peer: iroh::NodeId) {
+        let network = Arc::new(self.clone_for_background());
+        let peer_id = bootstrap_peer;
 
-        if already_subscribed {
-            println!("[IROH] Discovery/presence topics already subscribed");
+        tokio::spawn(async move {
+            println!("[IROH-RESUB-SPAWN] Scheduled resubscription with bootstrap peer: {}", peer_id);
+
+            match network.resubscribe_with_bootstrap(CONTENT_TOPIC, vec![peer_id]).await {
+                Ok(_) => {
+                    println!("[IROH-RESUB-SPAWN] ✓ Successfully joined gossip mesh with {}!", peer_id);
+                    network.add_connected_peer(peer_id).await;
+                }
+                Err(e) => {
+                    println!("[IROH-RESUB-SPAWN] Warning: Failed to resubscribe with {}: {}", peer_id, e);
+                    // Still add as connected peer for tracking
+                    network.add_connected_peer(peer_id).await;
+                }
+            }
+        });
+    }
+
+    /// Ensure global content topic is subscribed
+    /// This is called by the commands module for backwards compatibility
+    #[allow(dead_code)]
+    pub async fn ensure_global_topic_subscribed(&self) -> Result<(), String> {
+        // Check if already subscribed to global content topic
+        if self.is_topic_subscribed(CONTENT_TOPIC).await {
+            println!("[IROH] Global content topic already subscribed");
             return Ok(());
         }
 
-        println!("[IROH] Subscribing to discovery/presence topics (first time)...");
-
-        // Subscribe without bootstrap (we become a root node in the mesh)
-        self.subscribe_topic("cipher/discovery/v1").await?;
-        println!("[IROH] ✓ Subscribed to discovery topic");
-
-        self.subscribe_topic("cipher/presence").await?;
-        println!("[IROH] ✓ Subscribed to presence topic");
-
-        // Start presence announcement loop now that we're subscribed
-        self.start_presence_loop();
-        println!("[IROH] ✓ Started presence announcements");
-
-        // Start heartbeat system for accurate online peer tracking
-        self.start_heartbeat_sender();
-        self.start_heartbeat_monitor();
+        println!("[IROH] Subscribing to global content topic...");
+        self.subscribe_topic(CONTENT_TOPIC).await?;
+        println!("[IROH] ✓ Subscribed to global content topic");
 
         // Announce immediately
         self.announce_presence().await?;
@@ -1049,7 +949,7 @@ impl IrohNetwork {
         Ok(())
     }
 
-    /// Announce presence to discover other devices
+    /// Announce presence to the global mesh
     pub async fn announce_presence(&self) -> Result<(), String> {
         // Get our full NodeAddr from the endpoint
         let endpoint_guard = self.endpoint.lock().await;
@@ -1074,204 +974,8 @@ impl IrohNetwork {
             timestamp: chrono::Utc::now().timestamp(),
         };
 
-        // Publish to global presence topic
-        // Router enables incoming connections, DHT/relay enables peer discovery
-        self.publish_message("cipher/presence", presence).await
-    }
-
-    /// Start acceptor for direct presence streams
-    /// This listens for incoming bi-directional streams on gossip connections and processes Presence messages
-    fn start_direct_presence_acceptor(&self) {
-        let network = Arc::new(self.clone_for_background());
-
-        tokio::spawn(async move {
-            println!("[IROH-DIRECT] Acceptor started, waiting for direct presence streams...");
-
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-                let endpoint_guard = network.endpoint.lock().await;
-                if let Some(endpoint) = endpoint_guard.as_ref() {
-                    let endpoint_clone = endpoint.clone();
-                    drop(endpoint_guard);
-
-                    // Try to accept incoming connection
-                    match tokio::time::timeout(
-                        tokio::time::Duration::from_millis(50),
-                        endpoint_clone.accept(),
-                    )
-                    .await
-                    {
-                        Ok(Some(incoming)) => {
-                            println!("[IROH-DIRECT] Got incoming connection");
-                            let network_clone = network.clone();
-
-                            tokio::spawn(async move {
-                                match incoming.await {
-                                    Ok(connection) => {
-                                        println!("[IROH-DIRECT] Connection established, waiting for streams...");
-
-                                        // Accept incoming bi-directional streams
-                                        loop {
-                                            match connection.accept_bi().await {
-                                                Ok((mut _send, mut recv)) => {
-                                                    println!("[IROH-DIRECT] Accepted bi-directional stream");
-
-                                                    // Read presence message
-                                                    let buffer_result = recv.read_to_end(100_000).await;
-
-                                                    let buffer = match buffer_result {
-                                                        Ok(buf) => {
-                                                            println!(
-                                                                "[IROH-DIRECT] Received {} bytes",
-                                                                buf.len()
-                                                            );
-                                                            buf
-                                                        }
-                                                        Err(e) => {
-                                                            println!("[IROH-DIRECT] Failed to read stream: {}", e);
-                                                            continue;
-                                                        }
-                                                    };
-
-                                                    // Try to deserialize as Presence
-                                                    match serde_json::from_slice::<P2PMessage>(
-                                                        &buffer,
-                                                    ) {
-                                                        Ok(P2PMessage::Presence { .. }) => {
-                                                            println!("[IROH-DIRECT] ✓ Received direct Presence message!");
-                                                            // Process the presence
-                                                            network_clone
-                                                                .handle_message(
-                                                                    serde_json::from_slice(&buffer)
-                                                                        .unwrap(),
-                                                                )
-                                                                .await;
-                                                        }
-                                                        Ok(other) => {
-                                                            println!("[IROH-DIRECT] Received non-Presence message: {:?}", other);
-                                                        }
-                                                        Err(e) => {
-                                                            println!("[IROH-DIRECT] Failed to deserialize message: {}", e);
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    println!(
-                                                        "[IROH-DIRECT] Error accepting stream: {}",
-                                                        e
-                                                    );
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        println!(
-                                            "[IROH-DIRECT] Failed to establish connection: {}",
-                                            e
-                                        );
-                                    }
-                                }
-                            });
-                        }
-                        Ok(None) => {
-                            // No incoming connection
-                        }
-                        Err(_) => {
-                            // Timeout - continue loop
-                        }
-                    }
-                } else {
-                    drop(endpoint_guard);
-                    println!("[IROH-DIRECT] Endpoint not initialized, stopping acceptor");
-                    break;
-                }
-            }
-        });
-    }
-
-    /// Send presence directly to peer via gossip connection (bypasses gossip mesh isolation)
-    /// This is a workaround for the gossip mesh isolation problem by sending directly over
-    /// a connection stream BEFORE the gossip mesh is fully established
-    pub async fn send_direct_presence(
-        &self,
-        peer_node_id: iroh::NodeId,
-        peer_node_addr: &iroh::NodeAddr,
-    ) -> Result<(), String> {
-        println!(
-            "[IROH-DIRECT] Sending direct presence to peer {}",
-            peer_node_id
-        );
-
-        let endpoint_guard = self.endpoint.lock().await;
-        let endpoint = endpoint_guard.as_ref().ok_or("Endpoint not initialized")?;
-
-        // Add peer's full address to endpoint
-        if let Err(e) = endpoint.add_node_addr(peer_node_addr.clone()) {
-            println!("[IROH-DIRECT] Warning: Failed to add node address: {}", e);
-        }
-
-        // Connect using gossip ALPN (we're already on the gossip mesh)
-        println!("[IROH-DIRECT] Connecting to peer...");
-        let connection = endpoint
-            .connect(peer_node_id, &iroh_gossip::ALPN)
-            .await
-            .map_err(|e| format!("Failed to connect: {}", e))?;
-
-        drop(endpoint_guard);
-
-        println!("[IROH-DIRECT] ✓ Connected, opening stream for direct presence exchange...");
-
-        // Open bidirectional stream for direct presence exchange
-        let (mut send, mut _recv) = connection
-            .open_bi()
-            .await
-            .map_err(|e| format!("Failed to open stream: {}", e))?;
-
-        // Get our node address
-        let endpoint_guard = self.endpoint.lock().await;
-        let our_node_addr = if let Some(endpoint) = endpoint_guard.as_ref() {
-            endpoint
-                .node_addr()
-                .await
-                .map_err(|e| format!("Failed to get node address: {}", e))?
-        } else {
-            return Err("Endpoint not initialized".to_string());
-        };
-        drop(endpoint_guard);
-
-        // Create presence message
-        let presence = P2PMessage::Presence {
-            user_id: self.user_id,
-            public_key: self.public_key.clone(),
-            device_id: self
-                .device_id
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-            node_addr: our_node_addr,
-            timestamp: chrono::Utc::now().timestamp(),
-        };
-
-        // Serialize and send
-        let presence_bytes = serde_json::to_vec(&presence)
-            .map_err(|e| format!("Failed to serialize presence: {}", e))?;
-
-        println!(
-            "[IROH-DIRECT] Sending presence ({} bytes)...",
-            presence_bytes.len()
-        );
-        send.write_all(&presence_bytes)
-            .await
-            .map_err(|e| format!("Failed to send presence: {}", e))?;
-
-        // Properly finish the stream to flush data and signal EOF to reader
-        send.finish().map_err(|e| format!("Failed to finish stream: {}", e))?;
-
-        println!("[IROH-DIRECT] ✓ Direct presence sent successfully");
-        println!("[IROH-DIRECT] Peer should receive and process our Presence, then send theirs via gossip");
-
-        Ok(())
+        // Publish to global content topic - all nodes will see this
+        self.publish_message(CONTENT_TOPIC, presence).await
     }
 
     /// Start background loop for presence announcements
@@ -1325,7 +1029,7 @@ impl IrohNetwork {
                 println!("[IROH-RENDEZVOUS] Using global rendezvous key for all Cipher peers");
                 println!(
                     "[IROH-RENDEZVOUS] Rendezvous: {}",
-                    hex::encode(&rendezvous_bytes)
+                    hex::encode(rendezvous_bytes)
                 );
 
                 // Get our NodeAddr to publish
@@ -1407,7 +1111,7 @@ impl IrohNetwork {
 
                                         // Try to connect with full addressing info
                                         println!("[IROH-DISCOVERY] Discovering peer {} via DHT/DNS/Relay...", peer_id);
-                                        match endpoint.connect(peer_id, &iroh_gossip::ALPN).await {
+                                        match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
                                             Ok(conn) => {
                                                 println!(
                                                     "[IROH-DISCOVERY] ✓ Connected to peer {}!",
@@ -1520,7 +1224,7 @@ impl IrohNetwork {
                     }
 
                     // Now connect using the ALPN
-                    match endpoint.connect(peer_node_id, &iroh_gossip::ALPN).await {
+                    match endpoint.connect(peer_node_id, iroh_gossip::ALPN).await {
                         Ok(connection) => {
                             println!("[IROH] ✓ Successfully connected to peer {}", peer_node_id);
                             println!("[IROH]   Remote address: {:?}", connection.remote_address());
@@ -1601,44 +1305,10 @@ impl IrohNetwork {
                     }
                 }
 
-                // NOTE: We do NOT subscribe to topics from handle_message to avoid Send issues
-                // All subscriptions are handled in the QR code flow:
-                // - When generating QR: subscribe to our own topic
-                // - When scanning QR: subscribe to friend's topic with them as bootstrap
-                // This ensures proper gossip mesh connectivity without nested spawning
-                println!("[IROH] Presence received and stored - subscriptions handled via QR flow");
-
-                // Send our Presence to peer's topic to complete bidirectional friendship
-                println!(
-                    "[IROH] Sending our Presence to peer's topic for bidirectional friendship..."
-                );
-                let endpoint_guard = self.endpoint.lock().await;
-                if let Some(endpoint) = endpoint_guard.as_ref() {
-                    if let Ok(our_node_addr) = endpoint.node_addr().await {
-                        drop(endpoint_guard);
-
-                        let our_presence = P2PMessage::Presence {
-                            user_id: self.user_id,
-                            public_key: self.public_key.clone(),
-                            device_id: self
-                                .device_id
-                                .clone()
-                                .unwrap_or_else(|| "unknown".to_string()),
-                            node_addr: our_node_addr,
-                            timestamp: chrono::Utc::now().timestamp(),
-                        };
-
-                        let peer_topic = format!("cipher/user/{}", public_key);
-                        match self.publish_message(&peer_topic, our_presence).await {
-                            Ok(_) => println!("[IROH] ✓ Sent our Presence to peer's topic - bidirectional friendship established!"),
-                            Err(e) => println!("[IROH] Warning: Failed to send Presence to peer: {}", e),
-                        }
-                    } else {
-                        drop(endpoint_guard);
-                    }
-                } else {
-                    drop(endpoint_guard);
-                }
+                // GLOBAL MESH: No topic subscriptions needed in message handler
+                // All nodes are on the same cipher/content/v1 topic
+                // Presence is just for peer discovery and connection establishment
+                println!("[IROH] Presence processed - global mesh handles all routing");
 
                 // Check if this is another device with the same user account
                 if public_key == self.public_key
@@ -1649,7 +1319,7 @@ impl IrohNetwork {
                         device_id, peer_node_id
                     );
 
-                    // Send device sync request
+                    // Send device sync request via global mesh
                     let sync_request = P2PMessage::DeviceSyncRequest {
                         public_key: self.public_key.clone(),
                         device_id: self
@@ -1659,8 +1329,7 @@ impl IrohNetwork {
                         last_sync_timestamp: 0, // Get all data for now
                     };
 
-                    let topic = format!("cipher/user/{}", self.public_key);
-                    if let Err(e) = self.publish_message(&topic, sync_request).await {
+                    if let Err(e) = self.publish_message(CONTENT_TOPIC, sync_request).await {
                         println!("[IROH] Failed to send device sync request: {}", e);
                     } else {
                         println!(
@@ -1709,9 +1378,8 @@ impl IrohNetwork {
                                         timestamp: chrono::Utc::now().timestamp(),
                                     };
 
-                                    // Publish to user's own topic
-                                    let topic = format!("cipher/user/{}", self.public_key);
-                                    if let Err(e) = self.publish_message(&topic, response).await {
+                                    // Publish to global mesh - target device will filter by public_key
+                                    if let Err(e) = self.publish_message(CONTENT_TOPIC, response).await {
                                         println!(
                                             "[IROH] Failed to send device sync response: {}",
                                             e
@@ -1816,12 +1484,37 @@ impl IrohNetwork {
 
             P2PMessage::Post {
                 user_id,
+                ref public_key,
                 ref content,
                 timestamp,
                 ref device_id,
                 ref attachments,
             } => {
-                println!("[IROH] Received post");
+                println!("[IROH] Received post from user {} ({})", user_id, public_key);
+
+                // Skip our own posts (they're already in DB)
+                if public_key == &self.public_key {
+                    println!("[IROH] Skipping own post");
+                    return;
+                }
+
+                // CRITICAL: Ensure the sender's user record exists before saving post
+                // This prevents foreign key constraint violations in the posts table
+                if let Err(e) = self.db.conn.lock().unwrap().execute(
+                    "INSERT OR IGNORE INTO users (id, username, public_key, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        user_id,
+                        format!("User_{}", &public_key[..8.min(public_key.len())]),
+                        public_key,
+                        chrono::Utc::now().to_rfc3339(),
+                        chrono::Utc::now().to_rfc3339()
+                    ],
+                ) {
+                    println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
+                } else {
+                    println!("[IROH] ✓ Ensured user record exists for post sender");
+                }
 
                 // Emit to UI
                 #[derive(serde::Serialize, Clone)]
@@ -1834,6 +1527,7 @@ impl IrohNetwork {
                     MessageEvent {
                         message: P2PMessage::Post {
                             user_id,
+                            public_key: public_key.clone(),
                             content: content.clone(),
                             timestamp,
                             device_id: device_id.clone(),
@@ -1842,19 +1536,144 @@ impl IrohNetwork {
                     },
                 );
             }
-            P2PMessage::FriendAdded {
+
+            P2PMessage::SealedEnvelope { envelope_json } => {
+                // PHASE 2: Sealed box encryption
+                // Try to decrypt the envelope using our encryption private key
+                println!("[IROH] Received SealedEnvelope - attempting to decrypt...");
+
+                // Get our encryption private key from database
+                let our_encryption_private_key = match self.get_user_encryption_private_key() {
+                    Some(key) => key,
+                    None => {
+                        println!("[IROH] No encryption private key found, cannot decrypt");
+                        return;
+                    }
+                };
+
+                // Parse the envelope
+                let envelope: super::crypto::GossipEnvelope = match serde_json::from_str(&envelope_json) {
+                    Ok(env) => env,
+                    Err(e) => {
+                        println!("[IROH] Failed to parse envelope: {}", e);
+                        return;
+                    }
+                };
+
+                // Quick check: does this envelope have any boxes for us?
+                let our_encryption_public_key = match self.get_user_encryption_public_key() {
+                    Some(key) => key,
+                    None => {
+                        println!("[IROH] No encryption public key found");
+                        return;
+                    }
+                };
+
+                if !envelope.might_be_for_us(&our_encryption_public_key) {
+                    // Not for us - but cached for relay
+                    println!("[IROH] Envelope not for us, cached for relay");
+                    return;
+                }
+
+                // Try to decrypt
+                match envelope.try_decrypt(&our_encryption_public_key, &our_encryption_private_key) {
+                    Some(payload) => {
+                        println!("[IROH] ✓ Successfully decrypted envelope from {}", envelope.sender_public_key);
+
+                        // Process the decrypted content
+                        match payload {
+                            super::crypto::ContentPayload::Post { content, attachments } => {
+                                // Get sender's user_id from their public key
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
+
+                                // Ensure sender exists in database
+                                if let Err(e) = self.db.conn.lock().unwrap().execute(
+                                    "INSERT OR IGNORE INTO users (id, username, public_key, created_at, updated_at)
+                                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                                    rusqlite::params![
+                                        sender_user_id,
+                                        format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
+                                        &envelope.sender_public_key,
+                                        chrono::Utc::now().to_rfc3339(),
+                                        chrono::Utc::now().to_rfc3339()
+                                    ],
+                                ) {
+                                    println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
+                                }
+
+                                // Emit decrypted post to UI
+                                #[derive(serde::Serialize, Clone)]
+                                struct DecryptedPostEvent {
+                                    user_id: super::types::SqliteUuid,
+                                    public_key: String,
+                                    content: String,
+                                    timestamp: i64,
+                                    attachments: Option<Vec<super::types::MediaAttachmentWithData>>,
+                                }
+
+                                let _ = self.app_handle.emit(
+                                    "sealed-post-received",
+                                    DecryptedPostEvent {
+                                        user_id: sender_user_id,
+                                        public_key: envelope.sender_public_key.clone(),
+                                        content,
+                                        timestamp: envelope.timestamp,
+                                        attachments,
+                                    },
+                                );
+                                println!("[IROH] ✓ Emitted decrypted post to UI");
+                            }
+                            super::crypto::ContentPayload::DirectMessage { content, thread_id } => {
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
+                                println!("[IROH] Received encrypted DM from {}: {} chars",
+                                    envelope.sender_public_key, content.len());
+
+                                #[derive(serde::Serialize, Clone)]
+                                struct DecryptedDMEvent {
+                                    from_user_id: super::types::SqliteUuid,
+                                    from_public_key: String,
+                                    content: String,
+                                    thread_id: Option<super::types::SqliteUuid>,
+                                    timestamp: i64,
+                                }
+
+                                let _ = self.app_handle.emit(
+                                    "sealed-dm-received",
+                                    DecryptedDMEvent {
+                                        from_user_id: sender_user_id,
+                                        from_public_key: envelope.sender_public_key.clone(),
+                                        content,
+                                        thread_id,
+                                        timestamp: envelope.timestamp,
+                                    },
+                                );
+                            }
+                            _ => {
+                                println!("[IROH] Received other sealed content type");
+                            }
+                        }
+                    }
+                    None => {
+                        // Couldn't decrypt - this shouldn't happen if might_be_for_us returned true
+                        println!("[IROH] Failed to decrypt envelope (hint matched but decryption failed)");
+                    }
+                }
+            }
+
+            P2PMessage::FriendRequest {
                 from_public_key,
                 from_user_id,
+                from_display_name,
                 from_node_id,
                 from_relay_url,
                 to_public_key,
                 timestamp: _,
             } => {
-                println!("[IROH] Received FriendAdded from {}", from_public_key);
+                println!("[IROH] Received FriendRequest from {} ({}) (global mesh)", from_display_name, from_public_key);
 
-                // Verify this message is intended for us
+                // GLOBAL MESH: Filter messages - only process if intended for us
                 if to_public_key != self.public_key {
-                    println!("[IROH] FriendAdded not for us (to: {}), ignoring", to_public_key);
+                    // Not for us - ignore (in global mesh, everyone sees everything)
                     return;
                 }
 
@@ -1864,27 +1683,30 @@ impl IrohNetwork {
                     return;
                 }
 
-                println!("[IROH] Auto-adding friend {} for bidirectional friendship", from_public_key);
+                println!("[IROH] Processing friend request from {} ({})", from_display_name, from_public_key);
 
-                // 1. Ensure the friend user exists in database
+                // 1. Ensure the friend user exists in database with their actual display name
+                // Use INSERT OR REPLACE to update display name if user already exists with stub name
                 if let Err(e) = self.db.conn.lock().unwrap().execute(
-                    "INSERT OR IGNORE INTO users (id, username, public_key, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO users (id, username, public_key, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(id) DO UPDATE SET username = excluded.username, updated_at = excluded.updated_at",
                     rusqlite::params![
                         from_user_id,
-                        format!("User_{}", &from_public_key[..8]),
+                        &from_display_name,
                         &from_public_key,
                         chrono::Utc::now().to_rfc3339(),
                         chrono::Utc::now().to_rfc3339()
                     ],
                 ) {
-                    println!("[IROH] Warning: Failed to create friend user: {}", e);
+                    println!("[IROH] Warning: Failed to create/update friend user: {}", e);
                 }
 
-                // 2. Create friendship in database
+                // 2. Create incoming friend request in database (status = 'pending')
+                // User must accept this request before friendship is established
                 if let Err(e) = self.db.conn.lock().unwrap().execute(
                     "INSERT OR IGNORE INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at, iroh_node_id, friend_relay_url)
-                     VALUES (?1, ?2, ?3, 'accepted', ?3, ?4, ?5, ?6, ?7)",
+                     VALUES (?1, ?2, ?3, 'pending', ?3, ?4, ?5, ?6, ?7)",
                     rusqlite::params![
                         super::types::SqliteUuid::new(),
                         self.user_id,
@@ -1895,14 +1717,19 @@ impl IrohNetwork {
                         &from_relay_url,
                     ],
                 ) {
-                    println!("[IROH] Warning: Failed to create friendship: {}", e);
+                    println!("[IROH] Warning: Failed to create friend request: {}", e);
                 } else {
-                    println!("[IROH] ✓ Bidirectional friendship created with {}", from_public_key);
+                    println!("[IROH] ✓ Incoming friend request created from {}", from_public_key);
                 }
 
+                // Emit event to UI so it can show the pending request
+                let _ = self.app_handle.emit("friend-request-received", serde_json::json!({
+                    "from_user_id": from_user_id.to_string(),
+                    "from_public_key": from_public_key,
+                    "from_node_id": from_node_id,
+                }));
+
                 // 3. Add friend's node address to endpoint for direct connection
-                // Note: Topic subscription will happen automatically on next app restart
-                // when iroh_initialize loads friends from database
                 if let Ok(peer_node_id) = from_node_id.parse::<iroh::NodeId>() {
                     if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
                         let node_addr = iroh::NodeAddr::from_parts(
@@ -1920,10 +1747,107 @@ impl IrohNetwork {
                             }
                         }
                         drop(endpoint_guard);
+
+                        // CRITICAL FIX: Schedule resubscription to global topic WITH the requester as bootstrap
+                        // This forms the gossip mesh bidirectionally - both sides see NeighborUp
+                        // Uses schedule_resubscribe_with_bootstrap to avoid Send-safety issues
+                        println!("[IROH] Scheduling resubscription with requester as bootstrap...");
+                        self.schedule_resubscribe_with_bootstrap(peer_node_id);
                     }
                 }
 
-                println!("[IROH] ✓ Bidirectional friendship fully established!");
+                println!("[IROH] ✓ Friend request received, waiting for user to accept");
+            }
+
+            P2PMessage::FriendAccepted {
+                from_user_id,
+                from_public_key,
+                from_display_name,
+                from_node_id,
+                from_relay_url,
+                to_public_key,
+            } => {
+                println!("[IROH] Received FriendAccepted from {} ({}) (global mesh)", from_display_name, from_public_key);
+
+                // GLOBAL MESH: Filter messages - only process if intended for us
+                if to_public_key != self.public_key {
+                    // Not for us - ignore (in global mesh, everyone sees everything)
+                    return;
+                }
+
+                // Skip if from ourselves
+                if from_public_key == self.public_key {
+                    println!("[IROH] FriendAccepted from ourselves, ignoring");
+                    return;
+                }
+
+                // Update the friend's display name in case they have a real name now (was previously a stub)
+                if let Err(e) = self.db.conn.lock().unwrap().execute(
+                    "UPDATE users SET username = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![
+                        &from_display_name,
+                        chrono::Utc::now().to_rfc3339(),
+                        from_user_id,
+                    ],
+                ) {
+                    println!("[IROH] Warning: Failed to update friend display name: {}", e);
+                } else {
+                    println!("[IROH] Updated friend display name to {}", from_display_name);
+                }
+
+                // Update our pending outgoing request to accepted
+                // Also save their node_id and relay_url for reconnection
+                let now = chrono::Utc::now().to_rfc3339();
+                if let Err(e) = self.db.conn.lock().unwrap().execute(
+                    "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1, iroh_node_id = ?4, friend_relay_url = ?5
+                     WHERE user_id = ?2 AND friend_user_id = ?3 AND status = 'pending'",
+                    rusqlite::params![
+                        &now,
+                        self.user_id,
+                        from_user_id,
+                        &from_node_id,
+                        &from_relay_url,
+                    ],
+                ) {
+                    println!("[IROH] Warning: Failed to update friend request to accepted: {}", e);
+                } else {
+                    println!("[IROH] ✓ Friend request accepted by {}, peer info saved", from_public_key);
+                }
+
+                // Emit event to UI so it can refresh the friends list
+                let _ = self.app_handle.emit("friend-accepted", serde_json::json!({
+                    "from_user_id": from_user_id.to_string(),
+                    "from_public_key": from_public_key,
+                }));
+
+                // Add their node address to endpoint for direct connection
+                if let Ok(peer_node_id) = from_node_id.parse::<iroh::NodeId>() {
+                    if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
+                        let node_addr = iroh::NodeAddr::from_parts(
+                            peer_node_id,
+                            Some(relay_url_parsed.into()),
+                            vec![],
+                        );
+
+                        let endpoint_guard = self.endpoint.lock().await;
+                        if let Some(endpoint) = endpoint_guard.as_ref() {
+                            if let Err(e) = endpoint.add_node_addr(node_addr) {
+                                println!("[IROH] Warning: Failed to add friend's node address: {}", e);
+                            } else {
+                                println!("[IROH] ✓ Added friend's node address to endpoint");
+                            }
+                        }
+                        drop(endpoint_guard);
+
+                        // CRITICAL FIX: Schedule resubscription to global topic WITH the accepter as bootstrap
+                        // This ensures gossip mesh is properly formed for both directions
+                        // Uses schedule_resubscribe_with_bootstrap to avoid Send-safety issues
+                        println!("[IROH] Scheduling resubscription with accepter as bootstrap...");
+                        self.schedule_resubscribe_with_bootstrap(peer_node_id);
+                    }
+                }
+
+                println!("[IROH] ✓ Friendship fully established with {}!", from_public_key);
             }
 
             P2PMessage::Heartbeat { node_id, timestamp: _ } => {
@@ -1971,10 +1895,10 @@ impl IrohNetwork {
                             }
                             drop(endpoint_guard);
 
-                            // Try to resend
+                            // Try to resend via global mesh
                             match serde_json::from_str::<P2PMessage>(&pending_msg.content_json) {
                                 Ok(message) => {
-                                    match self.publish_message(&format!("cipher/user/{}", self.public_key), message).await {
+                                    match self.publish_message(CONTENT_TOPIC, message).await {
                                         Ok(_) => {
                                             println!(
                                                 "[QUEUE] ✓ Successfully resent message (ID: {})",
@@ -2034,32 +1958,11 @@ impl IrohNetwork {
         }
     }
 
-    /// Queue a message for offline delivery (called when offline)
-    pub async fn queue_message_for_delivery(
-        &self,
-        message: P2PMessage,
-    ) -> Result<(), String> {
-        let content_json =
-            serde_json::to_string(&message).map_err(|e| format!("Serialization failed: {}", e))?;
-
-        let message_type = match message {
-            P2PMessage::Post { .. } => "post",
-            P2PMessage::DirectMessage { .. } => "message",
-            P2PMessage::FriendAdded { .. } => "friend_added",
-            _ => "other",
-        };
-
-        self.db
-            .queue_pending_message(self.user_id, message_type, &content_json, 5)
-            .map_err(|e| format!("Failed to queue message: {}", e))?;
-
-        Ok(())
-    }
-
     /// Helper to clone fields for background tasks
     fn clone_for_background(&self) -> Self {
         IrohNetwork {
             user_id: self.user_id,
+            display_name: self.display_name.clone(),
             public_key: self.public_key.clone(),
             device_id: self.device_id.clone(),
             endpoint: self.endpoint.clone(),
@@ -2069,9 +1972,38 @@ impl IrohNetwork {
             connected_peers: self.connected_peers.clone(),
             peer_retry_counts: self.peer_retry_counts.clone(),
             peer_heartbeats: self.peer_heartbeats.clone(),
+            pending_subscriptions: self.pending_subscriptions.clone(),
             device_seed: self.device_seed,
             app_handle: self.app_handle.clone(),
             db: self.db.clone(),
+        }
+    }
+
+    /// Queue a topic subscription to be processed in background
+    /// This is used when we can't call subscribe_topic directly (e.g., from spawned tasks)
+    #[allow(dead_code)]
+    pub async fn queue_topic_subscription(&self, topic: String) {
+        let mut pending = self.pending_subscriptions.lock().await;
+        if !pending.contains(&topic) {
+            println!("[IROH] Queuing topic subscription: {}", topic);
+            pending.push(topic);
+        }
+    }
+
+    /// Process any pending topic subscriptions
+    async fn process_pending_subscriptions(&self) {
+        let topics_to_subscribe: Vec<String> = {
+            let mut pending = self.pending_subscriptions.lock().await;
+            std::mem::take(&mut *pending)
+        };
+
+        for topic in topics_to_subscribe {
+            println!("[IROH] Processing pending subscription: {}", topic);
+            if let Err(e) = self.subscribe_topic(&topic).await {
+                println!("[IROH] Warning: Failed to subscribe to queued topic {}: {}", topic, e);
+            } else {
+                println!("[IROH] ✓ Subscribed to queued topic: {}", topic);
+            }
         }
     }
 
@@ -2109,17 +2041,97 @@ impl IrohNetwork {
         }
     }
 
+    /// Get current user's encryption public key from database
+    fn get_user_encryption_public_key(&self) -> Option<String> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT encryption_public_key FROM users WHERE id = ?1",
+            rusqlite::params![self.user_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    /// Get current user's encryption private key from database
+    fn get_user_encryption_private_key(&self) -> Option<String> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT encryption_private_key FROM users WHERE id = ?1",
+            rusqlite::params![self.user_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    /// Get friend encryption public keys for creating sealed envelopes
+    pub fn get_friend_encryption_public_keys(&self) -> Vec<String> {
+        let conn = self.db.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT u.encryption_public_key FROM users u
+             INNER JOIN p2p_connections p ON u.id = p.friend_user_id
+             WHERE p.user_id = ?1 AND p.status = 'accepted' AND u.encryption_public_key IS NOT NULL"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        let result: Vec<String> = match stmt.query_map(rusqlite::params![self.user_id], |row| row.get(0)) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => vec![],
+        };
+        result
+    }
+
     /// Get connection status
     pub async fn get_connection_status(&self) -> Result<serde_json::Value, String> {
         let endpoint_guard = self.endpoint.lock().await;
-        let has_endpoint = endpoint_guard.is_some();
+        let (has_endpoint, node_id, relay_url) = if let Some(endpoint) = endpoint_guard.as_ref() {
+            let node_id = endpoint.node_id().to_string();
+            // home_relay() returns Watcher<Option<RelayUrl>>
+            // Watcher.get() returns Result<Option<RelayUrl>, Disconnected>
+            let relay_url = endpoint
+                .home_relay()
+                .get()
+                .ok()
+                .flatten()
+                .map(|url| url.to_string())
+                .unwrap_or_default();
+            (true, node_id, relay_url)
+        } else {
+            (false, String::new(), String::new())
+        };
         drop(endpoint_guard);
 
-        let connected_count = self.connected_peers.lock().await.len();
+        // connected_peers is a HashSet, use .iter() not .keys()
+        let connected_peers = self.connected_peers.lock().await;
+        let connected_count = connected_peers.len();
+        let peer_ids: Vec<String> = connected_peers.iter().map(|k| k.to_string()).collect();
+        drop(connected_peers);
+
+        // Get subscribed topics
+        let topics_guard = self.topics.lock().await;
+        let subscribed_topics: Vec<String> = topics_guard.keys().cloned().collect();
+        let topic_count = subscribed_topics.len();
+        drop(topics_guard);
+
+        // Get active peers (peers with recent heartbeats) - use peer_heartbeats field
+        let heartbeats_guard = self.peer_heartbeats.lock().await;
+        let active_peers: Vec<String> = heartbeats_guard.keys().map(|k| k.to_string()).collect();
+        drop(heartbeats_guard);
 
         Ok(serde_json::json!({
             "listening": has_endpoint,
             "connected_peers": connected_count,
+            "node_id": node_id,
+            "public_key": self.public_key,
+            "device_id": self.device_id,
+            "relay_url": relay_url,
+            "topic_count": topic_count,
+            "subscribed_topics": subscribed_topics,
+            "peer_ids": peer_ids,
+            "active_peers": active_peers,
         }))
     }
 
@@ -2135,6 +2147,9 @@ impl IrohNetwork {
             loop {
                 interval.tick().await;
 
+                // Process any pending topic subscriptions from message handlers
+                network.process_pending_subscriptions().await;
+
                 // Get our node_id
                 let endpoint_guard = network.endpoint.lock().await;
                 if let Some(endpoint) = endpoint_guard.as_ref() {
@@ -2147,8 +2162,8 @@ impl IrohNetwork {
                         timestamp: chrono::Utc::now().timestamp(),
                     };
 
-                    // Send to cipher/presence topic
-                    if let Err(e) = network.publish_message("cipher/presence", heartbeat).await {
+                    // Send to global content topic
+                    if let Err(e) = network.publish_message(CONTENT_TOPIC, heartbeat).await {
                         println!("[HEARTBEAT] Failed to send heartbeat: {}", e);
                     } else {
                         println!("[HEARTBEAT] ✓ Sent heartbeat");
@@ -2170,14 +2185,14 @@ impl IrohNetwork {
             // Wait a bit for initialization
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
-            let mut interval = tokio::time::Duration::from_secs(30);
+            let interval = tokio::time::Duration::from_secs(30);
             let heartbeat_timeout = std::time::Duration::from_secs(45);
 
             loop {
                 tokio::time::sleep(interval).await;
 
                 let now = std::time::Instant::now();
-                let mut heartbeats = network.peer_heartbeats.lock().await;
+                let heartbeats = network.peer_heartbeats.lock().await;
                 let connected_peers = network.connected_peers.lock().await.clone();
                 drop(connected_peers);
 

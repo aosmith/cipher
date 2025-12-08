@@ -15,6 +15,7 @@ impl Database {
     /// Generate a deterministic salt for key derivation based on username
     /// This ensures the same username always produces the same salt,
     /// which is required for multi-device sync with same credentials
+    #[allow(dead_code)]
     pub fn generate_kdf_salt_from_username(username: &str) -> [u8; 32] {
         use sha2::Digest;
         let mut hasher = Sha256::new();
@@ -302,4 +303,189 @@ impl Database {
     pub fn validate_recovery_phrase(phrase: &str) -> bool {
         Mnemonic::parse(phrase).is_ok()
     }
+
+    /// Securely hash recovery phrase using Argon2id
+    /// This is the primary method for hashing recovery phrases in production
+    pub fn hash_recovery_phrase_secure(phrase: &str) -> Result<String, String> {
+        use argon2::{
+            password_hash::{PasswordHasher, SaltString},
+            Argon2, Algorithm, Params, Version
+        };
+
+        // Use Argon2id with production-ready parameters
+        // Memory: 64MB, Iterations: 3, Parallelism: 4
+        // These parameters provide good security while maintaining reasonable performance
+        let argon2 = Argon2::new(
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::new(65536, 3, 4, None)
+                .map_err(|e| format!("Failed to create Argon2 params: {}", e))?
+        );
+
+        // Generate a cryptographically secure random salt
+        let salt = SaltString::generate(&mut rand::thread_rng());
+
+        // Hash the recovery phrase
+        argon2.hash_password(phrase.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+            .map_err(|e| format!("Failed to hash recovery phrase: {}", e))
+    }
+
+    /// Verify a recovery phrase against a stored hash
+    #[allow(dead_code)]
+    pub fn verify_recovery_phrase(phrase: &str, hash: &str) -> Result<bool, String> {
+        use argon2::{Argon2, PasswordHash, PasswordVerifier};
+
+        let parsed_hash = PasswordHash::new(hash)
+            .map_err(|e| format!("Invalid hash format: {}", e))?;
+
+        Ok(Argon2::default()
+            .verify_password(phrase.as_bytes(), &parsed_hash)
+            .is_ok())
+    }
+}
+
+// Standalone crypto functions for testing
+#[allow(dead_code)]
+pub fn derive_private_key_from_recovery_phrase(recovery_phrase: &str) -> Result<String, String> {
+    // Derive the signing key from recovery phrase
+    let (signing_seed, _) = Database::derive_keys_from_recovery_phrase(recovery_phrase)?;
+    let private_key_b64 = general_purpose::STANDARD.encode(signing_seed);
+    Ok(private_key_b64)
+}
+
+#[allow(dead_code)]
+pub fn get_public_key_from_private(private_key_b64: &str) -> String {
+    // Decode the private key
+    let private_key_bytes = general_purpose::STANDARD
+        .decode(private_key_b64)
+        .unwrap_or_else(|_| vec![]);
+
+    if private_key_bytes.len() != 32 {
+        return String::new();
+    }
+
+    let signing_key = SigningKey::from_bytes(&<[u8; 32]>::try_from(private_key_bytes).unwrap());
+    let verifying_key = signing_key.verifying_key();
+    general_purpose::STANDARD.encode(verifying_key.as_bytes())
+}
+
+#[allow(dead_code)]
+pub fn encrypt_for_user(
+    data: &[u8],
+    recipient_public_key: &str,
+    sender_private_key: &str,
+) -> Result<Vec<u8>, String> {
+    // Use X25519 for encryption
+    let recipient_pub_bytes = general_purpose::STANDARD
+        .decode(recipient_public_key)
+        .map_err(|_| "Invalid recipient public key")?;
+
+    let sender_priv_bytes = general_purpose::STANDARD
+        .decode(sender_private_key)
+        .map_err(|_| "Invalid sender private key")?;
+
+    if recipient_pub_bytes.len() != 32 || sender_priv_bytes.len() != 32 {
+        return Err("Invalid key length".to_string());
+    }
+
+    let recipient_public = X25519PublicKey::from(<[u8; 32]>::try_from(recipient_pub_bytes).unwrap());
+    let sender_private = StaticSecret::from(<[u8; 32]>::try_from(sender_priv_bytes).unwrap());
+
+    // Perform ECDH
+    let shared_secret = sender_private.diffie_hellman(&recipient_public);
+
+    // Use shared secret as encryption key
+    let key = Key::from_slice(shared_secret.as_bytes());
+    let cipher = XChaCha20Poly1305::new(key);
+
+    // Generate nonce
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let mut nonce_bytes = [0u8; 24];
+    rng.fill(&mut nonce_bytes);
+    let nonce = XNonce::from_slice(&nonce_bytes);
+
+    // Encrypt
+    let ciphertext = cipher
+        .encrypt(nonce, data)
+        .map_err(|_| "Encryption failed")?;
+
+    // Combine nonce + ciphertext
+    let mut result = Vec::new();
+    result.extend_from_slice(&nonce_bytes);
+    result.extend_from_slice(&ciphertext);
+
+    Ok(result)
+}
+
+#[allow(dead_code)]
+pub fn decrypt_from_user(
+    encrypted_data: &[u8],
+    sender_public_key: &str,
+    recipient_private_key: &str,
+) -> Result<Vec<u8>, String> {
+    if encrypted_data.len() < 24 {
+        return Err("Invalid encrypted data".to_string());
+    }
+
+    // Extract nonce and ciphertext
+    let nonce_bytes = &encrypted_data[..24];
+    let ciphertext = &encrypted_data[24..];
+
+    let sender_pub_bytes = general_purpose::STANDARD
+        .decode(sender_public_key)
+        .map_err(|_| "Invalid sender public key")?;
+
+    let recipient_priv_bytes = general_purpose::STANDARD
+        .decode(recipient_private_key)
+        .map_err(|_| "Invalid recipient private key")?;
+
+    if sender_pub_bytes.len() != 32 || recipient_priv_bytes.len() != 32 {
+        return Err("Invalid key length".to_string());
+    }
+
+    let sender_public = X25519PublicKey::from(<[u8; 32]>::try_from(sender_pub_bytes).unwrap());
+    let recipient_private = StaticSecret::from(<[u8; 32]>::try_from(recipient_priv_bytes).unwrap());
+
+    // Perform ECDH
+    let shared_secret = recipient_private.diffie_hellman(&sender_public);
+
+    // Use shared secret as decryption key
+    let key = Key::from_slice(shared_secret.as_bytes());
+    let cipher = XChaCha20Poly1305::new(key);
+    let nonce = XNonce::from_slice(nonce_bytes);
+
+    // Decrypt
+    cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| "Decryption failed".to_string())
+}
+
+#[allow(dead_code)]
+pub fn generate_recovery_phrase() -> String {
+    Database::generate_recovery_phrase(None).unwrap_or_else(|_| String::new())
+}
+
+#[allow(dead_code)]
+pub fn hash_recovery_phrase(phrase: &str) -> String {
+    // Use the secure method from Database
+    Database::hash_recovery_phrase_secure(phrase)
+        .unwrap_or_else(|_| {
+            // Fallback to SHA256 if Argon2 fails (should rarely happen)
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            hasher.update(phrase.as_bytes());
+            hex::encode(hasher.finalize())
+        })
+}
+
+#[allow(dead_code)]
+pub fn sign_message(message: &str, private_key: &str) -> Result<String, String> {
+    Database::sign_message(message, private_key)
+}
+
+#[allow(dead_code)]
+pub fn verify_signature(message: &str, signature: &str, public_key: &str) -> Result<bool, String> {
+    Ok(Database::verify_signature(message, signature, public_key))
 }
