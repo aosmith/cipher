@@ -50,7 +50,6 @@ package-lock.json
 
 # Release binaries - too large for git, use GitHub Releases instead
 # Keep README.md and CHANGELOG.md for documentation
-/releases/**/*.apk
 /releases/**/*.dmg
 /releases/**/*.deb
 /releases/**/*.rpm
