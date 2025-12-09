@@ -11,7 +11,7 @@ Cipher is a Tauri/Rust end-to-end encrypted peer-to-peer social network. Local-f
 - Iroh for P2P networking (DHT discovery, gossip protocol)
 - Glassmorphism UI with dark theme
 
-**Current Version**: 0.0.3
+**Current Version**: 0.0.4
 
 ## Key Commands
 

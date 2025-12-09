@@ -168,6 +168,8 @@ pub struct IrohNetwork {
     peer_retry_counts: Arc<Mutex<HashMap<iroh::NodeId, PeerRetryState>>>, // Exponential backoff tracking
     peer_heartbeats: Arc<Mutex<HashMap<iroh::NodeId, std::time::Instant>>>, // Last heartbeat time from each peer
     pending_subscriptions: Arc<Mutex<Vec<String>>>, // Topics queued for subscription (processed in background)
+    /// Recent message hashes for deduplication (gossip protocols may deliver same message via multiple paths)
+    recent_message_hashes: Arc<Mutex<std::collections::HashSet<u64>>>,
     device_seed: [u8; 32], // Device keypair seed for DHT publishing
     app_handle: tauri::AppHandle,
     db: Database,
@@ -203,6 +205,7 @@ impl IrohNetwork {
             peer_retry_counts: Arc::new(Mutex::new(HashMap::new())),
             peer_heartbeats: Arc::new(Mutex::new(HashMap::new())),
             pending_subscriptions: Arc::new(Mutex::new(Vec::new())),
+            recent_message_hashes: Arc::new(Mutex::new(std::collections::HashSet::new())),
             device_seed,
             app_handle,
             db,
@@ -499,10 +502,28 @@ impl IrohNetwork {
                                                     );
                                                     self.add_connected_peer(peer_id).await;
 
-                                                    // CRITICAL FIX: Join the gossip mesh with this peer!
-                                                    // QUIC connection is established but gossip mesh needs to be formed
-                                                    println!("[IROH] Joining gossip mesh with friend {}...", peer_id);
-                                                    self.schedule_resubscribe_with_bootstrap(peer_id);
+                                                    // Hand off QUIC connection to gossip protocol.
+                                                    // Two-step process for OUTGOING connections:
+                                                    // 1. handle_connection() - tells gossip about the connection
+                                                    // 2. join_peers() - actively joins the peer to our topic mesh
+                                                    let gossip_guard = self.gossip.lock().await;
+                                                    if let Some(gossip) = gossip_guard.as_ref() {
+                                                        match gossip.handle_connection(conn).await {
+                                                            Ok(_) => println!("[IROH] [OK] Handed connection to gossip for friend {}", peer_id),
+                                                            Err(e) => println!("[IROH] Warning: Failed to hand connection to gossip: {}", e),
+                                                        }
+                                                    }
+                                                    drop(gossip_guard);
+
+                                                    // CRITICAL: Call join_peers() to form gossip mesh
+                                                    let topics_guard = self.topics.lock().await;
+                                                    if let Some(subscription) = topics_guard.get(CONTENT_TOPIC) {
+                                                        match subscription.gossip_sender.join_peers(vec![peer_id]).await {
+                                                            Ok(_) => println!("[IROH] [OK] Joined gossip mesh with friend {}", peer_id),
+                                                            Err(e) => println!("[IROH] Warning: Failed to join gossip mesh with friend: {}", e),
+                                                        }
+                                                    }
+                                                    drop(topics_guard);
 
                                                     reconnected = true;
                                                     break;
@@ -582,6 +603,14 @@ impl IrohNetwork {
         topic: &str,
         peer_node_ids: Vec<String>,
     ) -> Result<(), String> {
+        // CRITICAL: Check if already subscribed to prevent duplicate handlers
+        // Each subscription spawns a new stream handler task - if we subscribe twice,
+        // we get two handlers processing every message, causing duplicates in the UI.
+        if self.is_topic_subscribed(topic).await {
+            println!("[IROH-GOSSIP] Topic '{}' already subscribed - skipping to prevent duplicate handlers", topic);
+            return Ok(());
+        }
+
         let gossip_guard = self.gossip.lock().await;
         let gossip = gossip_guard.as_ref().ok_or("Gossip not initialized")?;
 
@@ -738,6 +767,31 @@ impl IrohNetwork {
                         Some(Ok(GossipNetEvent::Gossip(gossip_event))) => {
                             match gossip_event {
                                 GossipEvent::Received(msg) => {
+                                    // DEDUPLICATION: Hash the message content and check if we've seen it recently
+                                    // Gossip protocols may deliver the same message via multiple paths
+                                    use std::hash::{Hash, Hasher};
+                                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                    msg.content.hash(&mut hasher);
+                                    msg.delivered_from.hash(&mut hasher);
+                                    let msg_hash = hasher.finish();
+
+                                    {
+                                        let mut seen = self.recent_message_hashes.lock().await;
+                                        if seen.contains(&msg_hash) {
+                                            // Already processed this message - skip
+                                            continue;
+                                        }
+                                        seen.insert(msg_hash);
+                                        // Limit cache size to prevent memory growth (keep last 1000 messages)
+                                        if seen.len() > 1000 {
+                                            // Clear oldest entries (simple approach - just clear half)
+                                            let to_remove: Vec<_> = seen.iter().take(500).cloned().collect();
+                                            for hash in to_remove {
+                                                seen.remove(&hash);
+                                            }
+                                        }
+                                    }
+
                                     println!("[IROH-STREAM] 📬 Received gossip message on topic '{}'", topic);
                                     println!("[IROH-STREAM]   From: {}", msg.delivered_from);
                                     println!("[IROH-STREAM]   Content size: {} bytes", msg.content.len());
@@ -781,16 +835,18 @@ impl IrohNetwork {
                                 }
                                 GossipEvent::NeighborDown(peer) => {
                                     println!("[IROH-STREAM] 📴 Neighbor DOWN on topic '{}': {}", topic, peer);
-                                    // NOTE: Don't immediately remove peer - gossip neighbor relationships can be
-                                    // temporarily disrupted while QUIC connection remains valid. The heartbeat
-                                    // monitor will remove stale peers after 45s timeout if they're truly gone.
-                                    println!("[IROH-STREAM]   Gossip neighbor down, but keeping peer in connected set (heartbeat monitor will remove if truly stale)");
-
-                                    // CRITICAL FIX: Schedule reconnection attempt after a delay
-                                    // When NeighborDown fires immediately after connection, we need to retry
-                                    // This is essential for friend request acceptance to work
-                                    println!("[IROH-STREAM]   Scheduling reconnection attempt in 2 seconds...");
-                                    self.schedule_resubscribe_with_bootstrap(peer);
+                                    // NeighborDown indicates the gossip neighbor relationship has ended.
+                                    // This is a GOSSIP-LAYER event, not a connection loss!
+                                    // The underlying QUIC connection may still be fine.
+                                    //
+                                    // DO NOT remove from connected_peers here!
+                                    // The gossip protocol (HyParView) will naturally re-establish
+                                    // neighbor relationships through its own mechanism.
+                                    // Removing from connected_peers triggers the discovery loop
+                                    // to create new subscriptions, causing duplicate handlers
+                                    // and an infinite NeighborDown loop.
+                                    println!("[IROH-STREAM]   Gossip layer event - connection may still be active");
+                                    println!("[IROH-STREAM]   NOT removing from connected set - let gossip protocol handle reconnection");
                                 }
                             }
                         }
@@ -847,101 +903,85 @@ impl IrohNetwork {
         }
     }
 
-    /// Resubscribe to a topic with bootstrap peers
-    /// This is the CORRECT way to join an existing gossip mesh:
-    /// 1. Unsubscribe from topic (removes isolated root subscription)
-    /// 2. Subscribe WITH bootstrap peer (joins their existing mesh)
+    /// Join gossip mesh with a specific bootstrap peer (ATOMIC - no message loss)
     ///
-    /// Note: join_peers() doesn't work for merging isolated root nodes!
-    pub async fn resubscribe_with_bootstrap(
-        &self,
-        topic: &str,
-        bootstrap_peers: Vec<iroh::NodeId>,
-    ) -> Result<(), String> {
-        println!(
-            "[IROH-RESUB] Resubscribing to '{}' with {} bootstrap peers...",
-            topic,
-            bootstrap_peers.len()
-        );
-        for (i, peer_id) in bootstrap_peers.iter().enumerate() {
-            println!("[IROH-RESUB]   Bootstrap peer {}: {}", i + 1, peer_id);
-        }
+    /// This creates a NEW subscription with the peer as bootstrap, then atomically
+    /// replaces the old subscription. Messages can still be published during the transition.
+    ///
+    /// NOTE: This function is currently unused. The gossip protocol naturally forms
+    /// neighbor relationships through handle_connection(). Only use this if you need
+    /// to force a specific peer as bootstrap (e.g., for initial network setup).
+    /// Calling this repeatedly causes duplicate stream handlers and NeighborDown loops.
+    #[allow(dead_code)]
+    pub async fn join_gossip_mesh_with_peer(&self, bootstrap_peer: iroh::NodeId) -> Result<(), String> {
+        println!("[IROH-JOIN] Joining gossip mesh with peer: {} (atomic)", bootstrap_peer);
 
-        // Step 1: Unsubscribe from existing isolated subscription
-        if self.is_topic_subscribed(topic).await {
-            println!("[IROH-RESUB] Topic already subscribed - unsubscribing first...");
-            self.unsubscribe_topic(topic).await?;
-            // Give gossip protocol time to clean up the old subscription
-            // This ensures the protocol layer fully tears down before we re-subscribe
-            println!("[IROH-RESUB] Waiting 1s for gossip protocol to fully clean up...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        }
+        let gossip_guard = self.gossip.lock().await;
+        let gossip = gossip_guard.as_ref().ok_or("Gossip not initialized")?;
 
-        // Step 2: Subscribe with bootstrap peers to join their mesh
-        println!("[IROH-RESUB] Subscribing WITH bootstrap (will wait for mesh formation)...");
-        match self.subscribe_with_bootstrap(topic, bootstrap_peers).await {
-            Ok(_) => {
-                println!("[IROH-RESUB] [OK] Successfully resubscribed to '{}'", topic);
-                println!("[IROH-RESUB]   Now part of the same gossip mesh as bootstrap peers");
-                Ok(())
+        // Convert topic string to TopicId
+        let topic_id = iroh_gossip::proto::TopicId::from(Self::topic_to_id(CONTENT_TOPIC));
+
+        // Step 1: Create NEW subscription with bootstrap peer FIRST (before removing old one)
+        // This ensures we always have an active subscription
+        println!("[IROH-JOIN] Creating new subscription with peer {} as bootstrap...", bootstrap_peer);
+
+        // Give gossip protocol time to use the QUIC connection we already have
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let gossip_topic = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            gossip.subscribe_and_join(topic_id, vec![bootstrap_peer])
+        ).await {
+            Ok(Ok(result)) => {
+                println!("[IROH-JOIN] [OK] New subscription created successfully!");
+                result
             }
-            Err(e) => {
-                // CRITICAL: Recovery subscription when bootstrap join fails!
-                // Without this, the node is left unsubscribed and cannot send/receive messages
-                println!("[IROH-RESUB] ⚠ Bootstrap join failed: {}", e);
-                println!("[IROH-RESUB] Attempting fallback to root node subscription...");
-
-                // Fall back to a simple root node subscription so we can at least send messages
-                match self.subscribe_with_bootstrap(topic, vec![]).await {
-                    Ok(_) => {
-                        println!("[IROH-RESUB] [OK] Fallback subscription created (isolated root node)");
-                        println!("[IROH-RESUB]   Messages can be sent, but mesh not formed with peer");
-                        // Return Ok since we recovered - the node can still function
-                        Ok(())
-                    }
-                    Err(e2) => {
-                        println!("[IROH-RESUB] ✗ Fallback subscription also failed: {}", e2);
-                        // Return the original error since both attempts failed
-                        Err(e)
-                    }
-                }
+            Ok(Err(e)) => {
+                println!("[IROH-JOIN] Warning: subscribe_and_join failed: {}", e);
+                // Keep old subscription, just return error
+                return Err(format!("Failed to join with peer: {}", e));
             }
-        }
-    }
+            Err(_) => {
+                println!("[IROH-JOIN] Warning: subscribe_and_join timed out after 10s");
+                // Keep old subscription, just return error
+                return Err("Timeout joining gossip mesh".to_string());
+            }
+        };
 
-    /// Schedule resubscription with bootstrap peer in a spawned task
-    /// Use this from within handle_message or other spawned contexts
-    /// to avoid Send-safety issues with nested async spawns
-    /// Includes a delay and rate-limiting to prevent infinite loops
-    pub fn schedule_resubscribe_with_bootstrap(&self, bootstrap_peer: iroh::NodeId) {
+        drop(gossip_guard);
+
+        // Step 2: Split the new subscription
+        let (gossip_sender, gossip_receiver) = gossip_topic.split();
+        let (broadcast_tx, broadcast_rx) = tokio::sync::mpsc::unbounded_channel();
+        let gossip_sender_arc = Arc::new(gossip_sender);
+
+        // Step 3: ATOMIC swap - replace old subscription with new one
+        println!("[IROH-JOIN] Atomically replacing old subscription...");
+        {
+            let mut topics_guard = self.topics.lock().await;
+            // Remove old subscription (if any) - the old stream handler will terminate
+            topics_guard.remove(CONTENT_TOPIC);
+            // Insert new subscription
+            topics_guard.insert(CONTENT_TOPIC.to_string(), TopicSubscription {
+                broadcast_tx,
+                gossip_sender: gossip_sender_arc.clone(),
+            });
+        }
+
+        // Step 4: Start new message handler for the new subscription
         let network = Arc::new(self.clone_for_background());
-        let peer_id = bootstrap_peer;
-
+        let topic_str = CONTENT_TOPIC.to_string();
+        let gossip_sender_for_handler = gossip_sender_arc.clone();
         tokio::spawn(async move {
-            // Wait before attempting reconnection to avoid rapid cycling
-            println!("[IROH-RESUB-SPAWN] Waiting 3s before reconnection attempt with: {}", peer_id);
-            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-            // Check if we're still subscribed - if not, we've been shutdown
-            if !network.is_topic_subscribed(CONTENT_TOPIC).await {
-                println!("[IROH-RESUB-SPAWN] Topic no longer subscribed, skipping reconnection");
-                return;
-            }
-
-            println!("[IROH-RESUB-SPAWN] Attempting resubscription with bootstrap peer: {}", peer_id);
-
-            match network.resubscribe_with_bootstrap(CONTENT_TOPIC, vec![peer_id]).await {
-                Ok(_) => {
-                    println!("[IROH-RESUB-SPAWN] [OK] Successfully joined gossip mesh with {}!", peer_id);
-                    network.add_connected_peer(peer_id).await;
-                }
-                Err(e) => {
-                    println!("[IROH-RESUB-SPAWN] Warning: Failed to resubscribe with {}: {}", peer_id, e);
-                    // Still add as connected peer for tracking
-                    network.add_connected_peer(peer_id).await;
-                }
-            }
+            network
+                .handle_topic_stream(topic_str, gossip_sender_for_handler, gossip_receiver, broadcast_rx)
+                .await;
         });
+
+        self.add_connected_peer(bootstrap_peer).await;
+        println!("[IROH-JOIN] [OK] Successfully joined gossip mesh with peer {}!", bootstrap_peer);
+        Ok(())
     }
 
     /// Ensure global content topic is subscribed
@@ -1104,6 +1144,14 @@ impl IrohNetwork {
                         for (node_id_str, relay_url) in peer_addrs {
                             match node_id_str.parse::<iroh::NodeId>() {
                                 Ok(peer_id) => {
+                                    // CRITICAL: Skip already-connected peers!
+                                    // Reconnecting to already-connected peers causes gossip state
+                                    // to be reset, breaking message delivery.
+                                    if network.is_peer_connected(peer_id).await {
+                                        // Peer is already connected and in gossip mesh - skip
+                                        continue;
+                                    }
+
                                     let endpoint_guard = network.endpoint.lock().await;
                                     if let Some(endpoint) = endpoint_guard.as_ref() {
                                         let our_node_id = endpoint.node_id();
@@ -1168,6 +1216,9 @@ impl IrohNetwork {
                                                     conn.remote_address()
                                                 );
                                                 drop(endpoint_guard);
+
+                                                // Check if already connected - skip if so
+                                                let was_connected = network.is_peer_connected(peer_id).await;
                                                 network.add_connected_peer(peer_id).await;
 
                                                 // RESET backoff counter on successful connection
@@ -1178,19 +1229,52 @@ impl IrohNetwork {
                                                 }
                                                 drop(retry_states);
 
-                                                // CRITICAL FIX: Join the gossip mesh with this peer!
-                                                // QUIC connection is established but gossip mesh needs to be formed
-                                                // This resubscribes to the topic with the peer as bootstrap
-                                                println!("[IROH-DISCOVERY] Joining gossip mesh with peer {}...", peer_id);
-                                                network.schedule_resubscribe_with_bootstrap(peer_id);
+                                                // Hand off the QUIC connection to gossip protocol.
+                                                // This allows the gossip layer to use this connection
+                                                // for neighbor communication.
+                                                //
+                                                // Two-step process for OUTGOING connections:
+                                                // 1. handle_connection() - tells gossip about the connection
+                                                // 2. join_peers() - actively joins the peer to our topic mesh
+                                                //
+                                                // handle_connection() alone only works for INCOMING connections.
+                                                // For OUTGOING connections, we also need join_peers() to form
+                                                // the gossip neighbor relationship.
+                                                let gossip_guard = network.gossip.lock().await;
+                                                if let Some(gossip) = gossip_guard.as_ref() {
+                                                    match gossip.handle_connection(conn).await {
+                                                        Ok(_) => println!("[IROH-DISCOVERY] [OK] Handed connection to gossip layer for peer {}", peer_id),
+                                                        Err(e) => println!("[IROH-DISCOVERY] Warning: Failed to hand connection to gossip: {}", e),
+                                                    }
+                                                }
+                                                drop(gossip_guard);
 
-                                                // RETRY pending messages when connection restored
-                                                println!("[IROH-DISCOVERY] Connection restored - attempting to resend pending messages...");
-                                                network.retry_pending_messages().await;
+                                                // CRITICAL: Call join_peers() on the gossip sender to form mesh
+                                                // This is required for OUTGOING connections to establish
+                                                // a gossip neighbor relationship. Without this, messages
+                                                // won't be exchanged even though QUIC is connected.
+                                                let topics_guard = network.topics.lock().await;
+                                                if let Some(subscription) = topics_guard.get(CONTENT_TOPIC) {
+                                                    match subscription.gossip_sender.join_peers(vec![peer_id]).await {
+                                                        Ok(_) => println!("[IROH-DISCOVERY] [OK] Joined gossip mesh with peer {}", peer_id),
+                                                        Err(e) => println!("[IROH-DISCOVERY] Warning: Failed to join gossip mesh with peer: {}", e),
+                                                    }
+                                                }
+                                                drop(topics_guard);
 
-                                                // CRITICAL FIX: Check if this peer initiated a friendship we've accepted
-                                                // If so, resend FriendAccepted to ensure they know we accepted
-                                                network.resend_friend_accepted_if_needed().await;
+                                                if !was_connected {
+                                                    println!("[IROH-DISCOVERY] NEW peer {} connected!", peer_id);
+
+                                                    // RETRY pending messages when connection restored
+                                                    println!("[IROH-DISCOVERY] Connection restored - attempting to resend pending messages...");
+                                                    network.retry_pending_messages().await;
+
+                                                    // CRITICAL FIX: Check if this peer initiated a friendship we've accepted
+                                                    // If so, resend FriendAccepted to ensure they know we accepted
+                                                    network.resend_friend_accepted_if_needed().await;
+                                                } else {
+                                                    println!("[IROH-DISCOVERY] Peer {} already tracked - refreshed gossip connection", peer_id);
+                                                }
 
                                                 break;
                                             }
@@ -1269,47 +1353,29 @@ impl IrohNetwork {
                     );
                 }
 
-                // CRITICAL: Add the full NodeAddr to the endpoint
-                // This gives Iroh all the info it needs: NodeId + relay URLs + direct addresses
-                println!("[IROH] Adding peer NodeAddr to endpoint and connecting...");
+                // NOTE: We received this Presence message via gossip, which means we ALREADY have
+                // a working gossip connection to this peer. Calling endpoint.connect() would be
+                // redundant and might interfere with the gossip protocol's connection management.
+                //
+                // Instead, we just:
+                // 1. Add the peer's node address to the endpoint (for better routing info)
+                // 2. Track the peer as connected (since we received their presence via gossip)
+                // 3. Store their info in the database for future reconnection
+
+                // Add node address for better routing info
                 let endpoint_guard = self.endpoint.lock().await;
                 if let Some(endpoint) = endpoint_guard.as_ref() {
-                    // Add the full addressing information
                     if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
                         println!("[IROH] Warning: Failed to add node address: {}", e);
+                    } else {
+                        println!("[IROH] [OK] Added peer's node address to endpoint");
                     }
-
-                    // Now connect using the ALPN
-                    match endpoint.connect(peer_node_id, iroh_gossip::ALPN).await {
-                        Ok(connection) => {
-                            println!("[IROH] [OK] Successfully connected to peer {}", peer_node_id);
-                            println!("[IROH]   Remote address: {:?}", connection.remote_address());
-                            drop(connection); // Connection stays open in endpoint
-                            drop(endpoint_guard);
-                            // Track this connection
-                            self.add_connected_peer(peer_node_id).await;
-
-                            // CRITICAL FIX: Join the gossip mesh with this peer!
-                            // QUIC connection is established but gossip mesh needs to be formed
-                            // Without this, messages won't be delivered even though we're "connected"
-                            println!("[IROH] Joining gossip mesh with peer {}...", peer_node_id);
-                            self.schedule_resubscribe_with_bootstrap(peer_node_id);
-
-                            // CRITICAL: Announce presence immediately so peer knows we're connected
-                            // Without this, presence announcement waits up to 30 seconds
-                            // causing asymmetric connection state
-                            println!("[IROH] Announcing presence immediately after QR code connection...");
-                            let _ = self.announce_presence().await;
-                        }
-                        Err(e) => {
-                            println!("[IROH] Failed to connect to peer {}: {}", peer_node_id, e);
-                            drop(endpoint_guard);
-                            return;
-                        }
-                    }
-                } else {
-                    drop(endpoint_guard);
                 }
+                drop(endpoint_guard);
+
+                // Track this peer as connected (we received their presence via gossip!)
+                self.add_connected_peer(peer_node_id).await;
+                println!("[IROH] [OK] Peer {} is connected via gossip mesh (received their presence)", peer_node_id);
 
                 // Create friendship in database (CRITICAL for friends list to work!)
                 // Skip if this is the same user (different device)
@@ -2088,11 +2154,12 @@ impl IrohNetwork {
                         }
                         drop(endpoint_guard);
 
-                        // CRITICAL FIX: Schedule resubscription to global topic WITH the accepter as bootstrap
-                        // This ensures gossip mesh is properly formed for both directions
-                        // Uses schedule_resubscribe_with_bootstrap to avoid Send-safety issues
-                        println!("[IROH] Scheduling resubscription with accepter as bootstrap...");
-                        self.schedule_resubscribe_with_bootstrap(peer_node_id);
+                        // NOTE: No resubscription needed! The gossip protocol handles mesh formation
+                        // automatically. Since we received this FriendAccepted message via gossip,
+                        // we already have a working gossip connection to the peer.
+                        // Resubscribing would tear down that connection and cause message loss.
+                        println!("[IROH] [OK] Friend's node address added - gossip mesh already established");
+                        self.add_connected_peer(peer_node_id).await;
                     }
                 }
 
@@ -2305,6 +2372,7 @@ impl IrohNetwork {
             peer_retry_counts: self.peer_retry_counts.clone(),
             peer_heartbeats: self.peer_heartbeats.clone(),
             pending_subscriptions: self.pending_subscriptions.clone(),
+            recent_message_hashes: self.recent_message_hashes.clone(),
             device_seed: self.device_seed,
             app_handle: self.app_handle.clone(),
             db: self.db.clone(),
@@ -2361,6 +2429,12 @@ impl IrohNetwork {
                 peers.len()
             );
         }
+    }
+
+    /// Check if a peer is in the connected set
+    pub async fn is_peer_connected(&self, node_id: iroh::NodeId) -> bool {
+        let peers = self.connected_peers.lock().await;
+        peers.contains(&node_id)
     }
 
     /// Clear all connected peers (used on initialization)

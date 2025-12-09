@@ -479,20 +479,18 @@ pub async fn iroh_add_friend_by_public_key(
                 }
                 drop(endpoint_guard);
 
-                // Let the gossip protocol handle the connection internally
-                // Don't call endpoint.connect() directly - let subscribe_and_join() do it
-                // The gossip protocol needs to establish the connection itself for proper
-                // neighbor relationship formation
-                println!("[IROH] Forming gossip mesh with new friend as bootstrap...");
-                println!("[IROH]   Letting gossip protocol handle connection establishment");
-                match network.resubscribe_with_bootstrap(CONTENT_TOPIC, vec![peer_node_id]).await {
+                // CRITICAL: Join the gossip mesh with the new friend as bootstrap
+                // This is the INITIATING device (scanning QR code), so we need to actively
+                // join the peer's gossip mesh via subscribe_and_join().
+                // Simply calling endpoint.connect() doesn't establish gossip neighbor relationship!
+                println!("[IROH] Joining gossip mesh with new friend as bootstrap...");
+                match network.join_gossip_mesh_with_peer(peer_node_id).await {
                     Ok(_) => {
                         println!("[IROH] ✓ Successfully joined gossip mesh with friend!");
-                        network.add_connected_peer(peer_node_id).await;
                     }
                     Err(e) => {
-                        println!("[IROH] Warning: Gossip mesh formation failed: {}", e);
-                        println!("[IROH]   Friend may not be online, will retry via presence discovery");
+                        println!("[IROH] Warning: Failed to join gossip mesh: {}", e);
+                        println!("[IROH]   Friend may not be online, will retry via discovery loop");
                     }
                 }
 
