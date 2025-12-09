@@ -45,8 +45,12 @@ package-lock.json
 /src-tauri/target/
 # Note: Cargo.lock IS committed for applications (not ignored)
 
-# Tauri generated mobile projects (regenerated via cargo tauri android/ios init)
-/gen/
+# Tauri generated mobile projects - track project files, ignore build artifacts
+/gen/android/app/build/
+/gen/android/.gradle/
+/gen/apple/build/
+/gen/apple/Pods/
+/gen/apple/Externals/
 
 # Release binaries - too large for git, use GitHub Releases instead
 # Keep README.md and CHANGELOG.md for documentation
