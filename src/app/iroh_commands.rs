@@ -214,19 +214,82 @@ pub async fn iroh_publish_post(
     let friend_encryption_keys = network.get_friend_encryption_public_keys();
 
     if friend_encryption_keys.is_empty() {
-        // No friends yet - still create post locally but don't broadcast encrypted content
-        // Just broadcast the legacy Post message for backwards compatibility
-        println!("[IROH] No friends with encryption keys - sending legacy Post");
-        let message = P2PMessage::Post {
+        // No friends with encryption keys yet - use PostWithBlobs via gossip
+        // ALL posts use iroh-blobs connection for NAT hole-punching benefit
+        println!("[IROH] No friends with encryption keys - broadcasting PostWithBlobs to gossip mesh");
+
+        // Get our node ID for blob fetching
+        let node_id = network.get_node_id().await;
+
+        // Store each attachment as a blob and create references
+        let mut blob_refs = Vec::new();
+        if let Some(ref atts) = attachments {
+            println!(
+                "[IROH] Post has {} attachments, storing as blobs via iroh",
+                atts.len()
+            );
+
+            for attachment in atts {
+                // Decode base64 data
+                let data = match base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &attachment.data,
+                ) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        println!(
+                            "[IROH] Failed to decode attachment {}: {}",
+                            attachment.id, e
+                        );
+                        continue;
+                    }
+                };
+
+                println!(
+                    "[IROH] Storing attachment {} ({} bytes) as blob...",
+                    attachment.id, data.len()
+                );
+
+                // Store as blob
+                match network.store_blob(data).await {
+                    Ok(hash) => {
+                        let blob_ref = crate::app::types::BlobReference {
+                            id: attachment.id,
+                            file_type: attachment.file_type.clone(),
+                            file_size: attachment.file_size,
+                            blob_hash: hex::encode(hash.as_bytes()),
+                            downloaded: true, // We're the sender, blob is local
+                        };
+                        blob_refs.push(blob_ref);
+                        println!(
+                            "[IROH] [OK] Stored attachment {} as blob {}",
+                            attachment.id,
+                            hex::encode(hash.as_bytes())
+                        );
+                    }
+                    Err(e) => {
+                        println!(
+                            "[IROH] Failed to store attachment {} as blob: {}",
+                            attachment.id, e
+                        );
+                    }
+                }
+            }
+        }
+
+        // Always use PostWithBlobs - iroh connection handles hole-punching
+        let message = P2PMessage::PostWithBlobs {
             user_id: network.user_id,
             public_key: network.public_key.clone(),
+            node_id,
             content,
             timestamp: chrono::Utc::now().timestamp(),
             device_id: network.device_id.clone(),
-            attachments,
+            blob_refs,
         };
+
         network.publish_message(CONTENT_TOPIC, message).await?;
-        return Ok("Post published (legacy)".to_string());
+        return Ok("Post published (PostWithBlobs)".to_string());
     }
 
     // PHASE 2: Create sealed envelope with boxes for each friend
@@ -550,4 +613,86 @@ pub async fn iroh_add_friend_by_public_key(
     println!("[IROH]   User ID: {}", friend_user_id);
 
     Ok(friend_public_key)
+}
+
+/// Read blob data from the local store by hash
+/// Used by frontend to fetch attachment data for PostWithBlobs messages
+/// The blob must have been downloaded already (via PostWithBlobs handler)
+///
+/// Note: Uses spawn_blocking to work around the non-Send AsyncSliceReader issue
+#[tauri::command]
+pub async fn iroh_read_blob(blob_hash: String) -> Result<String, String> {
+    let network = IROH_NETWORK
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("Iroh not initialized")?
+        .clone();
+
+    // Parse blob hash
+    let hash_bytes = hex::decode(&blob_hash)
+        .map_err(|e| format!("Invalid blob hash: {}", e))?;
+
+    if hash_bytes.len() != 32 {
+        return Err("Blob hash must be 32 bytes".to_string());
+    }
+
+    let mut hash_arr = [0u8; 32];
+    hash_arr.copy_from_slice(&hash_bytes);
+    let hash = iroh_blobs::Hash::from_bytes(hash_arr);
+
+    // Use a oneshot channel to communicate with a LocalSet task
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let blobs_arc = network.blobs.clone();
+
+    // Spawn a new runtime in a blocking task to run the non-Send future
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build runtime");
+
+        let local = tokio::task::LocalSet::new();
+        let result = local.block_on(&rt, async move {
+            use iroh_blobs::store::bao_tree::io::fsm::AsyncSliceReader;
+            use iroh_blobs::store::{Map, MapEntry};
+
+            let blobs_guard = blobs_arc.lock().await;
+            let blobs = blobs_guard
+                .as_ref()
+                .ok_or_else(|| "Blob store not initialized".to_string())?;
+
+            // Read from store
+            let store = blobs.store();
+            let entry = store
+                .get(&hash)
+                .await
+                .map_err(|e| format!("Failed to get blob entry: {}", e))?
+                .ok_or_else(|| format!("Blob not found in store"))?;
+
+            let size = entry.size().value() as usize;
+
+            let mut reader = entry
+                .data_reader()
+                .await
+                .map_err(|e| format!("Failed to get data reader: {}", e))?;
+
+            let data = reader
+                .read_at(0, size)
+                .await
+                .map_err(|e| format!("Failed to read blob: {}", e))?;
+
+            // Return as base64
+            let base64_data = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &data,
+            );
+
+            Ok::<String, String>(base64_data)
+        });
+
+        let _ = tx.send(result);
+    });
+
+    rx.await.map_err(|_| "Blob read task failed".to_string())?
 }

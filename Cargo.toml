@@ -1,6 +1,6 @@
 [package]
 name = "cipher-social"
-version = "0.0.4"
+version = "0.0.5"
 description = "Cipher - End-to-End Encrypted P2P Social Network"
 authors = ["Cipher Team"]
 license = "AGPL-3.0"
@@ -52,8 +52,10 @@ urlencoding = "2.1"
 tokio = { version = "1.0", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
 # Iroh for simpler, more reliable P2P networking with DHT discovery
 # Enable discovery-pkarr-dht for BitTorrent Mainline DHT (decentralized peer discovery)
-iroh = { version = "0.30", features = ["discovery-pkarr-dht"] }
-iroh-gossip = "0.30"
+iroh = { version = "0.35", features = ["discovery-pkarr-dht"] }
+iroh-gossip = "0.35"
+iroh-blobs = "0.35"
+iroh-io = "0.6"
 futures = "0.3"
 uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
 url = "2.4"

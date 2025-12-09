@@ -10,6 +10,7 @@
 
 use bytes::Bytes;
 use iroh::protocol::Router;
+use iroh_blobs::net_protocol::Blobs;
 use iroh_gossip::ALPN;
 use iroh_gossip::net::{Event as GossipNetEvent, GossipEvent, GossipReceiver, GossipSender};
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,7 @@ use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
 
-use super::types::{MediaAttachmentWithData, SqliteUuid};
+use super::types::{BlobReference, MediaAttachmentWithData, SqliteUuid};
 use super::Database;
 
 /// Global topic for all encrypted content
@@ -60,6 +61,7 @@ pub enum P2PMessage {
         device_id: Option<String>,
     },
     /// Post from a user (legacy - kept for backwards compatibility)
+    /// WARNING: Do not use for posts with attachments - use PostWithBlobs instead
     Post {
         user_id: SqliteUuid,
         public_key: String, // Sender's public key for user record creation
@@ -67,6 +69,18 @@ pub enum P2PMessage {
         timestamp: i64,
         device_id: Option<String>,
         attachments: Option<Vec<MediaAttachmentWithData>>,
+    },
+    /// Post with blob-based attachments (for large files like images)
+    /// Attachments are stored in iroh-blobs and referenced by hash
+    /// Receiver fetches blobs directly from sender's node
+    PostWithBlobs {
+        user_id: SqliteUuid,
+        public_key: String,
+        node_id: String,              // Sender's NodeId for blob fetching
+        content: String,
+        timestamp: i64,
+        device_id: Option<String>,
+        blob_refs: Vec<BlobReference>, // References to blobs in sender's store
     },
     /// PHASE 2: Sealed envelope containing encrypted content
     /// All nodes receive this, but only friends can decrypt
@@ -163,6 +177,9 @@ pub struct IrohNetwork {
     pub endpoint: Arc<Mutex<Option<iroh::Endpoint>>>,
     pub gossip: Arc<Mutex<Option<iroh_gossip::net::Gossip>>>,
     pub router: Arc<Mutex<Option<Router>>>,
+    /// Blob store for large file transfers (images, attachments)
+    /// Uses iroh-blobs for efficient P2P transfer over existing NAT-traversed connections
+    pub blobs: Arc<Mutex<Option<Blobs<iroh_blobs::store::mem::Store>>>>,
     topics: Arc<Mutex<HashMap<String, TopicSubscription>>>,
     connected_peers: Arc<Mutex<std::collections::HashSet<iroh::NodeId>>>,
     peer_retry_counts: Arc<Mutex<HashMap<iroh::NodeId, PeerRetryState>>>, // Exponential backoff tracking
@@ -200,6 +217,7 @@ impl IrohNetwork {
             endpoint: Arc::new(Mutex::new(None)),
             gossip: Arc::new(Mutex::new(None)),
             router: Arc::new(Mutex::new(None)),
+            blobs: Arc::new(Mutex::new(None)),
             topics: Arc::new(Mutex::new(HashMap::new())),
             connected_peers: Arc::new(Mutex::new(std::collections::HashSet::new())),
             peer_retry_counts: Arc::new(Mutex::new(HashMap::new())),
@@ -321,20 +339,25 @@ impl IrohNetwork {
 
         println!("[IROH] Gossip protocol initialized");
 
-        // Create Router to accept incoming gossip connections AND direct presence connections
-        // NOTE: Direct presence uses a separate ALPN to bypass the gossip protocol
+        // Create blob store for large file transfers (images, attachments)
+        // Uses in-memory store - blobs are ephemeral and fetched on-demand from peers
+        let blobs = Blobs::memory().build(&endpoint);
+        println!("[IROH] Blob store initialized (in-memory)");
+
+        // Create Router to accept incoming gossip AND blob connections
+        // Both protocols share the same NAT-traversed QUIC connection
         let router = Router::builder(endpoint.clone())
             .accept(ALPN, gossip.clone())
-            .spawn()
-            .await
-            .map_err(|e| format!("Failed to create router: {}", e))?;
+            .accept(iroh_blobs::ALPN, blobs.clone())
+            .spawn();
 
-        println!("[IROH] Router created - accepting gossip connections");
+        println!("[IROH] Router created - accepting gossip and blob connections");
         println!("[IROH] Direct RPC acceptor ready for incoming Presence handshakes");
 
-        // Store endpoint, gossip, and router
+        // Store endpoint, gossip, blobs, and router
         *self.endpoint.lock().await = Some(endpoint.clone());
         *self.gossip.lock().await = Some(gossip);
+        *self.blobs.lock().await = Some(blobs);
         *self.router.lock().await = Some(router);
 
         // Query for peer NodeIds from database (other devices with same user)
@@ -406,7 +429,7 @@ impl IrohNetwork {
                         match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
                             Ok(conn) => {
                                 println!("[IROH] [OK] CONNECTED to peer {}!", peer_id);
-                                println!("[IROH]   Remote address: {:?}", conn.remote_address());
+                                println!("[IROH]   Connected to peer: {}", peer_id);
                                 // Track this connection
                                 self.add_connected_peer(peer_id).await;
                                 // Keep this peer for gossip bootstrap
@@ -497,8 +520,8 @@ impl IrohNetwork {
                                                 Ok(conn) => {
                                                     println!("[IROH] [OK] RECONNECTED to friend {} on attempt {}!", peer_id, attempt);
                                                     println!(
-                                                        "[IROH]   Remote address: {:?}",
-                                                        conn.remote_address()
+                                                        "[IROH]   Connected to peer: {}",
+                                                        peer_id
                                                     );
                                                     self.add_connected_peer(peer_id).await;
 
@@ -804,6 +827,7 @@ impl IrohNetwork {
                                                     P2PMessage::Presence { .. } => "Presence",
                                                     P2PMessage::DirectMessage { .. } => "DirectMessage",
                                                     P2PMessage::Post { .. } => "Post",
+                                                    P2PMessage::PostWithBlobs { .. } => "PostWithBlobs",
                                                     P2PMessage::SealedEnvelope { .. } => "SealedEnvelope",
                                                     P2PMessage::FriendRequest { .. } => "FriendRequest",
                                                     P2PMessage::FriendAccepted { .. } => "FriendAccepted",
@@ -822,10 +846,21 @@ impl IrohNetwork {
                                 GossipEvent::Joined(peers) => {
                                     println!("[IROH-STREAM] 🤝 Peer(s) joined topic '{}': {:?}", topic, peers);
                                     // Add all joined peers to connected_peers (they're in our gossip mesh!)
-                                    for peer_id in peers {
+                                    for peer_id in peers.clone() {
                                         println!("[IROH-STREAM]   Adding peer to connected_peers: {}", peer_id);
                                         self.add_connected_peer(peer_id).await;
                                     }
+
+                                    // CRITICAL: When peers join us, we also need to join them back
+                                    // This ensures bidirectional gossip mesh connectivity
+                                    let topics_guard = self.topics.lock().await;
+                                    if let Some(subscription) = topics_guard.get(&topic) {
+                                        match subscription.gossip_sender.join_peers(peers.clone()).await {
+                                            Ok(_) => println!("[IROH-STREAM] [OK] Joined gossip mesh back with {} peer(s)", peers.len()),
+                                            Err(e) => println!("[IROH-STREAM] Warning: Failed to join back: {}", e),
+                                        }
+                                    }
+                                    drop(topics_guard);
                                 }
                                 GossipEvent::NeighborUp(peer) => {
                                     println!("[IROH-STREAM] 📡 Neighbor UP on topic '{}': {}", topic, peer);
@@ -1035,6 +1070,117 @@ impl IrohNetwork {
         Ok(())
     }
 
+    // ============================================================================
+    // BLOB TRANSFER FUNCTIONS
+    // For large files (images, attachments) that exceed gossip message size limits
+    // ============================================================================
+
+    /// Store a blob locally and return its hash
+    /// The hash can then be shared via gossip, and peers can fetch the blob directly
+    pub async fn store_blob(&self, data: Vec<u8>) -> Result<iroh_blobs::Hash, String> {
+        use iroh_blobs::store::Store;
+
+        let blobs_guard = self.blobs.lock().await;
+        let blobs = blobs_guard
+            .as_ref()
+            .ok_or("Blob store not initialized")?;
+
+        let store = blobs.store();
+        let bytes = Bytes::from(data);
+
+        // Import the bytes into the store
+        let tag = store
+            .import_bytes(bytes, iroh_blobs::BlobFormat::Raw)
+            .await
+            .map_err(|e| format!("Failed to import blob: {}", e))?;
+
+        let hash = *tag.hash();
+        println!("[IROH-BLOBS] Stored blob with hash: {}", hash);
+
+        Ok(hash)
+    }
+
+    /// Fetch a blob from a peer by hash
+    /// Uses the existing NAT-traversed connection for efficient transfer
+    pub async fn fetch_blob(
+        &self,
+        hash: iroh_blobs::Hash,
+        from_node_id: iroh::NodeId,
+    ) -> Result<Vec<u8>, String> {
+        use iroh_blobs::store::bao_tree::io::fsm::AsyncSliceReader;
+        use iroh_blobs::store::{Map, MapEntry};
+
+        let blobs_guard = self.blobs.lock().await;
+        let blobs = blobs_guard
+            .as_ref()
+            .ok_or("Blob store not initialized")?;
+
+        println!("[IROH-BLOBS] Fetching blob {} from peer {}", hash, from_node_id);
+
+        // Queue the download request
+        let downloader = blobs.downloader();
+        let request = iroh_blobs::downloader::DownloadRequest::new(
+            iroh_blobs::HashAndFormat::raw(hash),
+            vec![from_node_id],
+        );
+
+        // Start the download and wait for completion
+        let handle = downloader.queue(request).await;
+        handle
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
+
+        println!("[IROH-BLOBS] Download complete, reading blob from store");
+
+        // Read the blob from local store
+        let store = blobs.store();
+        let entry = store
+            .get(&hash)
+            .await
+            .map_err(|e| format!("Failed to get blob entry: {}", e))?
+            .ok_or("Blob not found in store after download")?;
+
+        let size = entry.size().value() as usize;
+
+        // Use read_at to read all data at once (returns Send-safe future)
+        let mut reader = entry
+            .data_reader()
+            .await
+            .map_err(|e| format!("Failed to get data reader: {}", e))?;
+
+        // Read all bytes using read_at (0 to size)
+        let data = reader
+            .read_at(0, size)
+            .await
+            .map_err(|e| format!("Failed to read blob: {}", e))?;
+
+        println!("[IROH-BLOBS] [OK] Fetched blob, size: {} bytes (expected: {})", data.len(), size);
+        Ok(data.to_vec())
+    }
+
+    /// Check if we have a blob locally
+    pub async fn has_blob(&self, hash: iroh_blobs::Hash) -> bool {
+        use iroh_blobs::store::Map;
+
+        let blobs_guard = self.blobs.lock().await;
+        if let Some(blobs) = blobs_guard.as_ref() {
+            let store = blobs.store();
+            store.get(&hash).await.ok().flatten().is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Get our node ID as a string for blob fetching
+    pub async fn get_node_id(&self) -> String {
+        let endpoint_guard = self.endpoint.lock().await;
+        if let Some(endpoint) = endpoint_guard.as_ref() {
+            endpoint.node_id().to_string()
+        } else {
+            String::new()
+        }
+    }
+
     /// Announce presence to the global mesh
     pub async fn announce_presence(&self) -> Result<(), String> {
         // Get our full NodeAddr from the endpoint
@@ -1212,8 +1358,8 @@ impl IrohNetwork {
                                                     peer_id
                                                 );
                                                 println!(
-                                                    "[IROH-DISCOVERY]   Via: {:?}",
-                                                    conn.remote_address()
+                                                    "[IROH-DISCOVERY]   Connected to: {}",
+                                                    peer_id
                                                 );
                                                 drop(endpoint_guard);
 
@@ -1761,6 +1907,147 @@ impl IrohNetwork {
                             timestamp,
                             device_id: device_id.clone(),
                             attachments: attachments.clone(),
+                        },
+                    },
+                );
+            }
+
+            P2PMessage::PostWithBlobs {
+                user_id,
+                ref public_key,
+                ref node_id,
+                ref content,
+                timestamp,
+                ref device_id,
+                ref blob_refs,
+            } => {
+                println!(
+                    "[IROH] Received PostWithBlobs from user {} ({}) with {} blob refs",
+                    user_id, public_key, blob_refs.len()
+                );
+
+                // Skip our own posts (they're already in DB)
+                if public_key == &self.public_key {
+                    println!("[IROH] Skipping own post with blobs");
+                    return;
+                }
+
+                // CRITICAL: Ensure the sender's user record exists before saving post
+                if let Err(e) = self.db.conn.lock().unwrap().execute(
+                    "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        user_id,
+                        format!("User_{}", &public_key[..8.min(public_key.len())]),
+                        public_key,
+                        chrono::Utc::now().to_rfc3339(),
+                        chrono::Utc::now().to_rfc3339()
+                    ],
+                ) {
+                    println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
+                } else {
+                    println!("[IROH] [OK] Ensured user record exists for post sender");
+                }
+
+                // Parse sender's NodeId for blob fetching
+                let sender_node_id = match node_id.parse::<iroh::NodeId>() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[IROH] Failed to parse sender NodeId '{}': {}", node_id, e);
+                        // Emit post without attachments
+                        let _ = self.app_handle.emit(
+                            "p2p-message-received",
+                            serde_json::json!({
+                                "message": {
+                                    "type": "Post",
+                                    "user_id": user_id,
+                                    "public_key": public_key,
+                                    "content": content,
+                                    "timestamp": timestamp,
+                                    "device_id": device_id,
+                                    "attachments": []
+                                }
+                            }),
+                        );
+                        return;
+                    }
+                };
+
+                // Download blobs and wait for completion before emitting to UI
+                // This ensures the frontend can read the blobs immediately
+                let mut downloaded_blob_refs = blob_refs.clone();
+
+                let blobs_guard = self.blobs.lock().await;
+                if let Some(blobs) = blobs_guard.as_ref() {
+                    let downloader = blobs.downloader();
+
+                    for (idx, blob_ref) in blob_refs.iter().enumerate() {
+                        println!(
+                            "[IROH] Downloading blob {} ({} bytes) from {}",
+                            blob_ref.blob_hash, blob_ref.file_size, node_id
+                        );
+
+                        // Parse blob hash
+                        let hash = match hex::decode(&blob_ref.blob_hash) {
+                            Ok(bytes) if bytes.len() == 32 => {
+                                let mut arr = [0u8; 32];
+                                arr.copy_from_slice(&bytes);
+                                iroh_blobs::Hash::from_bytes(arr)
+                            }
+                            Ok(_) => {
+                                println!("[IROH] Invalid blob hash length for {}", blob_ref.blob_hash);
+                                continue;
+                            }
+                            Err(e) => {
+                                println!("[IROH] Failed to decode blob hash: {}", e);
+                                continue;
+                            }
+                        };
+
+                        // Queue the download and WAIT for it to complete
+                        let request = iroh_blobs::downloader::DownloadRequest::new(
+                            iroh_blobs::HashAndFormat::raw(hash),
+                            vec![sender_node_id],
+                        );
+                        let handle = downloader.queue(request).await;
+
+                        // Wait for download to complete
+                        match handle.await {
+                            Ok(stats) => {
+                                println!(
+                                    "[IROH] Blob {} downloaded successfully ({} bytes received)",
+                                    blob_ref.blob_hash, stats.bytes_read
+                                );
+                                // Mark as downloaded
+                                downloaded_blob_refs[idx].downloaded = true;
+                            }
+                            Err(e) => {
+                                println!("[IROH] Failed to download blob {}: {}", blob_ref.blob_hash, e);
+                                // Keep downloaded = false (default)
+                            }
+                        }
+                    }
+                }
+                drop(blobs_guard);
+
+                // Emit PostWithBlobs to UI with download status
+                // Frontend will only try to read blobs marked as downloaded
+                #[derive(serde::Serialize, Clone)]
+                struct MessageEvent {
+                    message: P2PMessage,
+                }
+
+                let _ = self.app_handle.emit(
+                    "p2p-message-received",
+                    MessageEvent {
+                        message: P2PMessage::PostWithBlobs {
+                            user_id,
+                            public_key: public_key.clone(),
+                            node_id: node_id.clone(),
+                            content: content.clone(),
+                            timestamp,
+                            device_id: device_id.clone(),
+                            blob_refs: downloaded_blob_refs,
                         },
                     },
                 );
@@ -2367,6 +2654,7 @@ impl IrohNetwork {
             endpoint: self.endpoint.clone(),
             gossip: self.gossip.clone(),
             router: self.router.clone(),
+            blobs: self.blobs.clone(),
             topics: self.topics.clone(),
             connected_peers: self.connected_peers.clone(),
             peer_retry_counts: self.peer_retry_counts.clone(),

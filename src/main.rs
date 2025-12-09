@@ -31,8 +31,8 @@ use tauri::Manager;
 // P2P networking commands (Iroh-based)
 use app::iroh_commands::{
     iroh_add_friend_by_public_key, iroh_announce_presence, iroh_generate_invite,
-    iroh_get_connection_status, iroh_initialize, iroh_publish_post, iroh_send_message,
-    iroh_shutdown, iroh_subscribe_friend,
+    iroh_get_connection_status, iroh_initialize, iroh_publish_post, iroh_read_blob,
+    iroh_send_message, iroh_shutdown, iroh_subscribe_friend,
 };
 
 // Device management commands
@@ -217,7 +217,8 @@ fn main() {
             iroh_get_connection_status,
             iroh_shutdown,
             iroh_generate_invite,
-            iroh_add_friend_by_public_key
+            iroh_add_friend_by_public_key,
+            iroh_read_blob
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -264,12 +264,21 @@ const P2P = {
                 const { peer_id, message } = event.payload;
 
                 // Handle different message types
-                switch (message.DirectMessage ? 'DirectMessage' : message.Post ? 'Post' : message.Presence ? 'Presence' : null) {
+                const msgType = message.DirectMessage ? 'DirectMessage'
+                    : message.Post ? 'Post'
+                    : message.PostWithBlobs ? 'PostWithBlobs'
+                    : message.Presence ? 'Presence'
+                    : null;
+
+                switch (msgType) {
                     case 'DirectMessage':
                         this.handleIncomingMessage(message.DirectMessage);
                         break;
                     case 'Post':
                         this.handleIncomingPost(message.Post);
+                        break;
+                    case 'PostWithBlobs':
+                        this.handleIncomingPostWithBlobs(message.PostWithBlobs);
                         break;
                     case 'Presence':
                         this.handlePresenceUpdate(message.Presence);
@@ -323,6 +332,70 @@ const P2P = {
             }
         } catch (error) {
             console.error('Error handling incoming post:', error);
+        }
+    },
+
+    // Handle incoming post with blob references (large attachments)
+    async handleIncomingPostWithBlobs(post) {
+        console.log('Handling incoming P2P post with blobs:', post);
+
+        try {
+            // Save the post to database first (without attachments)
+            const savedPost = await TauriAPI.invoke('create_post', {
+                userId: post.user_id,
+                content: post.content,
+                attachments: null
+            });
+
+            console.log('Post saved to database:', savedPost);
+
+            // Fetch blob data for each downloaded attachment and save to database
+            if (post.blob_refs && post.blob_refs.length > 0) {
+                const downloadedBlobs = post.blob_refs.filter(b => b.downloaded);
+                console.log(`Processing ${downloadedBlobs.length}/${post.blob_refs.length} downloaded blob attachments for post ${savedPost.id}`);
+
+                for (const blobRef of downloadedBlobs) {
+                    try {
+                        // BlobReference uses camelCase due to serde rename_all
+                        console.log(`Fetching blob ${blobRef.blobHash} (${blobRef.fileSize} bytes) from local store`);
+
+                        // Fetch the blob data from local store (already downloaded by backend)
+                        const blobData = await TauriAPI.invoke('iroh_read_blob', {
+                            blobHash: blobRef.blobHash
+                        });
+
+                        console.log(`Blob ${blobRef.blobHash} fetched, saving as attachment`);
+
+                        // Save as attachment
+                        await TauriAPI.invoke('upload_media_file', {
+                            fileData: blobData,
+                            filename: 'synced_blob',
+                            fileType: blobRef.fileType,
+                            fileSize: blobRef.fileSize,
+                            postId: savedPost.id
+                        });
+
+                        console.log(`Attachment saved for blob ${blobRef.blobHash}`);
+                    } catch (blobError) {
+                        console.error(`Failed to fetch/save blob ${blobRef.blobHash}:`, blobError);
+                    }
+                }
+
+                // Log any blobs that failed to download
+                const failedBlobs = post.blob_refs.filter(b => !b.downloaded);
+                if (failedBlobs.length > 0) {
+                    console.warn(`${failedBlobs.length} blob(s) failed to download:`, failedBlobs.map(b => b.blobHash));
+                }
+
+                console.log('All blob attachments processed');
+            }
+
+            // Reload posts to show the new content
+            if (typeof loadPosts === 'function') {
+                await loadPosts();
+            }
+        } catch (error) {
+            console.error('Error handling incoming post with blobs:', error);
         }
     },
 

@@ -154,33 +154,18 @@ pub async fn create_post(
     // Clone the network Arc before any await points to avoid holding the lock
     let network_opt = IROH_NETWORK.lock().unwrap().as_ref().cloned();
 
-    if let Some(network) = network_opt {
+    // NOTE: Posts are NOT auto-broadcast here. The frontend should call iroh_publish_post
+    // separately to broadcast via encrypted sealed envelopes. We NEVER send unencrypted
+    // posts over the network.
+    if network_opt.is_some() {
         println!(
-            "[POST-BROADCAST] Auto-broadcasting post {} to P2P network",
+            "[POST-BROADCAST] Post {} created - frontend should call iroh_publish_post to broadcast encrypted",
             post.id
         );
-
-        // Get post attachments from database (if any)
-        let attachments = db.get_post_media(post.id).ok();
-
-        let message = iroh_network::P2PMessage::Post {
-            user_id: network.user_id,
-            public_key: network.public_key.clone(),
-            content: content.clone(),
-            timestamp: chrono::Utc::now().timestamp(),
-            device_id: network.device_id.clone(),
-            attachments,
-        };
-
-        // Broadcast to our own user topic
-        let topic = format!("cipher/user/{}", network.public_key);
-        match network.publish_message(&topic, message).await {
-            Ok(_) => println!("[POST-BROADCAST] [OK] Post broadcast successfully"),
-            Err(e) => println!("[POST-BROADCAST] Warning: Failed to broadcast post: {}", e),
-        }
     } else {
         println!(
-            "[POST-BROADCAST] Warning: Iroh network not initialized - post saved locally only"
+            "[POST-BROADCAST] Post {} created - Iroh network not initialized, saved locally only",
+            post.id
         );
     }
 
