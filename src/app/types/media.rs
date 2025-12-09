@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QrCodeData {
-    pub username: String,
+    pub display_name: String,
     pub public_key: String,
 }
 

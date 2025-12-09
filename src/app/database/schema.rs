@@ -5,7 +5,7 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS users (
             id BLOB PRIMARY KEY,
-            username TEXT NOT NULL,
+            display_name TEXT NOT NULL,
             public_key TEXT UNIQUE,
             private_key TEXT,
             encryption_public_key TEXT,
@@ -165,7 +165,7 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
             creator_id BLOB NOT NULL,
             invite_code TEXT UNIQUE NOT NULL,
             public_key TEXT NOT NULL,
-            username TEXT NOT NULL,
+            display_name TEXT NOT NULL,
             uses_remaining INTEGER NOT NULL DEFAULT 1,
             expires_at TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -346,6 +346,18 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     );
     let _ = conn.execute(
         "ALTER TABLE p2p_connections ADD COLUMN friend_relay_url TEXT",
+        [],
+    );
+
+    // Migration: Rename username to display_name in users table
+    let _ = conn.execute(
+        "ALTER TABLE users RENAME COLUMN username TO display_name",
+        [],
+    );
+
+    // Migration: Rename username to display_name in friend_invites table
+    let _ = conn.execute(
+        "ALTER TABLE friend_invites RENAME COLUMN username TO display_name",
         [],
     );
 

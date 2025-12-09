@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct User {
     pub id: SqliteUuid,
-    pub username: String,
+    pub display_name: String,
     pub public_key: Option<String>,
     #[serde(skip_serializing)] // CRITICAL: Never serialize private keys
     #[allow(dead_code)] // Field is used but not detected by dead code analysis
@@ -37,7 +37,7 @@ pub struct KeyPair {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct NewUser {
-    pub username: String, // Now used as display_name
+    pub display_name: String,
 }
 
 #[derive(Debug, Serialize)]

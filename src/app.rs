@@ -51,7 +51,7 @@ pub async fn create_new_user(
         Ok((user, recovery_phrase)) => {
             println!(
                 "User created successfully: {} with device_id: {:?}",
-                user.username, user.device_id
+                user.display_name, user.device_id
             );
             println!("SECURITY: Recovery phrase generated - must be shown to user ONCE");
             Ok(UserWithRecoveryPhrase {
@@ -87,7 +87,7 @@ pub async fn restore_from_recovery_phrase(
         Ok(user) => {
             println!(
                 "User restored successfully: {} with device_id: {:?}",
-                user.username, user.device_id
+                user.display_name, user.device_id
             );
             Ok(user)
         }
@@ -175,7 +175,7 @@ pub async fn create_post(
         // Broadcast to our own user topic
         let topic = format!("cipher/user/{}", network.public_key);
         match network.publish_message(&topic, message).await {
-            Ok(_) => println!("[POST-BROADCAST] ✓ Post broadcast successfully"),
+            Ok(_) => println!("[POST-BROADCAST] [OK] Post broadcast successfully"),
             Err(e) => println!("[POST-BROADCAST] Warning: Failed to broadcast post: {}", e),
         }
     } else {
@@ -360,15 +360,15 @@ pub async fn reject_friend_request(
     .map_err(|e| e.to_string())
 }
 
-/// Search for friends by username
+/// Search for friends by display name
 /// This only searches within existing friendships for security
 #[tauri::command]
 pub async fn search_friends(
     user_id: SqliteUuid,
-    username: String,
+    display_name: String,
     db: State<'_, Database>,
 ) -> Result<Option<User>, String> {
-    db.find_friend_by_username(user_id, &username)
+    db.find_friend_by_display_name(user_id, &display_name)
         .map_err(|e| e.to_string())
 }
 
@@ -529,22 +529,24 @@ pub fn scan_qr_code_from_image(base64_image: String) -> Result<QrCodeData, Strin
 
 #[tauri::command]
 pub fn parse_qr_code_data(qr_data: String) -> Result<QrCodeData, String> {
-    // Expected format: "cipher://add-friend?username=alice&public_key=abc123..."
+    // Expected format: "cipher://add-friend?display_name=alice&public_key=abc123..."
+    // Also supports legacy format with "username=" for backwards compatibility
     if !qr_data.starts_with("cipher://add-friend?") {
         return Err("Invalid QR code format".to_string());
     }
 
     let query_part = qr_data.strip_prefix("cipher://add-friend?").unwrap();
-    let mut username = None;
+    let mut display_name = None;
     let mut public_key = None;
 
     for param in query_part.split('&') {
         if let Some((key, value)) = param.split_once('=') {
             match key {
-                "username" => {
-                    username = Some(
+                "display_name" | "username" => {
+                    // Support both new "display_name" and legacy "username" parameter
+                    display_name = Some(
                         urlencoding::decode(value)
-                            .map_err(|_| "Invalid username encoding")?
+                            .map_err(|_| "Invalid display_name encoding")?
                             .to_string(),
                     )
                 }
@@ -560,11 +562,11 @@ pub fn parse_qr_code_data(qr_data: String) -> Result<QrCodeData, String> {
         }
     }
 
-    let username = username.ok_or("Missing username in QR code")?;
+    let display_name = display_name.ok_or("Missing display_name in QR code")?;
     let public_key = public_key.ok_or("Missing public key in QR code")?;
 
     Ok(QrCodeData {
-        username,
+        display_name,
         public_key,
     })
 }
@@ -582,17 +584,17 @@ pub async fn generate_friend_qr_code(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "User not found".to_string())?;
 
-    let username = user.username;
+    let display_name = user.display_name;
     let public_key = user
         .public_key
         .ok_or_else(|| "User has no public key".to_string())?;
 
     // Create the cipher://add-friend URL with URL-encoded parameters
-    let encoded_username = urlencoding::encode(&username);
+    let encoded_display_name = urlencoding::encode(&display_name);
     let encoded_public_key = urlencoding::encode(&public_key);
     let friend_url = format!(
-        "cipher://add-friend?username={}&public_key={}",
-        encoded_username, encoded_public_key
+        "cipher://add-friend?display_name={}&public_key={}",
+        encoded_display_name, encoded_public_key
     );
 
     // Generate QR code from the URL
@@ -1047,20 +1049,19 @@ pub async fn export_friends_list(
 
     let mut stmt = conn
         .prepare(
-            "SELECT u.username, u.public_key, u.bio, p.created_at
+            "SELECT u.display_name, u.public_key, u.bio, p.created_at
                   FROM users u
                   JOIN p2p_connections p ON u.id = p.friend_user_id
                   WHERE p.user_id = ?1 AND p.status = 'accepted'
-                  ORDER BY u.username",
+                  ORDER BY u.display_name",
         )
         .map_err(|e| e.to_string())?;
 
     let friends_iter = stmt
         .query_map(params![user_id], |row| {
             Ok(FriendExport {
-                username: row.get(0)?,
+                display_name: row.get(0)?,
                 public_key: row.get(1)?,
-                display_name: Some(row.get::<_, String>(0)?),
                 bio: row.get(2)?,
                 added_at: row.get(3)?,
             })
@@ -1096,14 +1097,14 @@ pub async fn import_friends_list(
     for friend in friends {
         // Check if user exists by public key
         let user_check = conn
-            .prepare("SELECT id, username FROM users WHERE public_key = ?1")
+            .prepare("SELECT id, display_name FROM users WHERE public_key = ?1")
             .unwrap()
             .query_row(params![friend.public_key], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             });
 
         match user_check {
-            Ok((friend_id, existing_username)) => {
+            Ok((friend_id, existing_display_name)) => {
                 // Check if already friends
                 let friend_check = conn
                     .prepare("SELECT COUNT(*) FROM p2p_connections
@@ -1115,7 +1116,7 @@ pub async fn import_friends_list(
                 if friend_check > 0 {
                     result
                         .skipped
-                        .push(format!("{} (already friends)", existing_username));
+                        .push(format!("{} (already friends)", existing_display_name));
                 } else {
                     // Add friendship
                     let insert_result = conn.execute(
@@ -1131,18 +1132,18 @@ pub async fn import_friends_list(
                              VALUES (?1, ?2, 'accepted', ?2, ?3, ?4)",
                             params![friend_id, user_id, now, now],
                         );
-                        result.added.push(existing_username);
+                        result.added.push(existing_display_name);
                     } else {
                         result
                             .errors
-                            .push(format!("{} (database error)", existing_username));
+                            .push(format!("{} (database error)", existing_display_name));
                     }
                 }
             }
             Err(_) => {
                 result.skipped.push(format!(
                     "{} (user not found on this instance)",
-                    friend.username
+                    friend.display_name
                 ));
             }
         }
@@ -1161,7 +1162,7 @@ pub async fn get_recent_contacts(
     let limit = limit.unwrap_or(10);
 
     let mut stmt = conn
-        .prepare("SELECT rc.contact_user_id, u.username, u.public_key, rc.last_interaction, rc.interaction_count
+        .prepare("SELECT rc.contact_user_id, u.display_name, u.public_key, rc.last_interaction, rc.interaction_count
                   FROM recent_contacts rc
                   JOIN users u ON rc.contact_user_id = u.id
                   WHERE rc.user_id = ?1
@@ -1173,7 +1174,7 @@ pub async fn get_recent_contacts(
         .query_map(params![user_id, limit], |row| {
             Ok(RecentContact {
                 user_id: row.get(0)?,
-                username: row.get(1)?,
+                display_name: row.get(1)?,
                 public_key: row.get(2)?,
                 last_interaction: row.get(3)?,
                 interaction_count: row.get(4)?,

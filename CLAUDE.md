@@ -11,7 +11,7 @@ Cipher is a Tauri/Rust end-to-end encrypted peer-to-peer social network. Local-f
 - Iroh for P2P networking (DHT discovery, gossip protocol)
 - Glassmorphism UI with dark theme
 
-**Current Version**: 0.0.2
+**Current Version**: 0.0.3
 
 ## Key Commands
 
@@ -32,19 +32,55 @@ env ANDROID_HOME=~/Library/Android/sdk NDK_HOME=~/Library/Android/sdk/ndk \
 cargo tauri ios build                                                     # iOS
 ```
 
-**Android Fresh Install (wipe cached data):**
+## Beta Testing Flow
+
+**IMPORTANT: Always wipe data before installing during beta testing.**
+
+**Android - Build and Deploy:**
 ```bash
-adb shell am force-stop com.cipher.social                                     # Force stop app
-adb shell pm clear com.cipher.social                                          # Wipe ALL data including WebView localStorage
-adb uninstall com.cipher.social                                               # Uninstall completely
-adb install gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+# Step 1: Build
+PATH="/bin:/usr/bin:$HOME/.cargo/bin:$PATH" \
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+ANDROID_HOME=~/Library/Android/sdk \
+NDK_HOME=~/Library/Android/sdk/ndk/26.1.10909125 \
+OPENSSL_STATIC=1 OPENSSL_VENDORED=1 \
+cargo tauri android build --target aarch64 --debug
+
+# Step 2: Wipe app data (ALWAYS do this before install)
+adb shell pm clear com.cipher.social
+
+# Step 3: Install
+adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
 ```
 
-**Desktop Fresh Install (wipe cached data):**
+**macOS - Build and Deploy:**
 ```bash
-rm -rf ~/Library/Application\ Support/com.cipher.social                       # macOS - wipe all data
-rm -rf ~/Library/WebKit/com.cipher.social                                     # WebKit storage
-rm -rf ~/Library/Caches/com.cipher.social                                     # Caches
+# Step 1: Build
+cargo tauri build --debug
+
+# Step 2: Wipe app data (ALWAYS do this before launch)
+rm -rf ~/Library/Application\ Support/com.cipher.social
+rm -rf ~/Library/WebKit/com.cipher.social
+rm -rf ~/Library/Caches/com.cipher.social
+
+# Step 3: Launch
+open target/debug/bundle/macos/Cipher.app
+```
+
+**Why always wipe?**
+- Beta software has frequent schema changes
+- Stale data causes hard-to-debug issues
+- P2P keypairs must match fresh state
+- WebView localStorage persists even after uninstall
+
+**Full Rebuild (when code changes aren't picked up):**
+```bash
+# Clear ALL build caches first
+rm -rf gen/android/app/build           # Gradle build cache
+rm -rf target/aarch64-linux-android    # Rust target cache
+
+# Then run normal build - should take ~50+ seconds
+# If it finishes in <5 seconds, cache wasn't cleared
 ```
 
 **IMPORTANT:** The `pm clear` command is essential for Android - it wipes WebView localStorage which stores the user session. Without it, the app will auto-login with stale cached credentials even after reinstall.
@@ -89,6 +125,7 @@ magick icons/icon.png -trim icons/icon.png
 
 ## Important Rules
 
+- **ANDROID DATA WIPE** - ALWAYS use `adb shell pm clear com.cipher.social` to wipe Android data. NEVER rely on `adb uninstall` - it does NOT clear WebView localStorage. This is the #1 testing mistake.
 - **Quality over speed** - do it right, not fast
 - **Fix root causes** - never remove/comment out tests
 - **Version management** - use sequential semver, update all references

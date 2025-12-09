@@ -64,12 +64,12 @@ const P2P = {
                         this.peers.set(friend.id, {
                             peerId: friend.id,
                             publicKey: friend.public_key,
-                            username: friend.username,
+                            displayName: friend.displayName,
                             state: 'subscribed'
                         });
-                        console.log(`Subscribed to ${friend.username}'s topic`);
+                        console.log(`Subscribed to ${friend.displayName}'s topic`);
                     } catch (error) {
-                        console.error(`Failed to subscribe to ${friend.username}:`, error);
+                        console.error(`Failed to subscribe to ${friend.displayName}:`, error);
                     }
                 }
             } catch (error) {
@@ -566,22 +566,6 @@ const P2P = {
         }
     },
 
-    // Accept invite code to connect to a peer
-    // Privacy-preserving: Direct peer connection, no tracking
-    async acceptInvite(inviteCode) {
-        try {
-            const result = await TauriAPI.invoke('iroh_accept_invite', {
-                inviteCode: inviteCode
-            });
-            console.log('Accepted invite code:', result);
-            // Force an immediate presence announcement to start sync
-            await this.announcePresence();
-            return result;
-        } catch (error) {
-            console.error('Failed to accept invite code:', error);
-            throw error;
-        }
-    }
 };
 
 // Expose P2P to global scope

@@ -194,7 +194,7 @@ const PullToRefresh = {
 
                 // Show success
                 this.text.textContent = 'Synced!';
-                this.icon.textContent = '✓';
+                this.icon.textContent = '[OK]';
 
                 setTimeout(() => {
                     this.resetIndicator();

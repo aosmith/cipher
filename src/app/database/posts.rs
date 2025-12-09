@@ -8,7 +8,7 @@ impl Database {
     pub fn get_posts(&self, current_user_id: SqliteUuid) -> SqliteResult<Vec<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+            "SELECT DISTINCT p.id, p.user_id, u.display_name, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
              FROM posts p
              INNER JOIN users u ON p.user_id = u.id
              LEFT JOIN p2p_connections f1 ON p.user_id = f1.user_id AND f1.friend_user_id = ?1
@@ -21,7 +21,7 @@ impl Database {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
-                display_name: row.get("username")?,
+                display_name: row.get("display_name")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,
@@ -57,7 +57,7 @@ impl Database {
         // Get display name for the post author
         let display_name: Option<String> = conn
             .query_row(
-                "SELECT username FROM users WHERE id = ?1",
+                "SELECT display_name FROM users WHERE id = ?1",
                 [user_id],
                 |row| row.get(0),
             )
@@ -104,7 +104,7 @@ impl Database {
         // Get display name for the post author
         let display_name: Option<String> = conn
             .query_row(
-                "SELECT username FROM users WHERE id = ?1",
+                "SELECT display_name FROM users WHERE id = ?1",
                 [user_id],
                 |row| row.get(0),
             )
@@ -128,7 +128,7 @@ impl Database {
     pub fn get_shared_post(&self, post_id: SqliteUuid) -> SqliteResult<Option<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+            "SELECT p.id, p.user_id, u.display_name, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
              FROM posts p
              INNER JOIN users u ON p.user_id = u.id
              WHERE p.id = ?1"
@@ -138,7 +138,7 @@ impl Database {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
-                display_name: row.get("username")?,
+                display_name: row.get("display_name")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,
@@ -160,7 +160,7 @@ impl Database {
     pub fn get_post_shares(&self, original_post_id: SqliteUuid) -> SqliteResult<Vec<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+            "SELECT p.id, p.user_id, u.display_name, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
              FROM posts p
              INNER JOIN users u ON p.user_id = u.id
              WHERE p.shared_post_id = ?1 ORDER BY p.created_at DESC"
@@ -170,7 +170,7 @@ impl Database {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
-                display_name: row.get("username")?,
+                display_name: row.get("display_name")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,
@@ -441,7 +441,7 @@ impl Database {
 
         // Return updated post
         let mut stmt = conn.prepare(
-            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+            "SELECT p.id, p.user_id, u.display_name, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
              FROM posts p
              INNER JOIN users u ON p.user_id = u.id
              WHERE p.id = ?1"
@@ -451,7 +451,7 @@ impl Database {
             Ok(Post {
                 id: row.get("id")?,
                 user_id: row.get("user_id")?,
-                display_name: row.get("username")?,
+                display_name: row.get("display_name")?,
                 content: row.get("content")?,
                 encrypted: row.get("encrypted")?,
                 pinned: row.get("pinned")?,

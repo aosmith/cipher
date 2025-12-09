@@ -135,7 +135,14 @@
                         <div class="modal-scrollable">
                             <!-- Posts status message for empty state -->
                             <div id="postsStatusMessage" class="text-center">
-                                <!-- Will show "No Content Yet" when no posts exist -->
+                                <div style="text-align: center; padding: var(--spacing-3xl) var(--spacing-lg);">
+                                    <h2 style="color: var(--color-text-primary); margin-bottom: var(--spacing-lg); font-size: var(--font-size-2xl);">No Posts Yet</h2>
+                                    <p style="color: var(--color-text-secondary); margin-bottom: var(--spacing-xl); font-size: var(--font-size-lg);">Share your thoughts or connect with friends to see their posts</p>
+                                    <div style="display: flex; flex-direction: column; gap: var(--spacing-md); align-items: center;">
+                                        <button class="btn btn-primary" onclick="showCreatePostPage()" style="max-width: 200px;">Create Post</button>
+                                        <button class="btn btn-secondary" onclick="showFriends()" style="max-width: 200px;">Add Friends</button>
+                                    </div>
+                                </div>
                             </div>
                             <div id="posts">
                                 <!-- Posts will be loaded here -->

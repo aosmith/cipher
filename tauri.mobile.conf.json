@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cipher",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "identifier": "com.cipher.social",
   "build": {
     "beforeDevCommand": "RAILS_ENV=android rails server -p 3001 -b 127.0.0.1",

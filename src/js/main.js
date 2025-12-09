@@ -51,7 +51,7 @@ const Utils = {
                     return;
                 }
 
-                console.log('fileToBase64 - Validation passed ✓');
+                console.log('fileToBase64 - Validation passed [OK]');
                 resolve(dataUrl);
             };
 
@@ -203,7 +203,7 @@ const Session = {
             currentUser = savedUser;
 
             // Initialize P2P system for auto-logged in user (non-blocking)
-            const displayName = savedUser.username || 'User';
+            const displayName = savedUser.displayName || 'User';
             const publicKey = savedUser.publicKey || savedUser.public_key; // Support both formats
             const deviceId = savedUser.deviceId || savedUser.device_id; // Support both formats
             P2P.initialize(savedUser.id, displayName, publicKey, deviceId).then(() => {
@@ -295,7 +295,7 @@ const UI = {
 
         const userGreeting = document.getElementById('userGreeting');
         if (userGreeting) {
-            userGreeting.textContent = currentUser.username;
+            userGreeting.textContent = currentUser.displayName;
         }
 
         const userPublicKey = document.getElementById('userPublicKey');
@@ -325,6 +325,7 @@ function showLogin() {
 }
 
 function showDashboard() {
+    console.log('[DASHBOARD] showDashboard called');
     document.getElementById('loginForm').classList.add('hidden');
     document.getElementById('dashboard').classList.remove('hidden');
     document.body.classList.add('dashboard-view');
@@ -335,8 +336,11 @@ function showDashboard() {
     }
     UI.clearErrors();
     UI.updateUserInterface();
+    console.log('[DASHBOARD] About to call loadPosts');
     loadPosts();
+    console.log('[DASHBOARD] About to call showFeed');
     showFeed();
+    console.log('[DASHBOARD] showDashboard complete');
 }
 
 function showFeed() {
@@ -675,7 +679,7 @@ async function completeAuthentication(user) {
 
     // Initialize Iroh P2P system in background
     try {
-        await P2P.initialize(user.id, user.username || 'User', user.publicKey, user.deviceId);
+        await P2P.initialize(user.id, user.displayName || 'User', user.publicKey, user.deviceId);
         console.log('Iroh P2P system initialized successfully');
     } catch (error) {
         console.error('Failed to initialize P2P - Error name:', error.name);
@@ -703,7 +707,7 @@ async function handleLogout() {
 // Posts Management
 const PostManager = {
     async create(content, attachments = null) {
-        console.log('📝 Creating post:', { userId: currentUser.id, contentLength: content.length, hasAttachments: !!attachments });
+        console.log('[POST] Creating post:', { userId: currentUser.id, contentLength: content.length, hasAttachments: !!attachments });
 
         try {
             // Validate file sizes before processing
@@ -839,7 +843,7 @@ const PostManager = {
                 }
 
                 const dataUrl = `data:${media.fileType};base64,${media.data}`;
-                console.log('createMediaPreview - Base64 validation passed ✓');
+                console.log('createMediaPreview - Base64 validation passed [OK]');
                 console.log('createMediaPreview - Creating image with data URL (length:', dataUrl.length, ')');
                 return `<img src="${dataUrl}" alt="Image" class="post-image">`;
             } else {
@@ -1002,8 +1006,13 @@ const ProfileManager = {
 // Load functions
 async function loadPosts() {
     try {
-        if (!currentUser) return;
+        console.log('[LOADPOSTS] Starting loadPosts, currentUser:', currentUser?.id);
+        if (!currentUser) {
+            console.log('[LOADPOSTS] No currentUser, returning early');
+            return;
+        }
         const posts = await TauriAPI.invoke('get_all_posts', { userId: currentUser.id });
+        console.log('[LOADPOSTS] Got posts:', posts?.length);
         const postsContainer = document.getElementById('posts');
         const postsStatusMessage = document.getElementById('postsStatusMessage');
 
@@ -1011,9 +1020,12 @@ async function loadPosts() {
             postsContainer.innerHTML = '';
             postsStatusMessage.innerHTML = `
                 <div style="text-align: center; padding: var(--spacing-3xl) var(--spacing-lg);">
-                    <h2 style="color: var(--color-text-primary); margin-bottom: var(--spacing-lg); font-size: var(--font-size-2xl);">No Content Yet</h2>
-                    <p style="color: var(--color-text-secondary); margin-bottom: var(--spacing-xl); font-size: var(--font-size-lg);">Start sharing your thoughts with the community</p>
-                    <button class="btn btn-primary" onclick="showCreatePostPage()" style="max-width: 200px;">Create Post</button>
+                    <h2 style="color: var(--color-text-primary); margin-bottom: var(--spacing-lg); font-size: var(--font-size-2xl);">No Posts Yet</h2>
+                    <p style="color: var(--color-text-secondary); margin-bottom: var(--spacing-xl); font-size: var(--font-size-lg);">Share your thoughts or connect with friends to see their posts</p>
+                    <div style="display: flex; flex-direction: column; gap: var(--spacing-md); align-items: center;">
+                        <button class="btn btn-primary" onclick="showCreatePostPage()" style="max-width: 200px;">Create Post</button>
+                        <button class="btn btn-secondary" onclick="showFriends()" style="max-width: 200px;">Add Friends</button>
+                    </div>
                 </div>
             `;
         } else {
@@ -1234,7 +1246,7 @@ async function viewThread(threadId) {
     if (!currentUser) return;
 
     try {
-        const threadMessages = await TauriAPI.invoke('get_message_thread', { threadId });
+        const threadMessages = await TauriAPI.invoke('get_message_thread', { threadId: threadId });
 
         // Display thread in a modal or expanded view
         const threadHtml = threadMessages.map(message => `
@@ -1466,7 +1478,7 @@ function renderWaveform(waveformData) {
 
 async function loadFriends() {
     console.log('[LOAD-FRIENDS] loadFriends() called');
-    console.log('[LOAD-FRIENDS] currentUser:', currentUser ? currentUser.username : 'null');
+    console.log('[LOAD-FRIENDS] currentUser:', currentUser ? currentUser.displayName : 'null');
 
     if (!currentUser) {
         console.log('[LOAD-FRIENDS] No current user, returning early');
@@ -1497,7 +1509,7 @@ async function loadFriends() {
                 return `
                 <div class="friend-request-card">
                     <div class="friend-request-badge">Friend Request</div>
-                    <div class="friend-request-username">${Utils.escapeHtml(request.username || 'Unknown User')}</div>
+                    <div class="friend-request-username">${Utils.escapeHtml(request.displayName || 'Unknown User')}</div>
                     <div class="friend-request-message">wants to connect with you</div>
                     <div class="public-key-display">
                         ${request.publicKey ? request.publicKey.substring(0, 32) + '...' : 'No public key'}
@@ -1521,7 +1533,7 @@ async function loadFriends() {
                 return `
                 <div class="friend-request-card outgoing">
                     <div class="friend-request-badge pending-badge">Pending</div>
-                    <div class="friend-request-username">${Utils.escapeHtml(request.username || 'Unknown User')}</div>
+                    <div class="friend-request-username">${Utils.escapeHtml(request.displayName || 'Unknown User')}</div>
                     <div class="friend-request-message">waiting for response</div>
                     <div class="public-key-display">
                         ${request.publicKey ? request.publicKey.substring(0, 32) + '...' : 'No public key'}
@@ -1548,12 +1560,12 @@ async function loadFriends() {
         } else if (friends.length > 0) {
             html += '<div class="friends-section"><h3>Friends</h3>';
             html += friends.map(friend => {
-                const initial = (friend.username || 'U').charAt(0).toUpperCase();
+                const initial = (friend.displayName || 'U').charAt(0).toUpperCase();
                 return `
                 <div class="friend-card">
                     <div class="friend-avatar">${initial}</div>
                     <div class="friend-info">
-                        <div class="friend-name">${Utils.escapeHtml(friend.username || 'Unknown')}</div>
+                        <div class="friend-name">${Utils.escapeHtml(friend.displayName || 'Unknown')}</div>
                         <div class="friend-meta">Added ${friend.createdAt ? new Date(friend.createdAt).toLocaleDateString() : 'Unknown'}</div>
                         <div class="public-key-display" style="margin-top: var(--spacing-xs);">
                             ${friend.publicKey ? friend.publicKey.substring(0, 24) + '...' : 'No public key'}
@@ -1725,6 +1737,57 @@ function setupTauriEventListeners() {
         const postsTab = document.getElementById('postsTab');
         if (postsTab && !postsTab.classList.contains('hidden')) {
             loadPosts();
+        }
+    });
+
+    // Listen for decrypted posts from sealed envelopes (Phase 2 encryption)
+    listen('sealed-post-received', async (event) => {
+        console.log('[EVENT] Sealed post received:', event.payload);
+        const { user_id, public_key, content, timestamp, attachments } = event.payload;
+
+        try {
+            // Save the post to database
+            const savedPost = await TauriAPI.invoke('create_post', {
+                userId: user_id,
+                content: content,
+                attachments: null
+            });
+            console.log('[EVENT] Sealed post saved:', savedPost.id);
+
+            // Save attachments if present
+            if (attachments && attachments.length > 0) {
+                for (const attachment of attachments) {
+                    await TauriAPI.invoke('upload_media_file', {
+                        fileData: attachment.data,
+                        filename: 'synced_file',
+                        fileType: attachment.file_type,
+                        fileSize: attachment.file_size,
+                        postId: savedPost.id
+                    });
+                }
+            }
+
+            // Refresh posts if on posts tab
+            const postsTab = document.getElementById('postsTab');
+            if (postsTab && !postsTab.classList.contains('hidden')) {
+                loadPosts();
+            }
+        } catch (error) {
+            console.error('[EVENT] Error saving sealed post:', error);
+        }
+    });
+
+    // Listen for device sync completion
+    listen('device-sync-completed', (event) => {
+        console.log('[EVENT] Device sync completed from:', event.payload);
+        // Refresh posts and friends after sync
+        const postsTab = document.getElementById('postsTab');
+        if (postsTab && !postsTab.classList.contains('hidden')) {
+            loadPosts();
+        }
+        const friendsTab = document.getElementById('friendsTab');
+        if (friendsTab && !friendsTab.classList.contains('hidden')) {
+            loadFriends();
         }
     });
 
@@ -1990,7 +2053,9 @@ async function addFriendFromTab() {
         await TauriAPI.invoke('iroh_add_friend_by_public_key', {
             friendPublicKey: publicKey,
             nodeId: nodeId,
-            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null
+            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null,
+            displayName: null,
+            signature: null
         });
 
         document.getElementById('addFriendPublicKey').value = '';
@@ -2073,7 +2138,7 @@ async function generateMyQRCode() {
         return;
     }
 
-    console.log('[QR-GEN] Current user:', currentUser.username);
+    console.log('[QR-GEN] Current user:', currentUser.displayName);
     console.log('[QR-GEN] Checking P2P object existence...');
     console.log('[QR-GEN] P2P exists:', typeof P2P !== 'undefined');
     console.log('[QR-GEN] P2P.initialized:', P2P?.initialized);
@@ -2204,19 +2269,32 @@ async function scanQRCode() {
                 let publicKey = result.content;
                 let nodeId = null;
                 let relayUrl = null;
+                let displayName = null;
+                let signature = null;
                 if (result.content.startsWith('cipher://add-friend?key=')) {
                     const url = new URL(result.content);
                     publicKey = url.searchParams.get('key');
                     nodeId = url.searchParams.get('node');
                     const encodedRelay = url.searchParams.get('relay');
+                    const encodedName = url.searchParams.get('name');
+                    const encodedSig = url.searchParams.get('sig');
                     if (encodedRelay) {
                         relayUrl = decodeURIComponent(encodedRelay);
+                    }
+                    if (encodedName) {
+                        displayName = decodeURIComponent(encodedName);
+                    }
+                    if (encodedSig) {
+                        signature = decodeURIComponent(encodedSig);
                     }
                     if (nodeId && relayUrl) {
                         console.log('[QR] Extracted public key and node info from URI');
                         console.log('[QR]   Public key:', publicKey);
                         console.log('[QR]   NodeId:', nodeId);
                         console.log('[QR]   Relay:', relayUrl);
+                        if (displayName) {
+                            console.log('[QR]   Display Name:', displayName, signature ? '(signed)' : '(unsigned)');
+                        }
                     } else {
                         console.log('[QR] Extracted public key from URI (no node info):', publicKey);
                     }
@@ -2230,7 +2308,9 @@ async function scanQRCode() {
                     const addedPublicKey = await TauriAPI.invoke('iroh_add_friend_by_public_key', {
                         friendPublicKey: publicKey,
                         nodeId: nodeId,
-                        relayUrl: relayUrl
+                        relayUrl: relayUrl,
+                        displayName: displayName,
+                        signature: signature
                     });
                     console.log('[QR] ✓ Friend added successfully:', addedPublicKey);
 
@@ -2275,9 +2355,9 @@ async function handleQRCodeFile(event) {
         const base64Data = await Utils.fileToBase64(file);
         const qrCodeData = await TauriAPI.invoke('scan_qr_code_from_image', { base64Image: base64Data });
 
-        if (qrCodeData && qrCodeData.username && qrCodeData.publicKey) {
+        if (qrCodeData && qrCodeData.displayName && qrCodeData.publicKey) {
             document.getElementById('friendPublicKey').value = qrCodeData.publicKey;
-            await addFriendByQRCode(qrCodeData.username, qrCodeData.publicKey);
+            await addFriendByQRCode(qrCodeData.displayName, qrCodeData.publicKey);
         } else {
             UI.showError('dashboardError', 'Invalid QR code or QR code does not contain friend data');
         }
@@ -2288,7 +2368,7 @@ async function handleQRCodeFile(event) {
     event.target.value = '';
 }
 
-async function addFriendByQRCode(username, publicKey, peerId, peerAddr) {
+async function addFriendByQRCode(displayName, publicKey, peerId, peerAddr) {
     if (!currentUser) return;
 
     if (publicKey === currentUser.publicKey) {
@@ -2300,7 +2380,7 @@ async function addFriendByQRCode(username, publicKey, peerId, peerAddr) {
         const friend = await TauriAPI.invoke('get_user_by_public_key', { publicKey: publicKey });
 
         if (!friend) {
-            UI.showError('dashboardError', `No user found with username ${username}`);
+            UI.showError('dashboardError', `No user found with display name ${displayName}`);
             return;
         }
 
@@ -2309,7 +2389,7 @@ async function addFriendByQRCode(username, publicKey, peerId, peerAddr) {
             friendUserId: friend.id
         });
 
-        UI.showSuccess('dashboardError', `Successfully added ${username} as a friend!`);
+        UI.showSuccess('dashboardError', `Successfully added ${displayName} as a friend!`);
         loadFriends();
     } catch (error) {
         UI.showError('dashboardError', 'Failed to add friend: ' + error);
@@ -2377,7 +2457,7 @@ const FriendManager = {
                 inviteCode: inviteCode.trim().toUpperCase()
             });
 
-            UI.showSuccess('dashboardError', `Successfully added ${friend.username} as a friend!`);
+            UI.showSuccess('dashboardError', `Successfully added ${friend.displayName} as a friend!`);
             await loadFriends(); // Refresh friends list
             return friend;
         } catch (error) {
@@ -3046,6 +3126,8 @@ async function handleScannedQRCode(data) {
         let publicKey = data;
         let nodeId = null;
         let relayUrl = null;
+        let displayName = null;
+        let signature = null;
         if (data.startsWith('cipher://add-friend?key=')) {
             const url = new URL(data);
             // URLSearchParams decodes '+' as space, but base64 uses '+' - restore it
@@ -3055,11 +3137,23 @@ async function handleScannedQRCode(data) {
             if (encodedRelay) {
                 relayUrl = decodeURIComponent(encodedRelay);
             }
+            // Extract signed display name if present
+            const encodedName = url.searchParams.get('name');
+            const encodedSig = url.searchParams.get('sig');
+            if (encodedName) {
+                displayName = decodeURIComponent(encodedName);
+            }
+            if (encodedSig) {
+                signature = decodeURIComponent(encodedSig);
+            }
             if (nodeId && relayUrl) {
                 console.log('[QR-SCAN] Extracted public key and node info from URI');
                 console.log('[QR-SCAN]   Public key:', publicKey);
                 console.log('[QR-SCAN]   NodeId:', nodeId);
                 console.log('[QR-SCAN]   Relay:', relayUrl);
+                if (displayName) {
+                    console.log('[QR-SCAN]   Display name:', displayName);
+                }
             } else {
                 console.log('[QR-SCAN] Extracted public key from URI (no node info):', publicKey);
             }
@@ -3076,7 +3170,9 @@ async function handleScannedQRCode(data) {
         const addedPublicKey = await TauriAPI.invoke('iroh_add_friend_by_public_key', {
             friendPublicKey: publicKey,
             nodeId: nodeId,
-            relayUrl: relayUrl
+            relayUrl: relayUrl,
+            displayName: displayName,
+            signature: signature
         });
         console.log('[QR-SCAN] ✓ Friend added successfully:', addedPublicKey);
         console.log('═══════════════════════════════════════════════════════════════');
@@ -3126,8 +3222,8 @@ async function handleQRCodeFromCamera(event) {
         try {
             const qrCodeData = await TauriAPI.invoke('scan_qr_code_from_image', { base64Image: base64Data });
 
-            if (qrCodeData && qrCodeData.username && qrCodeData.publicKey) {
-                await addFriendByQRCode(qrCodeData.username, qrCodeData.publicKey);
+            if (qrCodeData && qrCodeData.displayName && qrCodeData.publicKey) {
+                await addFriendByQRCode(qrCodeData.displayName, qrCodeData.publicKey);
                 UI.showSuccess('dashboardError', 'Friend added successfully!');
                 return;
             }
@@ -3274,6 +3370,11 @@ async function addFriendFromModal() {
         const publicKey = url.searchParams.get('key');
         const nodeId = url.searchParams.get('node');
         const relayUrl = url.searchParams.get('relay');
+        // Extract signed display name if present
+        const encodedName = url.searchParams.get('name');
+        const encodedSig = url.searchParams.get('sig');
+        const displayName = encodedName ? decodeURIComponent(encodedName) : null;
+        const signature = encodedSig ? decodeURIComponent(encodedSig) : null;
 
         if (!publicKey) {
             errorEl.textContent = 'Invalid invite link - missing key';
@@ -3293,13 +3394,15 @@ async function addFriendFromModal() {
             return;
         }
 
-        console.log('[ADD_FRIEND_MODAL] Adding friend:', { publicKey, nodeId, relayUrl });
+        console.log('[ADD_FRIEND_MODAL] Adding friend:', { publicKey, nodeId, relayUrl, displayName });
 
         // Use the P2P-enabled add friend command
         await TauriAPI.invoke('iroh_add_friend_by_public_key', {
             friendPublicKey: publicKey,
             nodeId: nodeId,
-            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null
+            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null,
+            displayName: displayName,
+            signature: signature
         });
 
         successEl.textContent = 'Friend added successfully!';

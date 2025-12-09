@@ -299,9 +299,12 @@ pub async fn iroh_announce_presence() -> Result<String, String> {
 
 /// Generate a friend request QR code
 /// Returns a cipher:// URI with compact addressing info (public key, NodeId, relay)
+/// Includes signed display name for verified identity
 /// GLOBAL MESH: All nodes on cipher/content/v1 - just share connection info
 #[tauri::command]
-pub async fn iroh_generate_invite() -> Result<String, String> {
+pub async fn iroh_generate_invite(
+    db: State<'_, Database>,
+) -> Result<String, String> {
     println!("[IROH] Generating friend request QR code...");
 
     let network = IROH_NETWORK
@@ -334,16 +337,28 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
         .map(|url| url.to_string())
         .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string());
 
-    // Create compact URI with only essential information
+    // Get signing private key for signing the display name
+    let (signing_private_key, _encryption_private_key) = db.get_user_keys(network.user_id)
+        .map_err(|e| format!("Failed to get user keys: {}", e))?;
+
+    // Sign: "cipher-name:{display_name}:{public_key}" to prove ownership
+    let sign_message = format!("cipher-name:{}:{}", network.display_name, network.public_key);
+    let signature = Database::sign_message(&sign_message, &signing_private_key)
+        .map_err(|e| format!("Failed to sign display name: {}", e))?;
+
+    // Create compact URI with signed display name
     let qr_code = format!(
-        "cipher://add-friend?key={}&node={}&relay={}",
+        "cipher://add-friend?key={}&node={}&relay={}&name={}&sig={}",
         network.public_key,
         node_id,
-        urlencoding::encode(&relay_url)
+        urlencoding::encode(&relay_url),
+        urlencoding::encode(&network.display_name),
+        urlencoding::encode(&signature)
     );
 
     println!("[IROH] ✓ QR code generated successfully!");
     println!("[IROH]   Public Key: {}", network.public_key);
+    println!("[IROH]   Display Name: {} (signed)", network.display_name);
     println!("[IROH]   NodeId: {}", node_id);
     println!("[IROH]   Relay: {}", relay_url);
     println!("[IROH]   QR code length: {}", qr_code.len());
@@ -352,12 +367,15 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
 }
 
 /// Add a friend by public key with optional compact node info
+/// Verifies signed display name if provided
 /// GLOBAL MESH: Creates friendship in database and sends FriendRequest to global mesh
 #[tauri::command]
 pub async fn iroh_add_friend_by_public_key(
     friend_public_key: String,
     node_id: Option<String>,
     relay_url: Option<String>,
+    display_name: Option<String>,
+    signature: Option<String>,
     db: State<'_, Database>,
 ) -> Result<String, String> {
     println!("[IROH] Adding friend by public key: {} (global mesh)", friend_public_key);
@@ -378,17 +396,41 @@ pub async fn iroh_add_friend_by_public_key(
     let friend_user_id = super::types::SqliteUuid::from_public_key(&friend_public_key);
     let now = chrono::Utc::now().to_rfc3339();
 
+    // Determine display name to use - verify signature if both name and sig provided
+    let verified_display_name = match (&display_name, &signature) {
+        (Some(name), Some(sig)) => {
+            // Verify signature: "cipher-name:{display_name}:{public_key}"
+            let sign_message = format!("cipher-name:{}:{}", name, friend_public_key);
+            if Database::verify_signature(&sign_message, sig, &friend_public_key) {
+                println!("[IROH] ✓ Display name '{}' verified with valid signature", name);
+                name.clone()
+            } else {
+                println!("[IROH] ⚠ Signature verification failed - using fallback name");
+                format!("User_{}", &friend_public_key[..8])
+            }
+        }
+        (Some(name), None) => {
+            // Name provided but no signature - use with warning
+            println!("[IROH] ⚠ Display name '{}' not verified (no signature)", name);
+            name.clone()
+        }
+        _ => {
+            // No name provided - use fallback
+            format!("User_{}", &friend_public_key[..8])
+        }
+    };
+
     // 1. Create stub user in database (if not exists)
-    println!("[IROH] Creating stub user in database...");
+    println!("[IROH] Creating stub user in database with name: {}", verified_display_name);
     db.conn
         .lock()
         .unwrap()
         .execute(
-            "INSERT OR IGNORE INTO users (id, username, public_key, created_at, updated_at)
+            "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![
                 friend_user_id,
-                format!("User_{}", &friend_public_key[..8]), // Temporary display name
+                &verified_display_name,
                 &friend_public_key,
                 &now,
                 &now
@@ -426,7 +468,7 @@ pub async fn iroh_add_friend_by_public_key(
                     vec![],
                 );
 
-                // Add NodeAddr to endpoint
+                // Add NodeAddr to endpoint - this enables gossip to find the peer
                 let endpoint_guard = network.endpoint.lock().await;
                 if let Some(endpoint) = endpoint_guard.as_ref() {
                     if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
@@ -437,20 +479,20 @@ pub async fn iroh_add_friend_by_public_key(
                 }
                 drop(endpoint_guard);
 
-                // CRITICAL FIX: Resubscribe to global topic WITH the new friend as bootstrap
-                // This actually forms the gossip mesh between us and the friend.
-                // Without this, we're isolated root nodes that can't see each other's messages.
-                println!("[IROH] Resubscribing to global mesh with new friend as bootstrap...");
+                // Let the gossip protocol handle the connection internally
+                // Don't call endpoint.connect() directly - let subscribe_and_join() do it
+                // The gossip protocol needs to establish the connection itself for proper
+                // neighbor relationship formation
+                println!("[IROH] Forming gossip mesh with new friend as bootstrap...");
+                println!("[IROH]   Letting gossip protocol handle connection establishment");
                 match network.resubscribe_with_bootstrap(CONTENT_TOPIC, vec![peer_node_id]).await {
                     Ok(_) => {
                         println!("[IROH] ✓ Successfully joined gossip mesh with friend!");
                         network.add_connected_peer(peer_node_id).await;
                     }
                     Err(e) => {
-                        println!("[IROH] Warning: Failed to resubscribe with bootstrap: {}", e);
-                        println!("[IROH]   Friend may not be online yet, will retry via discovery");
-                        // Still add as connected peer for tracking, gossip may still work
-                        network.add_connected_peer(peer_node_id).await;
+                        println!("[IROH] Warning: Gossip mesh formation failed: {}", e);
+                        println!("[IROH]   Friend may not be online, will retry via presence discovery");
                     }
                 }
 

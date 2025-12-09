@@ -22,21 +22,21 @@ impl Database {
         let invite_code = Self::generate_invite_code();
         let invite_id = SqliteUuid::new();
 
-        // Get creator's public key and username
-        let (public_key, username): (String, String) = conn.query_row(
-            "SELECT public_key, username FROM users WHERE id = ?1",
+        // Get creator's public key and display_name
+        let (public_key, display_name): (String, String) = conn.query_row(
+            "SELECT public_key, display_name FROM users WHERE id = ?1",
             [creator_id],
             |row| {
                 let pk: Option<String> = row.get("public_key")?;
-                let un: String = row.get("username")?;
-                Ok((pk.unwrap_or_default(), un))
+                let dn: String = row.get("display_name")?;
+                Ok((pk.unwrap_or_default(), dn))
             },
         )?;
 
         conn.execute(
-            "INSERT INTO friend_invites (id, creator_id, invite_code, public_key, username, uses_remaining, expires_at, created_at)
+            "INSERT INTO friend_invites (id, creator_id, invite_code, public_key, display_name, uses_remaining, expires_at, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![invite_id, creator_id, &invite_code, &public_key, &username, uses_remaining, expires_at.to_rfc3339(), now.to_rfc3339()],
+            params![invite_id, creator_id, &invite_code, &public_key, &display_name, uses_remaining, expires_at.to_rfc3339(), now.to_rfc3339()],
         )?;
 
         Ok(FriendInvite {
@@ -44,7 +44,7 @@ impl Database {
             creator_id,
             invite_code,
             public_key,
-            username,
+            display_name,
             uses_remaining,
             expires_at: expires_at.to_rfc3339(),
             created_at: now.to_rfc3339(),
@@ -56,7 +56,7 @@ impl Database {
     pub fn get_friend_invite(&self, invite_code: &str) -> SqliteResult<FriendInvite> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, creator_id, invite_code, public_key, username, uses_remaining, expires_at, created_at
+            "SELECT id, creator_id, invite_code, public_key, display_name, uses_remaining, expires_at, created_at
              FROM friend_invites WHERE invite_code = ?1",
             [invite_code],
             |row| {
@@ -65,7 +65,7 @@ impl Database {
                     creator_id: row.get("creator_id")?,
                     invite_code: row.get("invite_code")?,
                     public_key: row.get("public_key")?,
-                    username: row.get("username")?,
+                    display_name: row.get("display_name")?,
                     uses_remaining: row.get("uses_remaining")?,
                     expires_at: row.get("expires_at")?,
                     created_at: row.get("created_at")?,
@@ -224,7 +224,7 @@ impl Database {
         println!("[DB] Total p2p_connections for user: {}", conn_count);
 
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT u.id, u.username, u.public_key, u.encryption_public_key,
+            "SELECT DISTINCT u.id, u.display_name, u.public_key, u.encryption_public_key,
                     u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
              FROM users u
              INNER JOIN p2p_connections p ON ((p.user_id = ?1 AND p.friend_user_id = u.id)
@@ -235,7 +235,7 @@ impl Database {
         let user_iter = stmt.query_map([user_id], |row| {
             Ok(User {
                 id: row.get("id")?,
-                username: row.get("username")?,
+                display_name: row.get("display_name")?,
                 public_key: row.get("public_key")?,
                 private_key: None, // Don't expose other users' private keys
                 encryption_public_key: row.get("encryption_public_key")?,
@@ -267,7 +267,7 @@ impl Database {
         // - initiated_by = friend_user_id (they initiated it, not us)
         // - status = 'pending'
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT u.id, u.username, u.public_key, u.encryption_public_key,
+            "SELECT DISTINCT u.id, u.display_name, u.public_key, u.encryption_public_key,
                     u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
              FROM users u
              INNER JOIN p2p_connections p ON (p.user_id = ?1 AND p.friend_user_id = u.id AND p.initiated_by = u.id)
@@ -277,7 +277,7 @@ impl Database {
         let user_iter = stmt.query_map([user_id], |row| {
             Ok(User {
                 id: row.get("id")?,
-                username: row.get("username")?,
+                display_name: row.get("display_name")?,
                 public_key: row.get("public_key")?,
                 private_key: None,
                 encryption_public_key: row.get("encryption_public_key")?,
@@ -304,6 +304,30 @@ impl Database {
     pub fn accept_friend_request(&self, user_id: SqliteUuid, friend_user_id: SqliteUuid) -> SqliteResult<()> {
         println!("[DB] accept_friend_request: user {} accepting friend {}", user_id, friend_user_id);
         let conn = self.conn.lock().unwrap();
+
+        // Debug: Show all pending connections for this user
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, user_id, friend_user_id, status, initiated_by FROM p2p_connections WHERE user_id = ?1"
+            )?;
+            let rows = stmt.query_map([user_id], |row| {
+                Ok((
+                    row.get::<_, SqliteUuid>(0)?,
+                    row.get::<_, SqliteUuid>(1)?,
+                    row.get::<_, SqliteUuid>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, SqliteUuid>(4)?,
+                ))
+            })?;
+            println!("[DB] All connections for user {}:", user_id);
+            for row in rows {
+                if let Ok((id, uid, fuid, status, initiated)) = row {
+                    println!("[DB]   - id={}, user_id={}, friend_user_id={}, status={}, initiated_by={}",
+                        id, uid, fuid, status, initiated);
+                }
+            }
+        }
+
         let now = chrono::Utc::now().to_rfc3339();
 
         // Update the pending request to accepted
@@ -313,7 +337,11 @@ impl Database {
             rusqlite::params![&now, user_id, friend_user_id],
         )?;
 
+        println!("[DB] Tried to update where user_id={} AND friend_user_id={} AND status='pending'", user_id, friend_user_id);
         println!("[DB] Updated {} rows to accepted", rows_updated);
+        if rows_updated == 0 {
+            println!("[DB] WARNING: No rows updated! The pending request may not exist or IDs don't match.");
+        }
         Ok(())
     }
 
@@ -340,7 +368,7 @@ impl Database {
         // - initiated_by = current user (we initiated it)
         // - status = 'pending'
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT u.id, u.username, u.public_key, u.encryption_public_key,
+            "SELECT DISTINCT u.id, u.display_name, u.public_key, u.encryption_public_key,
                     u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
              FROM users u
              INNER JOIN p2p_connections p ON (p.user_id = ?1 AND p.friend_user_id = u.id AND p.initiated_by = ?1)
@@ -350,7 +378,7 @@ impl Database {
         let user_iter = stmt.query_map([user_id], |row| {
             Ok(User {
                 id: row.get("id")?,
-                username: row.get("username")?,
+                display_name: row.get("display_name")?,
                 public_key: row.get("public_key")?,
                 private_key: None,
                 encryption_public_key: row.get("encryption_public_key")?,
@@ -407,7 +435,7 @@ impl Database {
     pub fn get_friends_of_friends(&self, user_id: SqliteUuid) -> SqliteResult<Vec<User>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT u.id, u.username, u.public_key, u.encryption_public_key,
+            "SELECT DISTINCT u.id, u.display_name, u.public_key, u.encryption_public_key,
                     u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
              FROM users u
              INNER JOIN p2p_connections p2 ON ((p2.user_id = u.id OR p2.friend_user_id = u.id) AND p2.status = 'accepted')
@@ -430,7 +458,7 @@ impl Database {
         let user_iter = stmt.query_map([user_id], |row| {
             Ok(User {
                 id: row.get("id")?,
-                username: row.get("username")?,
+                display_name: row.get("display_name")?,
                 public_key: row.get("public_key")?,
                 private_key: None, // Don't expose other users' private keys
                 encryption_public_key: row.get("encryption_public_key")?,

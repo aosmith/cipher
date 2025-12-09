@@ -34,7 +34,7 @@ impl Database {
 
         // Get posts created/updated since last sync
         let mut post_stmt = conn.prepare(
-            "SELECT p.id, p.user_id, u.username, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
+            "SELECT p.id, p.user_id, u.display_name, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
              FROM posts p
              INNER JOIN users u ON p.user_id = u.id
              WHERE p.user_id = ?1 AND (p.updated_at > ?2 OR p.created_at > ?2)
@@ -46,7 +46,7 @@ impl Database {
                 Ok(Post {
                     id: row.get("id")?,
                     user_id: row.get("user_id")?,
-                    display_name: row.get("username")?,
+                    display_name: row.get("display_name")?,
                     content: row.get("content")?,
                     encrypted: row.get("encrypted")?,
                     pinned: row.get("pinned")?,

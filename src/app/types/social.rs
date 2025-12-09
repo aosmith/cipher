@@ -21,7 +21,7 @@ pub struct FriendInvite {
     pub creator_id: SqliteUuid,
     pub invite_code: String,
     pub public_key: String,
-    pub username: String,
+    pub display_name: String,
     pub uses_remaining: i32,
     pub expires_at: String,
     pub created_at: String,
@@ -30,9 +30,8 @@ pub struct FriendInvite {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FriendExport {
-    pub username: String,
+    pub display_name: String,
     pub public_key: String,
-    pub display_name: Option<String>,
     pub bio: Option<String>,
     pub added_at: String,
 }
@@ -49,7 +48,7 @@ pub struct FriendImportResult {
 #[serde(rename_all = "camelCase")]
 pub struct RecentContact {
     pub user_id: SqliteUuid,
-    pub username: String,
+    pub display_name: String,
     pub public_key: String,
     pub last_interaction: String,
     pub interaction_count: i32,
