@@ -51,9 +51,8 @@ echo "Tauri CLI location: $(which cargo-tauri)"
 echo "iOS targets installed:"
 rustup target list --installed | grep apple
 
-# Note: Xcode Cloud build phases will access cargo via PATH build setting
-# PATH is set in gen/apple/cipher-social.xcodeproj/project.pbxproj as:
-# PATH = "$(HOME)/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-# This allows the "Build Rust Code" phase to find cargo without needing symlinks
+# Note: Xcode Cloud uses -hideShellScriptEnvironment which strips PATH from build phases.
+# The ci_pre_xcodebuild.sh script writes cargo paths to /tmp/cargo_path.txt
+# The "Build Rust Code" phase reads this file to restore PATH before running cargo.
 
 echo "=== Post-clone setup complete ==="

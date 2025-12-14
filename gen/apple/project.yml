@@ -82,7 +82,16 @@ targets:
       - sdk: SystemConfiguration.framework
       - sdk: WebKit.framework
     preBuildScripts:
-      - script: cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+      - script: |
+          # Read cargo path from temp file (set by ci_pre_xcodebuild.sh for Xcode Cloud)
+          if [ -f /tmp/cargo_path.txt ]; then
+              CARGO_BIN=$(cat /tmp/cargo_path.txt)
+              CARGO_DIR=$(dirname "$CARGO_BIN")
+              export PATH="$CARGO_DIR:$PATH"
+              echo "Using cargo from Xcode Cloud setup: $CARGO_BIN"
+          fi
+
+          cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:
