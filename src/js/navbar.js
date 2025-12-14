@@ -9,7 +9,7 @@ const Navbar = {
                 <div class="nav-header">
                     <!-- Left side: Brand -->
                     <div class="nav-left">
-                        <div class="nav-brand" id="navBrand">🔐<span class="brand-text"> Cipher</span></div>
+                        <div class="nav-brand" id="navBrand" onclick="Navbar.goToFeed()" style="cursor: pointer;">🔐<span class="brand-text"> Cipher</span></div>
                     </div>
                     <!-- Right side controls -->
                     <div class="nav-controls">
@@ -156,6 +156,16 @@ const Navbar = {
                 statusDot.classList.add('offline');
                 statusText.textContent = 'Offline';
             }
+        }
+    },
+
+    // Navigate to feed page (when clicking brand logo/text)
+    goToFeed: function() {
+        // Only navigate if logged in
+        const navbar = document.getElementById('mainNavbar');
+        if (navbar && navbar.classList.contains('logged-in')) {
+            closeHamburgerMenu();
+            showFeed();
         }
     },
 
