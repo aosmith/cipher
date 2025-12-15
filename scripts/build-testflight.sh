@@ -1,69 +1,71 @@
 #!/bin/bash
+
+# Build Cipher for TestFlight
+# Usage: ./scripts/build-testflight.sh
+
 set -e
 
-echo "Building Cipher for TestFlight..."
+echo "=== Building Cipher for TestFlight ==="
+echo ""
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+cd "$(dirname "$0")/.."
 
-# Configuration
-SCHEME="cipher-social_iOS"
-PROJECT="gen/apple/cipher-social.xcodeproj"
-ARCHIVE_PATH="build/cipher-social.xcarchive"
-EXPORT_PATH="build/testflight"
-EXPORT_OPTIONS="gen/apple/ExportOptions.plist"
+# Clean previous builds
+echo "Step 1: Cleaning previous builds..."
+rm -rf gen/apple/build
+rm -rf gen/apple/Externals
+rm -rf ~/Library/Developer/Xcode/DerivedData/cipher-social-*
 
-echo -e "${BLUE}Step 1: Cleaning previous builds...${NC}"
-rm -rf build/
-mkdir -p build/testflight
+# Build using Tauri
+echo ""
+echo "Step 2: Building iOS app (release)..."
+echo "This may take several minutes..."
+echo ""
 
-echo -e "${BLUE}Step 2: Building Rust library...${NC}"
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:$HOME/.cargo/bin"
-export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
-export IPHONEOS_DEPLOYMENT_TARGET=14.0
-cargo build --target aarch64-apple-ios --lib --release
+cargo tauri ios build
 
-echo -e "${BLUE}Step 3: Copying library to Xcode...${NC}"
-mkdir -p gen/apple/Externals/arm64/Release
-cp target/aarch64-apple-ios/release/libapp.a gen/apple/Externals/arm64/Release/libapp.a
+# Find outputs
+echo ""
+echo "Step 3: Locating build outputs..."
 
-echo -e "${BLUE}Step 4: Building archive...${NC}"
-xcodebuild archive \
-  -project "$PROJECT" \
-  -scheme "$SCHEME" \
-  -archivePath "$ARCHIVE_PATH" \
-  -destination "generic/platform=iOS" \
-  -configuration Release \
-  -allowProvisioningUpdates \
-  CODE_SIGN_STYLE=Automatic \
-  DEVELOPMENT_TEAM=2AYYQP7AV8
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Archive build failed!${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}Archive created successfully!${NC}"
-
-echo -e "${BLUE}Step 5: Exporting IPA for TestFlight...${NC}"
-xcodebuild -exportArchive \
-  -archivePath "$ARCHIVE_PATH" \
-  -exportPath "$EXPORT_PATH" \
-  -exportOptionsPlist "$EXPORT_OPTIONS"
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Export failed!${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}IPA exported successfully!${NC}"
-echo -e "${BLUE}Location: $EXPORT_PATH/cipher-social.ipa${NC}"
+ARCHIVE=$(find gen/apple/build -name "*.xcarchive" -type d 2>/dev/null | head -1)
+IPA=$(find gen/apple/build -name "*.ipa" -type f 2>/dev/null | head -1)
+APP=$(find gen/apple/build -name "Cipher.app" -type d 2>/dev/null | head -1)
 
 echo ""
-echo -e "${GREEN}Build complete! Next steps:${NC}"
-echo "1. Upload to TestFlight using Xcode or Transporter app"
-echo "2. Or use: xcrun altool --upload-app -f build/testflight/cipher-social.ipa -t ios --apiKey YOUR_API_KEY --apiIssuer YOUR_ISSUER_ID"
+echo "=== Build Complete ==="
 echo ""
+
+if [ -n "$IPA" ]; then
+    echo "IPA ready for upload: $IPA"
+    echo ""
+    echo "Upload options:"
+    echo ""
+    echo "  1. Transporter app (easiest):"
+    echo "     - Open Transporter (free on Mac App Store)"
+    echo "     - Drag and drop the IPA file"
+    echo "     - Click 'Deliver'"
+    echo ""
+    echo "  2. Command line:"
+    echo "     xcrun altool --upload-app -f \"$IPA\" -t ios -u YOUR_APPLE_ID -p @keychain:AC_PASSWORD"
+    echo ""
+elif [ -n "$ARCHIVE" ]; then
+    echo "Archive created: $ARCHIVE"
+    echo ""
+    echo "To export and upload:"
+    echo "  1. Open Xcode"
+    echo "  2. Window > Organizer"
+    echo "  3. Select archive, click 'Distribute App'"
+    echo "  4. Choose 'App Store Connect' > 'Upload'"
+    echo ""
+elif [ -n "$APP" ]; then
+    echo "App bundle created: $APP"
+    echo ""
+    echo "Note: This is a debug build. For TestFlight, run without --debug flag."
+else
+    echo "Build outputs:"
+    find gen/apple/build -type f \( -name "*.app" -o -name "*.ipa" -o -name "*.xcarchive" \) 2>/dev/null || echo "  No outputs found"
+fi
+
+echo ""
+echo "=== Done ==="
