@@ -396,7 +396,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Read cargo path from temp file (set by ci_pre_xcodebuild.sh for Xcode Cloud)\nif [ -f /tmp/cargo_path.txt ]; then\n    CARGO_BIN=$(cat /tmp/cargo_path.txt)\n    CARGO_DIR=$(dirname \"$CARGO_BIN\")\n    export PATH=\"$CARGO_DIR:$PATH\"\n    echo \"Using cargo from Xcode Cloud setup: $CARGO_BIN\"\nfi\n\ncargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}\n";
+			shellScript = "set -e\necho \"=== Build Rust Code Phase ===\"\n\n# Try multiple methods to find cargo\nCARGO_BIN=\"\"\n\n# Method 1: Read from temp file (Xcode Cloud ci_pre_xcodebuild.sh)\nif [ -f /tmp/cargo_path.txt ]; then\n    CARGO_BIN=$(cat /tmp/cargo_path.txt)\n    echo \"Found cargo path from /tmp/cargo_path.txt: $CARGO_BIN\"\nfi\n\n# Method 2: Check common locations\nif [ -z \"$CARGO_BIN\" ] || [ ! -x \"$CARGO_BIN\" ]; then\n    for path in \"$HOME/.cargo/bin/cargo\" \"/Users/local/.cargo/bin/cargo\" \"/var/root/.cargo/bin/cargo\"; do\n        if [ -x \"$path\" ]; then\n            CARGO_BIN=\"$path\"\n            echo \"Found cargo at: $CARGO_BIN\"\n            break\n        fi\n    done\nfi\n\n# Method 3: Try which (works in local builds)\nif [ -z \"$CARGO_BIN\" ] || [ ! -x \"$CARGO_BIN\" ]; then\n    CARGO_BIN=$(which cargo 2>/dev/null || true)\n    if [ -n \"$CARGO_BIN\" ]; then\n        echo \"Found cargo via which: $CARGO_BIN\"\n    fi\nfi\n\n# Verify cargo was found\nif [ -z \"$CARGO_BIN\" ] || [ ! -x \"$CARGO_BIN\" ]; then\n    echo \"ERROR: cargo not found!\"\n    echo \"Searched: /tmp/cargo_path.txt, \\$HOME/.cargo/bin, which cargo\"\n    echo \"HOME=$HOME\"\n    echo \"PATH=$PATH\"\n    ls -la \"$HOME/.cargo/bin\" 2>/dev/null || echo \"$HOME/.cargo/bin not found\"\n    exit 1\nfi\n\n# Add cargo directory to PATH\nCARGO_DIR=$(dirname \"$CARGO_BIN\")\nexport PATH=\"$CARGO_DIR:$PATH\"\necho \"Using cargo: $CARGO_BIN\"\necho \"Updated PATH: $PATH\"\n\n# Run the tauri build\ncargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -423,7 +423,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "cipher-social_iOS/cipher-social_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = "2AYYQP7AV8";
+				DEVELOPMENT_TEAM = 2AYYQP7AV8;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -438,7 +438,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.cipher.social;
-				PRODUCT_NAME = "Cipher";
+				PRODUCT_NAME = Cipher;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -574,7 +574,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "cipher-social_iOS/cipher-social_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = "2AYYQP7AV8";
+				DEVELOPMENT_TEAM = 2AYYQP7AV8;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -589,7 +589,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.cipher.social;
-				PRODUCT_NAME = "Cipher";
+				PRODUCT_NAME = Cipher;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;

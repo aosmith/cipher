@@ -82,14 +82,54 @@ targets:
       - sdk: WebKit.framework
     preBuildScripts:
       - script: |
-          # Read cargo path from temp file (set by ci_pre_xcodebuild.sh for Xcode Cloud)
+          set -e
+          echo "=== Build Rust Code Phase ==="
+
+          # Try multiple methods to find cargo
+          CARGO_BIN=""
+
+          # Method 1: Read from temp file (Xcode Cloud ci_pre_xcodebuild.sh)
           if [ -f /tmp/cargo_path.txt ]; then
               CARGO_BIN=$(cat /tmp/cargo_path.txt)
-              CARGO_DIR=$(dirname "$CARGO_BIN")
-              export PATH="$CARGO_DIR:$PATH"
-              echo "Using cargo from Xcode Cloud setup: $CARGO_BIN"
+              echo "Found cargo path from /tmp/cargo_path.txt: $CARGO_BIN"
           fi
 
+          # Method 2: Check common locations
+          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
+              for path in "$HOME/.cargo/bin/cargo" "/Users/local/.cargo/bin/cargo" "/var/root/.cargo/bin/cargo"; do
+                  if [ -x "$path" ]; then
+                      CARGO_BIN="$path"
+                      echo "Found cargo at: $CARGO_BIN"
+                      break
+                  fi
+              done
+          fi
+
+          # Method 3: Try which (works in local builds)
+          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
+              CARGO_BIN=$(which cargo 2>/dev/null || true)
+              if [ -n "$CARGO_BIN" ]; then
+                  echo "Found cargo via which: $CARGO_BIN"
+              fi
+          fi
+
+          # Verify cargo was found
+          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
+              echo "ERROR: cargo not found!"
+              echo "Searched: /tmp/cargo_path.txt, \$HOME/.cargo/bin, which cargo"
+              echo "HOME=$HOME"
+              echo "PATH=$PATH"
+              ls -la "$HOME/.cargo/bin" 2>/dev/null || echo "$HOME/.cargo/bin not found"
+              exit 1
+          fi
+
+          # Add cargo directory to PATH
+          CARGO_DIR=$(dirname "$CARGO_BIN")
+          export PATH="$CARGO_DIR:$PATH"
+          echo "Using cargo: $CARGO_BIN"
+          echo "Updated PATH: $PATH"
+
+          # Run the tauri build
           cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
