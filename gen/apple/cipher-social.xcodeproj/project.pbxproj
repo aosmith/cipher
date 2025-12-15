@@ -14,6 +14,7 @@
 		449AF7E964F6CEB0D43A9BDF /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 49E722CF8C0F4D0ED40FBD03 /* Security.framework */; };
 		52A12F57BF75FA35D2AD8F31 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 3531CF8261DB2CCB0D0E9E47 /* assets */; };
 		624472DD134BD57082290EFC /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = D75538B329C633C8B416A84A /* LaunchScreen.storyboard */; };
+		639EA2CE8CA0C45416048634 /* SwiftBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE48652DBD69B7FD7C6C36A /* SwiftBridge.swift */; };
 		85A57CC0F22A76D37F4EFE83 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BCBD479B14899245EC4F9CC8 /* libapp.a */; };
 		9D9C9135785381B864320A44 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BFEF52E859DD9080821781AE /* WebKit.framework */; };
 		A290E759B03620EFE6BD505F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 65C493B7182B2E7405282791 /* Assets.xcassets */; };
@@ -59,6 +60,7 @@
 		7DF28F8F29AE79540B5A4ECF /* cipher-social_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "cipher-social_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		829323C97BE4865923CFB4D5 /* database_schema.sql */ = {isa = PBXFileReference; path = database_schema.sql; sourceTree = "<group>"; };
 		89CB70994C5B8B70FA600B87 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		8CE48652DBD69B7FD7C6C36A /* SwiftBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftBridge.swift; sourceTree = "<group>"; };
 		A17FE7DF9C5805173EE6AA7A /* p2p.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = p2p.js; sourceTree = "<group>"; };
 		A5AC5B1CA0666EFEA9BABFD4 /* pending_messages.rs */ = {isa = PBXFileReference; path = pending_messages.rs; sourceTree = "<group>"; };
 		A5B4D94A69F6B174DD71E5F8 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -285,6 +287,7 @@
 			isa = PBXGroup;
 			children = (
 				89CB70994C5B8B70FA600B87 /* main.mm */,
+				8CE48652DBD69B7FD7C6C36A /* SwiftBridge.swift */,
 				8BF19324425329ACB0389157 /* bindings */,
 			);
 			path = "cipher-social";
@@ -402,6 +405,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				639EA2CE8CA0C45416048634 /* SwiftBridge.swift in Sources */,
 				0C8B774CD9DE41EF9E81870E /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -419,7 +423,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "cipher-social_iOS/cipher-social_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 2AYYQP7AV8;
+				DEVELOPMENT_TEAM = "2AYYQP7AV8";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -434,7 +438,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.cipher.social;
-				PRODUCT_NAME = Cipher;
+				PRODUCT_NAME = "Cipher";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -570,7 +574,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "cipher-social_iOS/cipher-social_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 2AYYQP7AV8;
+				DEVELOPMENT_TEAM = "2AYYQP7AV8";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -585,7 +589,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.cipher.social;
-				PRODUCT_NAME = Cipher;
+				PRODUCT_NAME = "Cipher";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
