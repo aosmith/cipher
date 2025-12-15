@@ -10,6 +10,14 @@ echo "Working directory: $(pwd)"
 echo "User: $(whoami)"
 echo "HOME: $HOME"
 
+# Get the repository root (ci_scripts is at gen/apple/ci_scripts, so go up 3 levels)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+echo "Script dir: $SCRIPT_DIR"
+echo "Repo root: $REPO_ROOT"
+cd "$REPO_ROOT"
+echo "Changed to: $(pwd)"
+
 # Source cargo environment
 if [ -f "$HOME/.cargo/env" ]; then
     source "$HOME/.cargo/env"
