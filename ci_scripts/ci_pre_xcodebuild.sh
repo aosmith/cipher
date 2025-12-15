@@ -9,6 +9,8 @@ echo "=== Xcode Cloud Pre-Build: Verify Build Environment ==="
 echo "Working directory: $(pwd)"
 echo "User: $(whoami)"
 echo "HOME: $HOME"
+echo "CI_WORKSPACE: ${CI_WORKSPACE:-not set}"
+echo "CI_PRIMARY_REPOSITORY_PATH: ${CI_PRIMARY_REPOSITORY_PATH:-not set}"
 
 # Source cargo environment
 if [ -f "$HOME/.cargo/env" ]; then
@@ -49,14 +51,31 @@ fi
 
 echo "✓ iOS project found at gen/apple/cipher-social.xcodeproj"
 
-# Write cargo path to a file that the build phase can read
-# This works around -hideShellScriptEnvironment blocking PATH
+# Write cargo path to MULTIPLE locations to ensure build phase can find it
+# -hideShellScriptEnvironment blocks PATH, so we write absolute paths
 CARGO_PATH=$(which cargo)
+CARGO_DIR=$(dirname "$CARGO_PATH")
+
+# Location 1: /tmp (traditional)
 echo "$CARGO_PATH" > /tmp/cargo_path.txt
-echo "✓ Cargo path written to /tmp/cargo_path.txt: $CARGO_PATH"
+echo "✓ Written to /tmp/cargo_path.txt"
 
-CARGO_TAURI_PATH=$(which cargo-tauri)
-echo "$CARGO_TAURI_PATH" > /tmp/cargo_tauri_path.txt
-echo "✓ Cargo-tauri path written to /tmp/cargo_tauri_path.txt: $CARGO_TAURI_PATH"
+# Location 2: Workspace root (Xcode Cloud specific)
+if [ -n "$CI_WORKSPACE" ]; then
+    echo "$CARGO_PATH" > "$CI_WORKSPACE/cargo_path.txt"
+    echo "✓ Written to $CI_WORKSPACE/cargo_path.txt"
+fi
 
-echo "=== Build environment ready - Build phase will read cargo path from /tmp/cargo_path.txt ==="
+# Location 3: Inside the project directory (accessible via SRCROOT)
+echo "$CARGO_PATH" > "gen/apple/cargo_path.txt"
+echo "✓ Written to gen/apple/cargo_path.txt"
+
+# Location 4: Repository root
+echo "$CARGO_PATH" > "cargo_path.txt"
+echo "✓ Written to ./cargo_path.txt (repo root)"
+
+echo ""
+echo "Cargo path: $CARGO_PATH"
+echo "Cargo directory: $CARGO_DIR"
+echo ""
+echo "=== Build environment ready ==="
