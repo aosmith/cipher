@@ -23,10 +23,8 @@ serde_json = "1.0"
 # Remove devtools for production builds - saves significant space
 tauri = { version = "2.8.5", features = ["wry", "test"], default-features = false }
 tauri-plugin-shell = { version = "2.3", default-features = false }
-tauri-plugin-fs = { version = "2.4", default-features = false }
 # Core dependencies needed for all platforms
 rusqlite = { version = "0.31", features = ["bundled"] }
-bcrypt = "0.15"
 # Only include necessary chrono features
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 # Cryptography dependencies
@@ -36,9 +34,7 @@ chacha20poly1305 = "0.10"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 argon2 = "0.5"
 sha2 = "0.10"
-hkdf = "0.12"
 blake3 = "1.5"
-regex = "1.10"
 rand = "0.8"
 base64 = "0.22"
 bytes = "1.10"
@@ -55,7 +51,6 @@ tokio = { version = "1.0", features = ["rt-multi-thread", "net", "time", "sync",
 iroh = { version = "0.35", features = ["discovery-pkarr-dht"] }
 iroh-gossip = "0.35"
 iroh-blobs = "0.35"
-iroh-io = "0.6"
 futures = "0.3"
 uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
 url = "2.4"
