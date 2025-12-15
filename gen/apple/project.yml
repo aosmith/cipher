@@ -51,8 +51,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.0.1
-        CFBundleVersion: "0.0.1"
+        CFBundleShortVersionString: 0.0.8
+        CFBundleVersion: "0.0.8"
     entitlements:
       path: cipher-social_iOS/cipher-social_iOS.entitlements
     scheme:
@@ -82,90 +82,12 @@ targets:
       - sdk: WebKit.framework
     preBuildScripts:
       - script: |
-          set -e
-          echo "=== Build Rust Code Phase ==="
-          echo "SRCROOT: ${SRCROOT}"
-          echo "HOME: $HOME"
-          echo "PWD: $(pwd)"
-
-          # Try multiple methods to find cargo
-          CARGO_BIN=""
-
-          # Method 1: SRCROOT-relative path (most reliable for Xcode Cloud)
-          if [ -f "${SRCROOT}/cargo_path.txt" ]; then
-              CARGO_BIN=$(cat "${SRCROOT}/cargo_path.txt")
-              echo "Found cargo from SRCROOT: $CARGO_BIN"
+          # Restore PATH from ci_pre_xcodebuild.sh (works around -hideShellScriptEnvironment)
+          if [ -f /tmp/cargo_path.txt ]; then
+              CARGO_BIN=$(cat /tmp/cargo_path.txt)
+              export PATH="$(dirname "$CARGO_BIN"):$PATH"
           fi
-
-          # Method 2: Workspace root (Xcode Cloud)
-          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
-              if [ -f "/Volumes/workspace/cargo_path.txt" ]; then
-                  CARGO_BIN=$(cat "/Volumes/workspace/cargo_path.txt")
-                  echo "Found cargo from workspace: $CARGO_BIN"
-              fi
-          fi
-
-          # Method 3: Repository root (two levels up from SRCROOT)
-          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
-              if [ -f "${SRCROOT}/../../cargo_path.txt" ]; then
-                  CARGO_BIN=$(cat "${SRCROOT}/../../cargo_path.txt")
-                  echo "Found cargo from repo root: $CARGO_BIN"
-              fi
-          fi
-
-          # Method 4: /tmp (traditional)
-          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
-              if [ -f /tmp/cargo_path.txt ]; then
-                  CARGO_BIN=$(cat /tmp/cargo_path.txt)
-                  echo "Found cargo from /tmp: $CARGO_BIN"
-              fi
-          fi
-
-          # Method 5: Check common locations directly
-          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
-              for path in "$HOME/.cargo/bin/cargo" "/Users/local/.cargo/bin/cargo"; do
-                  if [ -x "$path" ]; then
-                      CARGO_BIN="$path"
-                      echo "Found cargo at: $CARGO_BIN"
-                      break
-                  fi
-              done
-          fi
-
-          # Method 6: Try which (works in local builds)
-          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
-              CARGO_BIN=$(which cargo 2>/dev/null || true)
-              if [ -n "$CARGO_BIN" ]; then
-                  echo "Found cargo via which: $CARGO_BIN"
-              fi
-          fi
-
-          # Verify cargo was found
-          if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
-              echo "ERROR: cargo not found!"
-              echo "Searched locations:"
-              echo "  - ${SRCROOT}/cargo_path.txt"
-              echo "  - /Volumes/workspace/cargo_path.txt"
-              echo "  - ${SRCROOT}/../../cargo_path.txt"
-              echo "  - /tmp/cargo_path.txt"
-              echo "  - $HOME/.cargo/bin/cargo"
-              echo "  - which cargo"
-              echo ""
-              echo "Listing potential cargo_path.txt files:"
-              ls -la "${SRCROOT}/cargo_path.txt" 2>/dev/null || echo "  ${SRCROOT}/cargo_path.txt not found"
-              ls -la "${SRCROOT}/../../cargo_path.txt" 2>/dev/null || echo "  ${SRCROOT}/../../cargo_path.txt not found"
-              ls -la /tmp/cargo_path.txt 2>/dev/null || echo "  /tmp/cargo_path.txt not found"
-              ls -la /Volumes/workspace/cargo_path.txt 2>/dev/null || echo "  /Volumes/workspace/cargo_path.txt not found"
-              exit 1
-          fi
-
-          # Add cargo directory to PATH
-          CARGO_DIR=$(dirname "$CARGO_BIN")
-          export PATH="$CARGO_DIR:$PATH"
-          echo "Using cargo: $CARGO_BIN"
-
-          # Run the tauri build
-          "$CARGO_BIN" tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+          cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:
