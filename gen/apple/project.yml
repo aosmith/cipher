@@ -82,11 +82,21 @@ targets:
       - sdk: WebKit.framework
     preBuildScripts:
       - script: |
-          # Restore PATH from ci_pre_xcodebuild.sh (works around -hideShellScriptEnvironment)
+          # Check if libapp.a was pre-built by ci_pre_xcodebuild.sh
+          # If so, skip the Rust build (Xcode Cloud workaround for -hideShellScriptEnvironment)
+          if [ -f "${SRCROOT}/Externals/arm64/release/libapp.a" ]; then
+              echo "libapp.a found (pre-built by CI), skipping Rust build"
+              exit 0
+          fi
+
+          # For local builds: restore PATH from ci_pre_xcodebuild.sh or use standard locations
           if [ -f /tmp/cargo_path.txt ]; then
               CARGO_BIN=$(cat /tmp/cargo_path.txt)
               export PATH="$(dirname "$CARGO_BIN"):$PATH"
+          elif [ -f "$HOME/.cargo/bin/cargo" ]; then
+              export PATH="$HOME/.cargo/bin:$PATH"
           fi
+
           cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false

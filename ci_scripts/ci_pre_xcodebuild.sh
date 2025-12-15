@@ -57,5 +57,29 @@ CARGO_PATH=$(which cargo)
 echo "$CARGO_PATH" > /tmp/cargo_path.txt
 echo "✓ Cargo path written to /tmp/cargo_path.txt: $CARGO_PATH"
 
+# Pre-build the Rust library for iOS
+# This ensures libapp.a exists BEFORE xcodebuild runs, working around
+# the -hideShellScriptEnvironment issue that strips PATH from build phases
+echo ""
+echo "=== Pre-building Rust library for iOS ==="
+
+# Build frontend first (required by Tauri)
+if [ -f "package.json" ]; then
+    echo "Building frontend..."
+    npm ci
+    npm run build
+fi
+
+# Build the Rust iOS library
+echo "Building Rust library for aarch64-apple-ios..."
+cargo build --release --target aarch64-apple-ios
+
+# Copy libapp.a to where Xcode expects it
+mkdir -p gen/apple/Externals/arm64/release
+cp target/aarch64-apple-ios/release/libapp.a gen/apple/Externals/arm64/release/
+echo "✓ libapp.a copied to gen/apple/Externals/arm64/release/"
+
+ls -lh gen/apple/Externals/arm64/release/libapp.a
+
 echo ""
 echo "=== Build environment ready ==="
