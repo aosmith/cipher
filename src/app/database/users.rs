@@ -380,15 +380,17 @@ impl Database {
     pub fn update_user_profile(
         &self,
         user_id: SqliteUuid,
+        display_name: Option<String>,
         bio: Option<String>,
         profile_picture: Option<String>,
     ) -> SqliteResult<User> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
 
+        // Use COALESCE to keep existing values when None is passed
         conn.execute(
-            "UPDATE users SET bio = ?1, profile_picture = ?2, updated_at = ?3 WHERE id = ?4",
-            params![bio, profile_picture, now, user_id],
+            "UPDATE users SET display_name = COALESCE(?1, display_name), bio = COALESCE(?2, bio), profile_picture = COALESCE(?3, profile_picture), updated_at = ?4 WHERE id = ?5",
+            params![display_name, bio, profile_picture, now, user_id],
         )?;
 
         // Return updated user

@@ -54,6 +54,7 @@ const Navbar = {
                     <div class="nav-section">
                         <h4 class="nav-section-title">Account</h4>
                         <div class="nav-links">
+                            <a class="nav-link hover-slide" id="settingsNavLink" onclick="closeHamburgerMenu(); showSettings()">⚙️ Settings</a>
                             <a class="nav-link hover-slide nav-signout" onclick="closeHamburgerMenu(); handleLogout()">🚪 Sign Out</a>
                         </div>
                     </div>
@@ -142,17 +143,22 @@ const Navbar = {
     },
 
     // Update P2P status in navbar
-    updateP2PStatus: function(isOnline, peerCount = 0) {
+    // status: 'online', 'offline', or 'connecting'
+    updateP2PStatus: function(status, peerCount = 0) {
         const statusDot = document.querySelector('.p2p-status-dot');
         const statusText = document.querySelector('.p2p-status-text');
 
         if (statusDot && statusText) {
-            if (isOnline) {
-                statusDot.classList.remove('offline');
+            // Remove all status classes first
+            statusDot.classList.remove('online', 'offline', 'connecting');
+
+            if (status === 'online' || status === true) {
                 statusDot.classList.add('online');
                 statusText.textContent = `Online (${peerCount})`;
+            } else if (status === 'connecting') {
+                statusDot.classList.add('connecting');
+                statusText.textContent = 'Connecting...';
             } else {
-                statusDot.classList.remove('online');
                 statusDot.classList.add('offline');
                 statusText.textContent = 'Offline';
             }

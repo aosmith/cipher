@@ -691,11 +691,12 @@ pub async fn get_media_file_data(
 #[tauri::command]
 pub async fn update_user_profile(
     user_id: SqliteUuid,
+    display_name: Option<String>,
     bio: Option<String>,
     profile_picture: Option<String>,
     db: State<'_, Database>,
 ) -> Result<User, String> {
-    db.update_user_profile(user_id, bio, profile_picture)
+    db.update_user_profile(user_id, display_name, bio, profile_picture)
         .map_err(|e| e.to_string())
 }
 
@@ -734,7 +735,7 @@ pub async fn upload_profile_picture(
 
     // Update user profile with new picture path
     let profile_picture_path = file_path.to_string_lossy().to_string();
-    db.update_user_profile(user_id, None, Some(profile_picture_path))
+    db.update_user_profile(user_id, None, None, Some(profile_picture_path))
         .map_err(|e| e.to_string())
 }
 
@@ -1913,5 +1914,64 @@ pub async fn get_sync_status(
 ) -> Result<(usize, usize, usize), String> {
     db.get_sync_status(&device_id, user_id)
         .map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// App Settings Commands
+// ============================================================================
+
+#[tauri::command]
+pub async fn get_app_settings(
+    db: State<'_, Database>,
+) -> Result<crate::app::database::settings::AppSettings, String> {
+    db.get_app_settings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_storage_limit(
+    limit_bytes: i64,
+    db: State<'_, Database>,
+) -> Result<(), String> {
+    db.set_storage_limit(limit_bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_relay_limit(
+    limit_bytes: i64,
+    db: State<'_, Database>,
+) -> Result<(), String> {
+    db.set_relay_limit(limit_bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn can_store_data(
+    bytes: i64,
+    db: State<'_, Database>,
+) -> Result<bool, String> {
+    db.can_store(bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn can_relay_data(
+    bytes: i64,
+    db: State<'_, Database>,
+) -> Result<bool, String> {
+    db.can_relay(bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_storage_used(
+    bytes: i64,
+    db: State<'_, Database>,
+) -> Result<i64, String> {
+    db.add_storage_used(bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_relay_used(
+    bytes: i64,
+    db: State<'_, Database>,
+) -> Result<i64, String> {
+    db.add_relay_used(bytes).map_err(|e| e.to_string())
 }
 

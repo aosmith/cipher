@@ -1047,7 +1047,12 @@ impl IrohNetwork {
         println!("[IROH] Serializing message...");
         let data = serde_json::to_vec(&message)
             .map_err(|e| format!("Failed to serialize message: {}", e))?;
-        println!("[IROH] Message serialized, size: {} bytes", data.len());
+        let data_size = data.len() as i64;
+        println!("[IROH] Message serialized, size: {} bytes", data_size);
+
+        // Track relay bytes (network contribution)
+        // This tracks all outgoing gossip messages as relay contribution
+        let _ = self.db.add_relay_used(data_size);
 
         // Get the broadcast channel for this topic
         println!("[IROH] Acquiring topics lock...");
@@ -1497,6 +1502,28 @@ impl IrohNetwork {
                         "[IROH] Stored peer NodeId {} for device {}",
                         node_id_str, device_id
                     );
+                }
+
+                // CLEANUP: Remove stale device entries for this user
+                // This handles the case where a device was wiped and got a new device_id/node_id
+                // The old device entry with the old node_id would otherwise stay in our database forever
+                match self.db.cleanup_stale_devices_for_user(&public_key, &device_id, &node_id_str) {
+                    Ok(stale_node_ids) if !stale_node_ids.is_empty() => {
+                        println!(
+                            "[IROH] Cleaned up {} stale device entries for user {}",
+                            stale_node_ids.len(),
+                            &public_key[..8]
+                        );
+                        // Also remove stale node_ids from connected_peers
+                        for stale_node_id in stale_node_ids {
+                            if let Ok(stale_id) = stale_node_id.parse::<iroh::NodeId>() {
+                                self.remove_connected_peer(stale_id).await;
+                                println!("[IROH] Removed stale peer {} from connected set", stale_node_id);
+                            }
+                        }
+                    }
+                    Ok(_) => {} // No stale entries
+                    Err(e) => println!("[IROH] Warning: Failed to cleanup stale devices: {}", e),
                 }
 
                 // NOTE: We received this Presence message via gossip, which means we ALREADY have
@@ -2802,6 +2829,10 @@ impl IrohNetwork {
         let connected_peers = self.connected_peers.lock().await;
         let connected_count = connected_peers.len();
         let peer_ids: Vec<String> = connected_peers.iter().map(|k| k.to_string()).collect();
+        // Debug: Log the actual peer IDs when count > 1 to help debug phantom peers
+        if connected_count > 1 {
+            println!("[IROH-DEBUG] connected_peers count={}, ids={:?}", connected_count, peer_ids);
+        }
         drop(connected_peers);
 
         // Get subscribed topics

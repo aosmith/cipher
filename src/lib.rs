@@ -184,7 +184,15 @@ fn main() {
             iroh_shutdown,
             iroh_generate_invite,
             iroh_add_friend_by_public_key,
-            iroh_read_blob
+            iroh_read_blob,
+            // App Settings
+            get_app_settings,
+            set_storage_limit,
+            set_relay_limit,
+            can_store_data,
+            can_relay_data,
+            add_storage_used,
+            add_relay_used
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

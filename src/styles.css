@@ -736,6 +736,20 @@ body:not(.app-loading) .content {
     transform: translateY(-0.5px);
 }
 
+/* Centered select dropdowns */
+select.textarea {
+    text-align: center;
+    text-align-last: center;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+    cursor: pointer;
+}
+
 /* Button Components */
 .btn {
     width: auto;
@@ -1210,6 +1224,12 @@ body:not(.app-loading) .content {
 .p2p-status-dot.connecting {
     background-color: #f59e0b;
     box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+    animation: connectingPulse 1s ease-in-out infinite;
+}
+
+@keyframes connectingPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.9); }
 }
 
 .p2p-status-text {
@@ -1318,6 +1338,10 @@ body:not(.app-loading) .content {
 
 .status-value.online {
     color: var(--color-success, #10b981);
+}
+
+.status-value.connecting {
+    color: var(--color-warning, #f59e0b);
 }
 
 .status-value.offline {

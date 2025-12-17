@@ -9,13 +9,15 @@ const P2P = {
     presenceRetryTimer: null,
     maxPresenceRetries: 10,
     baseRetryDelay: 1000, // 1 second base delay
+    connectionStartTime: null, // Track when we started connecting
+    connectionGracePeriod: 15000, // Show "Connecting" for 15s before showing "Offline"
 
     // Update P2P status indicator in UI
+    // status: 'online', 'offline', or 'connecting'
     updateStatus(status) {
         // Use Navbar module if available
         if (typeof Navbar !== 'undefined') {
-            const isOnline = status === 'online';
-            Navbar.updateP2PStatus(isOnline, this.connectedPeers);
+            Navbar.updateP2PStatus(status, this.connectedPeers);
         }
     },
 
@@ -76,9 +78,10 @@ const P2P = {
                 console.error('Failed to subscribe to friends:', error);
             }
 
-            // Iroh is now initialized and listening - show offline status (no peers yet)
+            // Iroh is now initialized and listening - show connecting status (peers not yet discovered)
             this.connectedPeers = 0;
-            this.updateStatus('offline');
+            this.connectionStartTime = Date.now();
+            this.updateStatus('connecting');
 
             // Poll for connected peers periodically
             this.startPeerPolling();
@@ -120,6 +123,7 @@ const P2P = {
             if (!status.listening) {
                 this.updateStatus('offline');
                 this.connectedPeers = 0;
+                this.connectionStartTime = null; // Reset connection timer
                 this.adjustPollInterval(true); // Poll faster when offline
                 return;
             }
@@ -131,6 +135,7 @@ const P2P = {
             if (previousCount === 0 && this.connectedPeers > 0) {
                 console.log('Peers connected, resetting presence retry counter and announcing');
                 this.presenceRetryCount = 0;
+                this.connectionStartTime = null; // Clear grace period since we're connected
                 if (this.presenceRetryTimer) {
                     clearTimeout(this.presenceRetryTimer);
                     this.presenceRetryTimer = null;
@@ -139,19 +144,35 @@ const P2P = {
                 await this.announcePresence();
             }
 
-            // offline = listening but no peers
-            // online = listening with connected peers
-            const isOffline = this.connectedPeers === 0;
-            this.updateStatus(isOffline ? 'offline' : 'online');
+            // Determine status based on peer count and grace period
+            let displayStatus;
+            if (this.connectedPeers > 0) {
+                displayStatus = 'online';
+            } else if (this.connectionStartTime &&
+                       (Date.now() - this.connectionStartTime) < this.connectionGracePeriod) {
+                // Still within grace period - show "Connecting..."
+                displayStatus = 'connecting';
+            } else {
+                // Grace period expired or never set - show "Offline"
+                displayStatus = 'offline';
+            }
 
-            // Adjust poll rate based on connection state
-            this.adjustPollInterval(isOffline);
-            this.adjustPresenceInterval(isOffline);
+            this.updateStatus(displayStatus);
+
+            // Adjust poll rate based on connection state (offline or connecting = poll faster)
+            const needsFasterPolling = this.connectedPeers === 0;
+            this.adjustPollInterval(needsFasterPolling);
+            this.adjustPresenceInterval(needsFasterPolling);
         } catch (error) {
             console.error('Failed to get connection status:', error);
-            // If command doesn't exist yet, assume offline
+            // If command doesn't exist yet, assume connecting (not offline) if we just started
             this.connectedPeers = 0;
-            this.updateStatus('offline');
+            if (this.connectionStartTime &&
+                (Date.now() - this.connectionStartTime) < this.connectionGracePeriod) {
+                this.updateStatus('connecting');
+            } else {
+                this.updateStatus('offline');
+            }
             this.adjustPollInterval(true);
             this.adjustPresenceInterval(true);
         }
@@ -431,6 +452,7 @@ const P2P = {
             this.initialized = false;
             this.connectedPeers = 0;
             this.presenceRetryCount = 0;
+            this.connectionStartTime = null;
             this.updateStatus('offline');
             console.log('P2P system shut down');
 

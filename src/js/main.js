@@ -270,7 +270,7 @@ const UI = {
     },
 
     hideAllTabs() {
-        const tabs = ['postsTab', 'createPostTab', 'messagesTab', 'friendsTab', 'profileTab'];
+        const tabs = ['postsTab', 'createPostTab', 'messagesTab', 'friendsTab', 'profileTab', 'addFriendTab', 'settingsTab'];
         tabs.forEach(tabId => {
             const tab = document.getElementById(tabId);
             if (tab) tab.classList.add('hidden');
@@ -486,6 +486,175 @@ async function showAddFriend() {
     });
 }
 
+// Settings page
+async function showSettings() {
+    UI.showTab('settingsTab', 'settingsContent', 'settingsNavLink', async () => {
+        // Load current user profile data from global currentUser
+        if (currentUser) {
+            const displayNameEl = document.getElementById('settingsDisplayName');
+            const bioInput = document.getElementById('settingsBio');
+            if (displayNameEl) displayNameEl.textContent = currentUser.displayName || 'Unknown';
+            if (bioInput) bioInput.value = currentUser.bio || '';
+        }
+
+        // Load settings from backend
+        try {
+            const settings = await invoke('get_app_settings');
+
+            // Relay settings
+            const relayLimitSelect = document.getElementById('relayLimit');
+            const relayLimitDisplay = document.getElementById('relayLimitDisplay');
+            const relayUsedEl = document.getElementById('relayUsed');
+
+            if (relayLimitSelect) {
+                // Convert bytes to MB for dropdown
+                const relayLimitMB = settings.relayLimitBytes === -1 ? '-1' :
+                    String(Math.round(settings.relayLimitBytes / (1024 * 1024)));
+                relayLimitSelect.value = relayLimitMB;
+            }
+            if (relayLimitDisplay) {
+                relayLimitDisplay.textContent = formatBytesLimit(settings.relayLimitBytes);
+            }
+            if (relayUsedEl) {
+                relayUsedEl.textContent = formatBytes(settings.relayUsedBytes);
+            }
+
+            // Storage settings
+            const storageLimitSelect = document.getElementById('storageLimit');
+            const storageLimitDisplay = document.getElementById('storageLimitDisplay');
+            const storageUsedEl = document.getElementById('storageUsed');
+
+            if (storageLimitSelect) {
+                // Convert bytes to GB for dropdown
+                const storageLimitGB = String(Math.round(settings.storageLimitBytes / (1024 * 1024 * 1024)));
+                storageLimitSelect.value = storageLimitGB;
+            }
+            if (storageLimitDisplay) {
+                storageLimitDisplay.textContent = formatBytesLimit(settings.storageLimitBytes);
+            }
+            if (storageUsedEl) {
+                storageUsedEl.textContent = formatBytes(settings.storageUsedBytes);
+            }
+        } catch (error) {
+            console.error('Failed to load app settings:', error);
+        }
+    });
+}
+
+// Format bytes for display (human readable)
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 MB';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+// Format bytes limit for display (handles -1 for unlimited)
+function formatBytesLimit(bytes) {
+    if (bytes === -1) return 'Unlimited';
+    if (bytes === 0) return '0 MB';
+    if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+    return `${Math.round(bytes / (1024 * 1024 * 1024))} GB`;
+}
+
+// Save message relay limit
+async function saveRelayLimit() {
+    const relayLimitSelect = document.getElementById('relayLimit');
+    const relayLimitDisplay = document.getElementById('relayLimitDisplay');
+
+    if (relayLimitSelect) {
+        const limitMB = relayLimitSelect.value;
+        // Convert MB to bytes (-1 stays as -1 for unlimited)
+        const limitBytes = limitMB === '-1' ? -1 : parseInt(limitMB) * 1024 * 1024;
+
+        try {
+            await invoke('set_relay_limit', { limitBytes });
+
+            if (relayLimitDisplay) {
+                relayLimitDisplay.textContent = formatBytesLimit(limitBytes);
+            }
+
+            console.log(`Message relay limit set to ${formatBytesLimit(limitBytes)}`);
+        } catch (error) {
+            console.error('Failed to save relay limit:', error);
+        }
+    }
+}
+
+// Save storage contribution limit
+async function saveStorageLimit() {
+    const storageLimitSelect = document.getElementById('storageLimit');
+    const storageLimitDisplay = document.getElementById('storageLimitDisplay');
+
+    if (storageLimitSelect) {
+        const limitGB = storageLimitSelect.value;
+        // Convert GB to bytes
+        const limitBytes = parseInt(limitGB) * 1024 * 1024 * 1024;
+
+        try {
+            await invoke('set_storage_limit', { limitBytes });
+
+            if (storageLimitDisplay) {
+                storageLimitDisplay.textContent = formatBytesLimit(limitBytes);
+            }
+
+            console.log(`Storage contribution limit set to ${formatBytesLimit(limitBytes)}`);
+        } catch (error) {
+            console.error('Failed to save storage limit:', error);
+        }
+    }
+}
+
+// Save profile settings (bio only - display name is immutable)
+async function saveProfileSettings() {
+    const bio = document.getElementById('settingsBio')?.value?.trim();
+    const saveBtn = document.getElementById('saveProfileBtn');
+
+    if (!currentUser) {
+        alert('Not logged in');
+        return;
+    }
+
+    // Disable button during processing
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+    }
+
+    try {
+        await invoke('update_user_profile', {
+            userId: currentUser.id,
+            displayName: null,  // Don't change display name
+            bio: bio || null,
+            profilePicture: null
+        });
+        // Update the global currentUser with new values
+        currentUser.bio = bio || '';
+        // Update the session storage
+        UserSession.save(currentUser);
+
+        // Show success state on button
+        if (saveBtn) {
+            saveBtn.textContent = 'Saved ✓';
+            // Re-enable after a delay so user can save again if needed
+            setTimeout(() => {
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save Bio';
+            }, 2000);
+        }
+    } catch (error) {
+        console.error('Failed to save bio:', error);
+        alert('Failed to save bio: ' + error);
+        // Re-enable button on error
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Bio';
+        }
+    }
+}
+
+
 // Copy user's invite link to clipboard
 async function copyMyInviteLink() {
     const inviteLinkInput = document.getElementById('myInviteLink');
@@ -528,10 +697,17 @@ let pendingAuthUser = null;
 // Create new account
 async function handleCreateAccount() {
     const displayName = document.getElementById('newDisplayName').value.trim();
+    const createBtn = document.getElementById('createAccountBtn');
 
     if (!displayName) {
         UI.showError('loginError', 'Please enter a display name');
         return;
+    }
+
+    // Disable button during processing
+    if (createBtn) {
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creating...';
     }
 
     try {
@@ -556,6 +732,9 @@ async function handleCreateAccount() {
             UI.showSuccess('loginSuccess', 'Account created successfully!');
             console.log('IMPORTANT: Save your recovery phrase:', recoveryPhrase);
 
+            // Keep button disabled after success
+            if (createBtn) createBtn.textContent = 'Account Created ✓';
+
             // Store user for later authentication
             pendingAuthUser = user;
 
@@ -564,11 +743,21 @@ async function handleCreateAccount() {
         } else {
             console.error('[CREATE_ACCOUNT] Missing user or recoveryPhrase!', {user, recoveryPhrase});
             UI.showError('loginError', 'Failed to create account - invalid response from server');
+            // Re-enable button on error
+            if (createBtn) {
+                createBtn.disabled = false;
+                createBtn.textContent = 'Create New Account';
+            }
         }
     } catch (error) {
         console.error('[CREATE_ACCOUNT] Exception:', error);
         await TauriAPI.debugLog('Account creation error: ' + error.toString());
         UI.showError('loginError', 'Account creation failed: ' + error);
+        // Re-enable button on error
+        if (createBtn) {
+            createBtn.disabled = false;
+            createBtn.textContent = 'Create New Account';
+        }
     }
 }
 
@@ -624,6 +813,7 @@ async function confirmRecoveryPhraseSaved() {
 async function handleRestoreAccount() {
     const displayName = document.getElementById('restoreDisplayName').value.trim();
     const recoveryPhrase = document.getElementById('restoreRecoveryPhrase').value.trim();
+    const restoreBtn = document.getElementById('restoreAccountBtn');
 
     if (!displayName) {
         UI.showError('loginError', 'Please enter your display name');
@@ -642,6 +832,12 @@ async function handleRestoreAccount() {
         return;
     }
 
+    // Disable button during processing
+    if (restoreBtn) {
+        restoreBtn.disabled = true;
+        restoreBtn.textContent = 'Restoring...';
+    }
+
     try {
         UI.showSuccess('loginSuccess', 'Restoring account...');
         await TauriAPI.debugLog('Restoring user: ' + displayName);
@@ -653,13 +849,25 @@ async function handleRestoreAccount() {
 
         if (user) {
             UI.showSuccess('loginSuccess', 'Account restored successfully!');
+            // Keep button disabled after success
+            if (restoreBtn) restoreBtn.textContent = 'Account Restored ✓';
             await completeAuthentication(user);
         } else {
             UI.showError('loginError', 'Failed to restore account');
+            // Re-enable button on error
+            if (restoreBtn) {
+                restoreBtn.disabled = false;
+                restoreBtn.textContent = 'Restore Account';
+            }
         }
     } catch (error) {
         await TauriAPI.debugLog('Account restoration error: ' + error.toString());
         UI.showError('loginError', 'Account restoration failed: ' + error);
+        // Re-enable button on error
+        if (restoreBtn) {
+            restoreBtn.disabled = false;
+            restoreBtn.textContent = 'Restore Account';
+        }
     }
 }
 
@@ -2003,6 +2211,7 @@ async function addFriendFromTab() {
 
     const errorEl = document.getElementById('addFriendTabError');
     const successEl = document.getElementById('addFriendTabSuccess');
+    const addBtn = document.getElementById('addFriendBtn');
     errorEl.classList.add('hidden');
     successEl.classList.add('hidden');
 
@@ -2022,6 +2231,12 @@ async function addFriendFromTab() {
         return;
     }
 
+    // Disable button during processing
+    if (addBtn) {
+        addBtn.disabled = true;
+        addBtn.textContent = 'Adding...';
+    }
+
     try {
         // Parse the invite URI
         const url = new URL(inputValue);
@@ -2032,18 +2247,21 @@ async function addFriendFromTab() {
         if (!publicKey) {
             errorEl.textContent = 'Invalid invite link - missing key';
             errorEl.classList.remove('hidden');
+            if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
             return;
         }
 
         if (!nodeId) {
             errorEl.textContent = 'Invalid invite link - missing node ID';
             errorEl.classList.remove('hidden');
+            if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
             return;
         }
 
         if (publicKey === currentUser.publicKey) {
             errorEl.textContent = 'You cannot add yourself as a friend';
             errorEl.classList.remove('hidden');
+            if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
             return;
         }
 
@@ -2062,14 +2280,21 @@ async function addFriendFromTab() {
         successEl.textContent = 'Friend added successfully!';
         successEl.classList.remove('hidden');
 
+        // Keep button disabled after success
+        if (addBtn) addBtn.textContent = 'Friend Added ✓';
+
         // Go back to friends list after a short delay
         setTimeout(() => {
             showFriends();
+            // Reset button when navigating away
+            if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
         }, 1500);
     } catch (error) {
         console.log('[ADD_FRIEND_TAB] Error:', error);
         errorEl.textContent = 'Failed to add friend: ' + error;
         errorEl.classList.remove('hidden');
+        // Re-enable button on error
+        if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
     }
 }
 
@@ -2640,8 +2865,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, 200);
 
         window.addEventListener('resize', () => {
-            const contents = ['postsContent', 'messagesContent', 'friendsContent', 'profileContent'];
-            const tabs = ['postsTab', 'messagesTab', 'friendsTab', 'profileTab'];
+            const contents = ['postsContent', 'messagesContent', 'friendsContent', 'profileContent', 'settingsContent'];
+            const tabs = ['postsTab', 'messagesTab', 'friendsTab', 'profileTab', 'settingsTab'];
 
             contents.forEach((contentId, index) => {
                 const content = document.getElementById(contentId);
@@ -3480,13 +3705,17 @@ async function refreshConnectionStatus(showLoading = false) {
 
         // Online = listening AND has connected peers (consistent with navbar)
         const isOnline = status.listening && (status.connected_peers || 0) > 0;
+        const isConnecting = status.listening && (status.connected_peers || 0) === 0 &&
+            P2P.connectionStartTime && (Date.now() - P2P.connectionStartTime) < P2P.connectionGracePeriod;
+        const statusClass = isOnline ? 'online' : (isConnecting ? 'connecting' : 'offline');
+        const statusText = isOnline ? 'Online' : (isConnecting ? 'Connecting...' : (status.listening ? 'Offline (No Peers)' : 'Offline'));
         let html = `
             <div class="status-section">
                 <div class="status-section-title">Network Status</div>
                 <div class="status-row">
                     <span class="status-label">Status</span>
-                    <span class="status-value ${isOnline ? 'online' : 'offline'}">
-                        ${isOnline ? 'Online' : (status.listening ? 'Listening' : 'Offline')}
+                    <span class="status-value ${statusClass}">
+                        ${statusText}
                     </span>
                 </div>
                 <div class="status-row">

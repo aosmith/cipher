@@ -250,9 +250,24 @@ pub async fn iroh_publish_post(
                     attachment.id, data.len()
                 );
 
+                // Check storage quota before storing
+                let data_size = data.len() as i64;
+                if let Ok(can_store) = db.can_store(data_size) {
+                    if !can_store {
+                        println!(
+                            "[IROH] Storage quota exceeded, skipping attachment {}",
+                            attachment.id
+                        );
+                        continue;
+                    }
+                }
+
                 // Store as blob
                 match network.store_blob(data).await {
                     Ok(hash) => {
+                        // Track storage used
+                        let _ = db.add_storage_used(data_size);
+
                         let blob_ref = crate::app::types::BlobReference {
                             id: attachment.id,
                             file_type: attachment.file_type.clone(),

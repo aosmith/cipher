@@ -41,6 +41,7 @@ mod pending_messages;
 mod posts;
 mod safety;
 mod schema;
+pub mod settings;
 pub mod sync;
 mod users;
 mod utils;

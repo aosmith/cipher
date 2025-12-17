@@ -325,6 +325,29 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
+    // Create app_settings table for global application settings
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    // Insert default settings if they don't exist
+    // Default storage: 4 GB (4294967296 bytes)
+    // Default relay: 2 GB/month (2147483648 bytes)
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES
+            ('storage_limit_bytes', '4294967296', datetime('now')),
+            ('relay_limit_bytes', '2147483648', datetime('now')),
+            ('storage_used_bytes', '0', datetime('now')),
+            ('relay_used_bytes', '0', datetime('now')),
+            ('relay_reset_at', datetime('now'), datetime('now'))",
+        [],
+    )?;
+
     Ok(())
 }
 

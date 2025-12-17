@@ -87,7 +87,7 @@
                                     <div class="form-group">
                                         <input type="text" id="newDisplayName" placeholder="Choose your display name" tabindex="1" required>
                                     </div>
-                                    <button type="submit" class="btn btn-primary">Create New Account</button>
+                                    <button type="submit" id="createAccountBtn" class="btn btn-primary">Create New Account</button>
                                 </form>
 
                                 <div class="text-center" style="margin-top: var(--spacing-lg);">
@@ -115,7 +115,7 @@
                                     <div class="form-group">
                                         <textarea id="restoreRecoveryPhrase" class="textarea" placeholder="Enter your 24-word recovery phrase" rows="3" tabindex="2" required></textarea>
                                     </div>
-                                    <button type="submit" class="btn btn-primary">Restore Account</button>
+                                    <button type="submit" id="restoreAccountBtn" class="btn btn-primary">Restore Account</button>
                                 </form>
 
                                 <div class="text-center" style="margin-top: var(--spacing-lg);">
@@ -294,9 +294,98 @@
                                 <div id="addFriendTabSuccess" class="success hidden" style="margin-bottom: var(--spacing-md);"></div>
 
                                 <div style="display: flex; gap: var(--spacing-lg); justify-content: center; margin-top: var(--spacing-xl);">
-                                    <button class="btn btn-primary" onclick="addFriendFromTab()">Add Friend</button>
+                                    <button id="addFriendBtn" class="btn btn-primary" onclick="addFriendFromTab()">Add Friend</button>
                                     <button class="btn btn-secondary" onclick="showFriends()">Cancel</button>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Tab -->
+                <div id="settingsTab" class="hidden">
+                    <div class="modal-content" id="settingsContent">
+                        <div class="modal-scrollable">
+                            <div style="width: 100%;">
+                                <h3 style="margin-bottom: var(--spacing-lg); color: var(--color-text-primary); text-align: center;">⚙️ Settings</h3>
+
+                                <!-- Profile Section -->
+                                <div class="settings-section" style="width: 100%; margin-bottom: var(--spacing-md); padding: var(--spacing-md); background: var(--glass-regular); border-radius: var(--border-radius-md); text-align: center; box-sizing: border-box;">
+                                    <h4 style="margin-bottom: var(--spacing-sm); color: var(--color-text-primary); font-size: var(--font-size-base);">Profile</h4>
+                                    <div style="margin-bottom: var(--spacing-md);">
+                                        <label style="color: var(--color-text-secondary); font-size: var(--font-size-xs);">Display Name</label>
+                                        <p id="settingsDisplayName" style="margin-top: var(--spacing-xs); color: var(--color-text-primary); font-weight: 600;"></p>
+                                        <p style="font-size: var(--font-size-xs); color: var(--color-text-muted); margin-top: var(--spacing-xs);">Set at account creation. Your public key is your true identity.</p>
+                                    </div>
+                                    <div style="margin-bottom: var(--spacing-sm);">
+                                        <label for="settingsBio" style="display: block; margin-bottom: var(--spacing-xs); color: var(--color-text-primary); font-weight: 600;">Bio</label>
+                                        <textarea id="settingsBio" class="textarea" placeholder="Tell us about yourself..." rows="2" style="text-align: left;"></textarea>
+                                    </div>
+                                    <button id="saveProfileBtn" class="btn btn-primary btn-sm" onclick="saveProfileSettings()">Save Bio</button>
+                                </div>
+
+                                <!-- Message Relay Section -->
+                                <div class="settings-section" style="width: 100%; margin-bottom: var(--spacing-md); padding: var(--spacing-md); background: var(--glass-regular); border-radius: var(--border-radius-md); text-align: center; box-sizing: border-box;">
+                                    <h4 style="margin-bottom: var(--spacing-sm); color: var(--color-text-primary); font-size: var(--font-size-base);">📡 Message Relay</h4>
+                                    <p style="color: var(--color-text-secondary); font-size: var(--font-size-xs); margin-bottom: var(--spacing-sm);">Help messages reach friends-of-friends by relaying encrypted data.</p>
+
+                                    <div style="margin-bottom: var(--spacing-sm);">
+                                        <label for="relayLimit" style="display: block; margin-bottom: var(--spacing-xs); color: var(--color-text-primary); font-weight: 600;">Monthly Limit</label>
+                                        <select id="relayLimit" style="text-align: center; width: 140px; padding: 8px 12px; font-size: var(--font-size-sm); background: var(--glass-light); border: 1px solid var(--glass-regular-border); border-radius: var(--border-radius-sm); color: var(--color-text-primary);" onchange="saveRelayLimit()">
+                                            <option value="0">None (0 MB)</option>
+                                            <option value="128">128 MB</option>
+                                            <option value="256">256 MB</option>
+                                            <option value="512">512 MB</option>
+                                            <option value="1024">1 GB</option>
+                                            <option value="2048" selected>2 GB</option>
+                                            <option value="5120">5 GB</option>
+                                            <option value="-1">Unlimited</option>
+                                        </select>
+                                    </div>
+
+                                    <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin: 0;">
+                                        <strong>Used:</strong> <span id="relayUsed">0 MB</span> / <span id="relayLimitDisplay">2 GB</span>
+                                    </p>
+                                </div>
+
+                                <!-- Storage Section -->
+                                <div class="settings-section" style="width: 100%; margin-bottom: var(--spacing-md); padding: var(--spacing-md); background: var(--glass-regular); border-radius: var(--border-radius-md); text-align: center; box-sizing: border-box;">
+                                    <h4 style="margin-bottom: var(--spacing-sm); color: var(--color-text-primary); font-size: var(--font-size-base);">💾 Storage Contribution</h4>
+                                    <p style="color: var(--color-text-secondary); font-size: var(--font-size-xs); margin-bottom: var(--spacing-sm);">Help your friends by storing their encrypted data when they're offline.</p>
+
+                                    <div style="margin-bottom: var(--spacing-sm);">
+                                        <label for="storageLimit" style="display: block; margin-bottom: var(--spacing-xs); color: var(--color-text-primary); font-weight: 600;">Storage Limit</label>
+                                        <select id="storageLimit" style="text-align: center; width: 140px; padding: 8px 12px; font-size: var(--font-size-sm); background: var(--glass-light); border: 1px solid var(--glass-regular-border); border-radius: var(--border-radius-sm); color: var(--color-text-primary);" onchange="saveStorageLimit()">
+                                            <option value="0">None (0 GB)</option>
+                                            <option value="1">1 GB</option>
+                                            <option value="2">2 GB</option>
+                                            <option value="4" selected>4 GB</option>
+                                            <option value="8">8 GB</option>
+                                            <option value="16">16 GB</option>
+                                            <option value="32">32 GB</option>
+                                            <option value="64">64 GB</option>
+                                        </select>
+                                    </div>
+
+                                    <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin: 0;">
+                                        <strong>Used:</strong> <span id="storageUsed">0 MB</span> / <span id="storageLimitDisplay">4 GB</span>
+                                    </p>
+                                </div>
+
+                                <!-- Security Section -->
+                                <div class="settings-section" style="width: 100%; margin-bottom: var(--spacing-md); padding: var(--spacing-md); background: var(--glass-regular); border-radius: var(--border-radius-md); text-align: center; box-sizing: border-box;">
+                                    <h4 style="margin-bottom: var(--spacing-sm); color: var(--color-text-primary); font-size: var(--font-size-base);">🔐 Security</h4>
+                                    <p style="color: var(--color-text-secondary); font-size: var(--font-size-xs);">Your 24-word recovery phrase was shown once at account creation.</p>
+                                    <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin-top: var(--spacing-xs);"><strong>Not stored anywhere</strong> — only you have it.</p>
+                                </div>
+                            </div>
+
+                            <!-- About Footer (full width) -->
+                            <div style="width: 100%; margin-top: var(--spacing-lg); padding: var(--spacing-md); background: var(--glass-light); border-top: 1px solid var(--glass-regular); text-align: center; box-sizing: border-box;">
+                                <p style="color: var(--color-text-primary); font-weight: 600; font-size: var(--font-size-sm); margin-bottom: var(--spacing-xs);">Cipher <span style="font-weight: normal; color: var(--color-text-muted);">v<span id="settingsVersion">0.0.9</span></span></p>
+                                <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin: 0;">
+                                    E2E encrypted P2P · X25519 + XChaCha20-Poly1305 · Ed25519
+                                </p>
                             </div>
                         </div>
                     </div>
@@ -338,8 +427,7 @@
             <div id="connectionStatusBody" class="connection-status-body">
                 <!-- Content populated by JavaScript -->
             </div>
-            <div class="connection-status-footer">
-                <span style="color: var(--color-text-tertiary); font-size: var(--font-size-sm);">Updates automatically</span>
+            <div class="connection-status-footer" style="justify-content: center;">
                 <button class="btn btn-primary" onclick="closeConnectionStatus()">Close</button>
             </div>
         </div>

@@ -44,6 +44,12 @@ use app::{
 // Device-to-device sync commands
 use app::{apply_sync_data, get_sync_data, get_sync_status, update_all_sync_timestamps};
 
+// App settings commands
+use app::{
+    add_relay_used, add_storage_used, can_relay_data, can_store_data, get_app_settings,
+    set_relay_limit, set_storage_limit,
+};
+
 /// Initialize the database for the Tauri application
 fn init_database(app: &tauri::App) -> Database {
     // Check for test data directory override (only for testing, never in production builds)
@@ -218,7 +224,15 @@ fn main() {
             iroh_shutdown,
             iroh_generate_invite,
             iroh_add_friend_by_public_key,
-            iroh_read_blob
+            iroh_read_blob,
+            // App Settings
+            get_app_settings,
+            set_storage_limit,
+            set_relay_limit,
+            can_store_data,
+            can_relay_data,
+            add_storage_used,
+            add_relay_used
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
