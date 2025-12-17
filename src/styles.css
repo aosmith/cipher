@@ -1699,6 +1699,48 @@ select.textarea {
     color: var(--color-text-primary);
 }
 
+/* Multi-recipient chip styles */
+.recipient-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    background: var(--color-primary);
+    color: white;
+    padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-xs) var(--spacing-md);
+    border-radius: var(--border-radius-full);
+    font-size: var(--font-size-sm);
+    margin: var(--spacing-xs);
+}
+
+.recipient-chip .recipient-name {
+    font-weight: var(--font-weight-medium);
+}
+
+.recipient-chip .recipient-remove {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    transition: background 0.2s ease;
+}
+
+.recipient-chip .recipient-remove:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+.selected-recipient {
+    flex-wrap: wrap;
+}
+
 .recipient-select {
     width: 100%;
     padding: var(--spacing-md) var(--spacing-lg);

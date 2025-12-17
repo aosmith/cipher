@@ -6,7 +6,23 @@ console.log('[MAIN.JS] JavaScript is loading...');
 let currentUser = null;
 let tauriInvoke = null;
 let allFriends = [];
-let selectedRecipient = null;
+let selectedRecipients = [];
+
+// Helper function to get display name for a user ID
+function getDisplayName(userId) {
+    if (!userId) return 'Unknown';
+    if (currentUser && userId === currentUser.id) return 'You';
+
+    // Look up friend by ID
+    const friend = allFriends.find(f => f.id === userId);
+    if (friend && friend.displayName) {
+        return friend.displayName;
+    }
+
+    // Fallback: show truncated ID
+    const idStr = String(userId);
+    return idStr.length > 8 ? idStr.substring(0, 8) + '...' : idStr;
+}
 
 // Removed legacy WebSocket notification system - now using WebRTC P2P
 
@@ -1328,8 +1344,8 @@ async function loadMessages() {
                     return `
                         <div class="post glass-card hover-lift-md voice-message-post" data-voice-id="${message.id}">
                             <div class="post-meta">
-                                ${message.senderId === currentUser.id ? 'You' : `User ${message.senderId}`}
-                                → ${message.recipientId === currentUser.id ? 'You' : `User ${message.recipientId}`}
+                                ${getDisplayName(message.senderId)}
+                                → ${getDisplayName(message.recipientId)}
                                 • ${new Date(message.createdAt).toLocaleDateString()}
                                 • 🔒 Encrypted Voice Message
                                 ${message.threadId ? ` • 💬 Reply to Message ${message.threadId}` : ''}
@@ -1343,8 +1359,8 @@ async function loadMessages() {
                     return `
                         <div class="post glass-card hover-lift-md" data-message-id="${message.id}">
                             <div class="post-meta">
-                                ${message.senderId === currentUser.id ? 'You' : `User ${message.senderId}`}
-                                → ${message.recipientId === currentUser.id ? 'You' : `User ${message.recipientId}`}
+                                ${getDisplayName(message.senderId)}
+                                → ${getDisplayName(message.recipientId)}
                                 • ${new Date(message.createdAt).toLocaleDateString()}
                                 ${message.encrypted ? ' • 🔒 Encrypted' : ''}
                                 ${message.threadId ? ` • 💬 Reply to Message ${message.threadId}` : ''}
@@ -1460,7 +1476,7 @@ async function viewThread(threadId) {
         const threadHtml = threadMessages.map(message => `
             <div class="thread-message">
                 <div class="post-meta">
-                    ${message.senderId === currentUser.id ? 'You' : `User ${message.senderId}`}
+                    ${getDisplayName(message.senderId)}
                     • ${new Date(message.createdAt).toLocaleDateString()}
                     ${message.encrypted ? ' • 🔒 Encrypted' : ''}
                 </div>
@@ -1546,8 +1562,8 @@ function stopVoiceRecording() {
 }
 
 async function processVoiceMessage(audioBlob) {
-    if (!selectedRecipient) {
-        UI.showError('dashboardError', 'Please select a recipient for the voice message');
+    if (selectedRecipients.length === 0) {
+        UI.showError('dashboardError', 'Please select at least one recipient for the voice message');
         return;
     }
 
@@ -1567,16 +1583,23 @@ async function processVoiceMessage(audioBlob) {
             const messageContentInput = document.getElementById('messageContent');
             const replyToId = messageContentInput?.getAttribute('data-reply-to');
 
-            await TauriAPI.invoke('send_voice_message', {
-                senderId: currentUser.id,
-                recipientId: selectedRecipient.id,
-                audioData: base64Audio,
-                durationSeconds: duration,
-                waveform: waveform,
-                threadId: replyToId ? parseInt(replyToId) : null
-            });
+            // Send to all selected recipients
+            const sendPromises = selectedRecipients.map(recipient =>
+                TauriAPI.invoke('send_voice_message', {
+                    senderId: currentUser.id,
+                    recipientId: recipient.id,
+                    audioData: base64Audio,
+                    durationSeconds: duration,
+                    waveform: waveform,
+                    threadId: replyToId ? parseInt(replyToId) : null
+                })
+            );
 
-            UI.showSuccess('dashboardError', 'Voice message sent successfully!');
+            await Promise.all(sendPromises);
+
+            const count = selectedRecipients.length;
+            UI.showSuccess('dashboardError', `Voice message sent to ${count} recipient${count > 1 ? 's' : ''}!`);
+            clearSelectedRecipients();
             await loadMessages();
             await loadVoiceMessages();
 
@@ -2112,21 +2135,29 @@ function setupFriendSearch() {
             return;
         }
 
-        const filteredFriends = allFriends.filter(friend =>
-            friend.friendUsername.toLowerCase().includes(query)
-        );
+        // Fuzzy search: match display name or public key prefix
+        const filteredFriends = allFriends.filter(friend => {
+            const name = (friend.displayName || '').toLowerCase();
+            const pubKey = (friend.publicKey || '').toLowerCase();
+            // Match if query appears anywhere in name, or if public key starts with query
+            return name.includes(query) || pubKey.startsWith(query);
+        });
 
         if (filteredFriends.length === 0) {
             resultsContainer.innerHTML = '<div class="friend-search-item">No friends found</div>';
         } else {
-            resultsContainer.innerHTML = filteredFriends.map(friend => `
-                <div class="friend-search-item" onclick="selectFriend(${friend.id}, '${Utils.escapeHtml(friend.friendUsername)}')">
-                    <div class="friend-info">
-                        <div class="friend-avatar">${friend.friendUsername.charAt(0).toUpperCase()}</div>
-                        <span class="friend-name">${Utils.escapeHtml(friend.friendUsername)}</span>
+            resultsContainer.innerHTML = filteredFriends.map(friend => {
+                const name = friend.displayName || 'Unknown';
+                const initial = name.charAt(0).toUpperCase();
+                return `
+                    <div class="friend-search-item" onclick="selectFriend('${friend.id}', '${Utils.escapeHtml(name)}')">
+                        <div class="friend-info">
+                            <div class="friend-avatar">${initial}</div>
+                            <span class="friend-name">${Utils.escapeHtml(name)}</span>
+                        </div>
                     </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         resultsContainer.classList.remove('hidden');
@@ -2139,66 +2170,96 @@ function setupFriendSearch() {
     });
 }
 
-function selectFriend(friendId, friendUsername) {
-    selectedRecipient = { id: friendId, username: friendUsername };
+function selectFriend(friendId, displayName) {
+    // Don't add duplicates
+    if (selectedRecipients.some(r => r.id === friendId)) {
+        document.getElementById('friendSearch').value = '';
+        document.getElementById('friendSearchResults').classList.add('hidden');
+        return;
+    }
 
-    const selectedContainer = document.getElementById('selectedRecipient');
-    selectedContainer.innerHTML = `
-        <div class="friend-info">
-            <div class="friend-avatar">${friendUsername.charAt(0).toUpperCase()}</div>
-            <span class="friend-name">${Utils.escapeHtml(friendUsername)}</span>
-        </div>
-    `;
+    selectedRecipients.push({ id: friendId, displayName: displayName });
+    updateSelectedRecipientsUI();
 
     document.getElementById('friendSearch').value = '';
     document.getElementById('friendSearchResults').classList.add('hidden');
+}
+
+function removeRecipient(friendId) {
+    selectedRecipients = selectedRecipients.filter(r => r.id !== friendId);
+    updateSelectedRecipientsUI();
+}
+
+function updateSelectedRecipientsUI() {
+    const selectedContainer = document.getElementById('selectedRecipient');
+
+    if (selectedRecipients.length === 0) {
+        selectedContainer.innerHTML = '<span class="no-selection">No friends selected</span>';
+        return;
+    }
+
+    selectedContainer.innerHTML = selectedRecipients.map(recipient => `
+        <div class="recipient-chip">
+            <span class="recipient-name">${Utils.escapeHtml(recipient.displayName)}</span>
+            <button class="recipient-remove" onclick="removeRecipient('${recipient.id}')" title="Remove">×</button>
+        </div>
+    `).join('');
+}
+
+function clearSelectedRecipients() {
+    selectedRecipients = [];
+    updateSelectedRecipientsUI();
 }
 
 async function sendMessage() {
     if (!currentUser) return;
 
     const messageContentInput = document.getElementById('messageContent');
-    const content = messageContentInput.value;
+    const content = messageContentInput.value.trim();
     const replyToId = messageContentInput.getAttribute('data-reply-to');
 
-    if (!selectedRecipient || !content) {
-        UI.showError('dashboardError', 'Please select a recipient and enter a message');
+    if (selectedRecipients.length === 0 || !content) {
+        UI.showError('dashboardError', 'Please select at least one recipient and enter a message');
         return;
     }
 
     try {
-        if (replyToId) {
-            // Send as a reply using the reply_to_message command
-            await TauriAPI.invoke('reply_to_message', {
-                originalMessageId: parseInt(replyToId),
-                senderId: currentUser.id,
-                recipientId: selectedRecipient.id,
-                content: content
-            });
-        } else {
-            // Send as a regular message
-            await TauriAPI.invoke('send_encrypted_message', {
-                senderId: currentUser.id,
-                recipientId: selectedRecipient.id,
-                content: content
-            });
-        }
+        // Send to all selected recipients
+        const sendPromises = selectedRecipients.map(async (recipient) => {
+            if (replyToId) {
+                // Send as a reply using the reply_to_message command
+                await TauriAPI.invoke('reply_to_message', {
+                    originalMessageId: parseInt(replyToId),
+                    senderId: currentUser.id,
+                    recipientId: recipient.id,
+                    content: content
+                });
+            } else {
+                // Send as a regular message
+                await TauriAPI.invoke('send_encrypted_message', {
+                    senderId: currentUser.id,
+                    recipientId: recipient.id,
+                    content: content
+                });
+            }
+        });
 
+        await Promise.all(sendPromises);
+
+        const recipientCount = selectedRecipients.length;
         messageContentInput.value = '';
         messageContentInput.placeholder = 'Enter your message';
         messageContentInput.removeAttribute('data-reply-to');
-        clearSelectedRecipient();
-        UI.showSuccess('dashboardError', replyToId ? 'Reply sent successfully!' : 'Encrypted message sent successfully!');
+        clearSelectedRecipients();
+
+        const successMsg = replyToId
+            ? 'Reply sent successfully!'
+            : `Message sent to ${recipientCount} recipient${recipientCount > 1 ? 's' : ''}!`;
+        UI.showSuccess('dashboardError', successMsg);
         loadMessages();
     } catch (error) {
         UI.showError('dashboardError', 'Failed to send message: ' + error);
     }
-}
-
-function clearSelectedRecipient() {
-    selectedRecipient = null;
-    const selectedContainer = document.getElementById('selectedRecipient');
-    selectedContainer.innerHTML = '<span class="no-selection">No friend selected</span>';
 }
 
 // Friend management
@@ -3802,7 +3863,7 @@ Object.assign(window, {
     handleLogout, showLogin, showFeed, showPosts, showMessages,
     showFriends, showAddFriend, showCreatePostPage, showCreatePost, createPost, cancelCreatePost,
     createPostFromPage, sendMessage, addFriendFromTab,
-    generateMyQRCode, generateProfileQRCode, scanQRCode, handleQRCodeFile, selectFriend, copyInviteLink,
+    generateMyQRCode, generateProfileQRCode, scanQRCode, handleQRCodeFile, selectFriend, removeRecipient, copyInviteLink,
     viewMediaAttachment, showEditProfile, handleProfilePictureUpload, saveProfile,
     createFriendInvite, useFriendInvite, exportFriendsList, importFriendsList,
     searchMessages, clearMessageSearch, scrollToMessage, editMessage,
