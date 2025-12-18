@@ -1,6 +1,6 @@
 [package]
 name = "cipher-social"
-version = "0.0.10"
+version = "0.0.11"
 description = "Cipher - End-to-End Encrypted P2P Social Network"
 authors = ["Cipher Team"]
 license = "AGPL-3.0"
@@ -37,6 +37,7 @@ sha2 = "0.10"
 blake3 = "1.5"
 rand = "0.8"
 base64 = "0.22"
+flate2 = "1.0"
 bytes = "1.10"
 lazy_static = "1.4"
 # QR Code and image processing - use minimal features

@@ -2123,51 +2123,69 @@ async function createPostFromPage() {
 // Friend search and messaging
 function setupFriendSearch() {
     const searchInput = document.getElementById('friendSearch');
-    const resultsContainer = document.getElementById('friendSearchResults');
+    const friendsList = document.getElementById('friendsList');
 
-    if (!searchInput || !resultsContainer) return;
+    if (!friendsList) return;
 
-    searchInput.addEventListener('input', function() {
-        const query = this.value.toLowerCase().trim();
+    // Render the friends list
+    renderFriendsList();
 
-        if (query === '') {
-            resultsContainer.classList.add('hidden');
-            return;
-        }
+    // Filter on input
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            renderFriendsList(this.value.toLowerCase().trim());
+        });
+    }
+}
 
-        // Fuzzy search: match display name or public key prefix
-        const filteredFriends = allFriends.filter(friend => {
+function renderFriendsList(filter = '') {
+    const friendsList = document.getElementById('friendsList');
+    if (!friendsList) return;
+
+    if (allFriends.length === 0) {
+        friendsList.innerHTML = '<div class="friends-list-empty">No friends yet. Add friends from the Friends tab.</div>';
+        return;
+    }
+
+    // Filter friends if search query provided
+    const filteredFriends = filter
+        ? allFriends.filter(friend => {
             const name = (friend.displayName || '').toLowerCase();
             const pubKey = (friend.publicKey || '').toLowerCase();
-            // Match if query appears anywhere in name, or if public key starts with query
-            return name.includes(query) || pubKey.startsWith(query);
-        });
+            return name.includes(filter) || pubKey.startsWith(filter);
+        })
+        : allFriends;
 
-        if (filteredFriends.length === 0) {
-            resultsContainer.innerHTML = '<div class="friend-search-item">No friends found</div>';
-        } else {
-            resultsContainer.innerHTML = filteredFriends.map(friend => {
-                const name = friend.displayName || 'Unknown';
-                const initial = name.charAt(0).toUpperCase();
-                return `
-                    <div class="friend-search-item" onclick="selectFriend('${friend.id}', '${Utils.escapeHtml(name)}')">
-                        <div class="friend-info">
-                            <div class="friend-avatar">${initial}</div>
-                            <span class="friend-name">${Utils.escapeHtml(name)}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
+    if (filteredFriends.length === 0) {
+        friendsList.innerHTML = '<div class="friends-list-empty">No friends match your filter</div>';
+        return;
+    }
 
-        resultsContainer.classList.remove('hidden');
-    });
+    friendsList.innerHTML = filteredFriends.map(friend => {
+        const name = friend.displayName || 'Unknown';
+        const initial = name.charAt(0).toUpperCase();
+        const isSelected = selectedRecipients.some(r => r.id === friend.id);
+        return `
+            <div class="friend-select-item ${isSelected ? 'selected' : ''}" onclick="toggleFriendSelection('${friend.id}', '${Utils.escapeHtml(name)}')">
+                <div class="friend-avatar">${initial}</div>
+                <span class="friend-name">${Utils.escapeHtml(name)}</span>
+                ${isSelected ? '<span class="friend-check">✓</span>' : ''}
+            </div>
+        `;
+    }).join('');
+}
 
-    document.addEventListener('click', function(event) {
-        if (!event.target.closest('#friendSearch') && !event.target.closest('#friendSearchResults')) {
-            resultsContainer.classList.add('hidden');
-        }
-    });
+function toggleFriendSelection(friendId, displayName) {
+    const existingIndex = selectedRecipients.findIndex(r => r.id === friendId);
+    if (existingIndex >= 0) {
+        // Remove if already selected
+        selectedRecipients.splice(existingIndex, 1);
+    } else {
+        // Add if not selected
+        selectedRecipients.push({ id: friendId, displayName: displayName });
+    }
+    updateSelectedRecipientsUI();
+    renderFriendsList(document.getElementById('friendSearch')?.value?.toLowerCase().trim() || '');
 }
 
 function selectFriend(friendId, displayName) {
@@ -2194,10 +2212,12 @@ function updateSelectedRecipientsUI() {
     const selectedContainer = document.getElementById('selectedRecipient');
 
     if (selectedRecipients.length === 0) {
-        selectedContainer.innerHTML = '<span class="no-selection">No friends selected</span>';
+        selectedContainer.innerHTML = '';
+        selectedContainer.style.display = 'none';
         return;
     }
 
+    selectedContainer.style.display = 'flex';
     selectedContainer.innerHTML = selectedRecipients.map(recipient => `
         <div class="recipient-chip">
             <span class="recipient-name">${Utils.escapeHtml(recipient.displayName)}</span>
@@ -2218,6 +2238,10 @@ async function sendMessage() {
     const content = messageContentInput.value.trim();
     const replyToId = messageContentInput.getAttribute('data-reply-to');
 
+    console.log('[SEND_MESSAGE] selectedRecipients:', selectedRecipients);
+    console.log('[SEND_MESSAGE] content:', content);
+    console.log('[SEND_MESSAGE] currentUser.id:', currentUser.id);
+
     if (selectedRecipients.length === 0 || !content) {
         UI.showError('dashboardError', 'Please select at least one recipient and enter a message');
         return;
@@ -2226,6 +2250,7 @@ async function sendMessage() {
     try {
         // Send to all selected recipients
         const sendPromises = selectedRecipients.map(async (recipient) => {
+            console.log('[SEND_MESSAGE] Sending to recipient:', recipient);
             if (replyToId) {
                 // Send as a reply using the reply_to_message command
                 await TauriAPI.invoke('reply_to_message', {
@@ -2285,9 +2310,9 @@ async function addFriendFromTab() {
         return;
     }
 
-    // Only accept cipher:// invite links
-    if (!inputValue.startsWith('cipher://add-friend?')) {
-        errorEl.textContent = 'Invalid invite link. Must start with cipher://add-friend?';
+    // Accept both old (cipher://add-friend?...) and new (cipher://f/...) formats
+    if (!inputValue.startsWith('cipher://')) {
+        errorEl.textContent = 'Invalid invite link. Must start with cipher://';
         errorEl.classList.remove('hidden');
         return;
     }
@@ -2299,42 +2324,31 @@ async function addFriendFromTab() {
     }
 
     try {
-        // Parse the invite URI
-        const url = new URL(inputValue);
-        const publicKey = url.searchParams.get('key');
-        const nodeId = url.searchParams.get('node');
-        const relayUrl = url.searchParams.get('relay');
+        // Parse the invite using Rust backend (handles both old and new formats)
+        const parsed = await TauriAPI.invoke('parse_invite_code', { inviteCode: inputValue });
+        console.log('[ADD_FRIEND_TAB] Parsed invite:', parsed);
 
-        if (!publicKey) {
-            errorEl.textContent = 'Invalid invite link - missing key';
-            errorEl.classList.remove('hidden');
-            if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
-            return;
-        }
-
-        if (!nodeId) {
-            errorEl.textContent = 'Invalid invite link - missing node ID';
-            errorEl.classList.remove('hidden');
-            if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
-            return;
-        }
-
-        if (publicKey === currentUser.publicKey) {
+        if (parsed.publicKey === currentUser.publicKey) {
             errorEl.textContent = 'You cannot add yourself as a friend';
             errorEl.classList.remove('hidden');
             if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add Friend'; }
             return;
         }
 
-        console.log('[ADD_FRIEND_TAB] Adding friend:', { publicKey, nodeId, relayUrl });
+        console.log('[ADD_FRIEND_TAB] Adding friend:', {
+            publicKey: parsed.publicKey,
+            nodeId: parsed.nodeId,
+            relayUrl: parsed.relayUrl,
+            displayName: parsed.displayName
+        });
 
         // Use the P2P-enabled add friend command
         await TauriAPI.invoke('iroh_add_friend_by_public_key', {
-            friendPublicKey: publicKey,
-            nodeId: nodeId,
-            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null,
-            displayName: null,
-            signature: null
+            friendPublicKey: parsed.publicKey,
+            nodeId: parsed.nodeId,
+            relayUrl: parsed.relayUrl || null,
+            displayName: parsed.displayName || null,
+            signature: parsed.signature || null
         });
 
         document.getElementById('addFriendPublicKey').value = '';
@@ -2551,52 +2565,25 @@ async function scanQRCode() {
             if (result && result.content) {
                 console.log('[QR] QR code scanned, content:', result.content);
 
-                // Extract public key and optional node info from cipher:// URI
-                let publicKey = result.content;
-                let nodeId = null;
-                let relayUrl = null;
-                let displayName = null;
-                let signature = null;
-                if (result.content.startsWith('cipher://add-friend?key=')) {
-                    const url = new URL(result.content);
-                    publicKey = url.searchParams.get('key');
-                    nodeId = url.searchParams.get('node');
-                    const encodedRelay = url.searchParams.get('relay');
-                    const encodedName = url.searchParams.get('name');
-                    const encodedSig = url.searchParams.get('sig');
-                    if (encodedRelay) {
-                        relayUrl = decodeURIComponent(encodedRelay);
-                    }
-                    if (encodedName) {
-                        displayName = decodeURIComponent(encodedName);
-                    }
-                    if (encodedSig) {
-                        signature = decodeURIComponent(encodedSig);
-                    }
-                    if (nodeId && relayUrl) {
-                        console.log('[QR] Extracted public key and node info from URI');
-                        console.log('[QR]   Public key:', publicKey);
-                        console.log('[QR]   NodeId:', nodeId);
-                        console.log('[QR]   Relay:', relayUrl);
-                        if (displayName) {
-                            console.log('[QR]   Display Name:', displayName, signature ? '(signed)' : '(unsigned)');
-                        }
-                    } else {
-                        console.log('[QR] Extracted public key from URI (no node info):', publicKey);
-                    }
-                } else {
-                    console.log('[QR] Using raw public key (no node info)');
+                // Parse invite code (supports both old and new compressed formats)
+                if (!result.content.startsWith('cipher://')) {
+                    UI.showError('dashboardError', 'Invalid QR code. Must be a Cipher invite link.');
+                    return;
                 }
 
-                // Add friend by public key with optional node info - single function call
-                console.log('[QR] Adding friend by public key...');
                 try {
+                    // Use Rust backend to parse invite (handles compression/decompression)
+                    const parsed = await TauriAPI.invoke('parse_invite_code', { inviteCode: result.content });
+                    console.log('[QR] Parsed invite:', parsed);
+
+                    // Add friend by public key with node info
+                    console.log('[QR] Adding friend by public key...');
                     const addedPublicKey = await TauriAPI.invoke('iroh_add_friend_by_public_key', {
-                        friendPublicKey: publicKey,
-                        nodeId: nodeId,
-                        relayUrl: relayUrl,
-                        displayName: displayName,
-                        signature: signature
+                        friendPublicKey: parsed.publicKey,
+                        nodeId: parsed.nodeId,
+                        relayUrl: parsed.relayUrl || null,
+                        displayName: parsed.displayName || null,
+                        signature: parsed.signature || null
                     });
                     console.log('[QR] ✓ Friend added successfully:', addedPublicKey);
 
@@ -3408,57 +3395,23 @@ async function handleScannedQRCode(data) {
         console.log('═══════════════════════════════════════════════════════════════');
         console.log('[QR-SCAN] Scanned data:', data);
 
-        // Extract public key and optional node info from cipher://add-friend?key=... URI
-        let publicKey = data;
-        let nodeId = null;
-        let relayUrl = null;
-        let displayName = null;
-        let signature = null;
-        if (data.startsWith('cipher://add-friend?key=')) {
-            const url = new URL(data);
-            // URLSearchParams decodes '+' as space, but base64 uses '+' - restore it
-            publicKey = url.searchParams.get('key')?.replace(/ /g, '+');
-            nodeId = url.searchParams.get('node');
-            const encodedRelay = url.searchParams.get('relay');
-            if (encodedRelay) {
-                relayUrl = decodeURIComponent(encodedRelay);
-            }
-            // Extract signed display name if present
-            const encodedName = url.searchParams.get('name');
-            const encodedSig = url.searchParams.get('sig');
-            if (encodedName) {
-                displayName = decodeURIComponent(encodedName);
-            }
-            if (encodedSig) {
-                signature = decodeURIComponent(encodedSig);
-            }
-            if (nodeId && relayUrl) {
-                console.log('[QR-SCAN] Extracted public key and node info from URI');
-                console.log('[QR-SCAN]   Public key:', publicKey);
-                console.log('[QR-SCAN]   NodeId:', nodeId);
-                console.log('[QR-SCAN]   Relay:', relayUrl);
-                if (displayName) {
-                    console.log('[QR-SCAN]   Display name:', displayName);
-                }
-            } else {
-                console.log('[QR-SCAN] Extracted public key from URI (no node info):', publicKey);
-            }
-        } else {
-            console.log('[QR-SCAN] Using raw public key (no node info)');
+        // Parse invite code (supports both old and new compressed formats)
+        if (!data.startsWith('cipher://')) {
+            throw new Error('Invalid QR code format - must be a Cipher invite link');
         }
 
-        if (!publicKey) {
-            throw new Error('Invalid QR code format - no public key found');
-        }
+        // Use Rust backend to parse invite (handles compression/decompression)
+        const parsed = await TauriAPI.invoke('parse_invite_code', { inviteCode: data });
+        console.log('[QR-SCAN] Parsed invite:', parsed);
 
-        // Add friend by public key with optional node info - single function call
+        // Add friend by public key with node info
         console.log('[QR-SCAN] Adding friend by public key...');
         const addedPublicKey = await TauriAPI.invoke('iroh_add_friend_by_public_key', {
-            friendPublicKey: publicKey,
-            nodeId: nodeId,
-            relayUrl: relayUrl,
-            displayName: displayName,
-            signature: signature
+            friendPublicKey: parsed.publicKey,
+            nodeId: parsed.nodeId,
+            relayUrl: parsed.relayUrl || null,
+            displayName: parsed.displayName || null,
+            signature: parsed.signature || null
         });
         console.log('[QR-SCAN] ✓ Friend added successfully:', addedPublicKey);
         console.log('═══════════════════════════════════════════════════════════════');
@@ -3643,52 +3596,38 @@ async function addFriendFromModal() {
         return;
     }
 
-    // Only accept cipher:// invite links
-    if (!inputValue.startsWith('cipher://add-friend?')) {
-        errorEl.textContent = 'Invalid invite link. Must start with cipher://add-friend?';
+    // Accept both old (cipher://add-friend?...) and new (cipher://f/...) formats
+    if (!inputValue.startsWith('cipher://')) {
+        errorEl.textContent = 'Invalid invite link. Must start with cipher://';
         errorEl.classList.remove('hidden');
         return;
     }
 
     try {
-        // Parse the invite URI
-        const url = new URL(inputValue);
-        const publicKey = url.searchParams.get('key');
-        const nodeId = url.searchParams.get('node');
-        const relayUrl = url.searchParams.get('relay');
-        // Extract signed display name if present
-        const encodedName = url.searchParams.get('name');
-        const encodedSig = url.searchParams.get('sig');
-        const displayName = encodedName ? decodeURIComponent(encodedName) : null;
-        const signature = encodedSig ? decodeURIComponent(encodedSig) : null;
+        // Parse the invite using Rust backend (handles both old and new formats)
+        const parsed = await TauriAPI.invoke('parse_invite_code', { inviteCode: inputValue });
+        console.log('[ADD_FRIEND_MODAL] Parsed invite:', parsed);
 
-        if (!publicKey) {
-            errorEl.textContent = 'Invalid invite link - missing key';
-            errorEl.classList.remove('hidden');
-            return;
-        }
-
-        if (!nodeId) {
-            errorEl.textContent = 'Invalid invite link - missing node ID';
-            errorEl.classList.remove('hidden');
-            return;
-        }
-
-        if (publicKey === currentUser.publicKey) {
+        if (parsed.publicKey === currentUser.publicKey) {
             errorEl.textContent = 'You cannot add yourself as a friend';
             errorEl.classList.remove('hidden');
             return;
         }
 
-        console.log('[ADD_FRIEND_MODAL] Adding friend:', { publicKey, nodeId, relayUrl, displayName });
+        console.log('[ADD_FRIEND_MODAL] Adding friend:', {
+            publicKey: parsed.publicKey,
+            nodeId: parsed.nodeId,
+            relayUrl: parsed.relayUrl,
+            displayName: parsed.displayName
+        });
 
         // Use the P2P-enabled add friend command
         await TauriAPI.invoke('iroh_add_friend_by_public_key', {
-            friendPublicKey: publicKey,
-            nodeId: nodeId,
-            relayUrl: relayUrl ? decodeURIComponent(relayUrl) : null,
-            displayName: displayName,
-            signature: signature
+            friendPublicKey: parsed.publicKey,
+            nodeId: parsed.nodeId,
+            relayUrl: parsed.relayUrl || null,
+            displayName: parsed.displayName || null,
+            signature: parsed.signature || null
         });
 
         successEl.textContent = 'Friend added successfully!';
@@ -3863,7 +3802,7 @@ Object.assign(window, {
     handleLogout, showLogin, showFeed, showPosts, showMessages,
     showFriends, showAddFriend, showCreatePostPage, showCreatePost, createPost, cancelCreatePost,
     createPostFromPage, sendMessage, addFriendFromTab,
-    generateMyQRCode, generateProfileQRCode, scanQRCode, handleQRCodeFile, selectFriend, removeRecipient, copyInviteLink,
+    generateMyQRCode, generateProfileQRCode, scanQRCode, handleQRCodeFile, selectFriend, removeRecipient, toggleFriendSelection, copyInviteLink,
     viewMediaAttachment, showEditProfile, handleProfilePictureUpload, saveProfile,
     createFriendInvite, useFriendInvite, exportFriendsList, importFriendsList,
     searchMessages, clearMessageSearch, scrollToMessage, editMessage,

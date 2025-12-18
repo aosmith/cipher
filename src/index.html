@@ -188,18 +188,15 @@
                             <h3 class="tab-header">Messages</h3>
                             <!-- Send Message Form -->
                             <div class="form-section">
-                                <h4>Send Encrypted Message</h4>
+                                <h4>New Message</h4>
                                 <div class="form-group">
-                                    <label for="friendSearch">Find Friend</label>
-                                    <input type="text" id="friendSearch" placeholder="Search friends..." class="friend-search-input">
-                                    <div id="friendSearchResults" class="friend-search-results hidden">
-                                        <!-- Search results will appear here -->
+                                    <label>To:</label>
+                                    <div id="selectedRecipient" class="selected-recipients-row">
+                                        <!-- Selected recipients chips will appear here -->
                                     </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="selectedRecipient">Recipients</label>
-                                    <div id="selectedRecipient" class="selected-recipient">
-                                        <span class="no-selection">No friends selected</span>
+                                    <input type="text" id="friendSearch" placeholder="Search friends to add..." class="friend-search-input">
+                                    <div id="friendsList" class="friends-select-list">
+                                        <!-- Friends will be loaded here -->
                                     </div>
                                 </div>
                                 <div class="form-group">
@@ -207,9 +204,10 @@
                                     <textarea id="messageContent" class="textarea" placeholder="Enter your message" required></textarea>
                                 </div>
                                 <div class="message-input-actions">
-                                    <button class="btn" onclick="sendMessage()">Send Encrypted Message</button>
-                                    <button id="voiceRecordButton" class="btn btn-secondary" onclick="startVoiceRecording()">🎤 Record Voice Message</button>
+                                    <button class="btn" onclick="sendMessage()">Send</button>
+                                    <button id="voiceRecordButton" class="btn btn-secondary" onclick="startVoiceRecording()">🎤 Voice</button>
                                 </div>
+                                <div id="dashboardError" class="error hidden" style="margin-top: var(--spacing-md);"></div>
                             </div>
 
                             <!-- Message Search Section -->
@@ -382,7 +380,7 @@
 
                             <!-- About Footer (full width) -->
                             <div style="width: 100%; margin-top: var(--spacing-lg); padding: var(--spacing-md); background: var(--glass-light); border-top: 1px solid var(--glass-regular); text-align: center; box-sizing: border-box;">
-                                <p style="color: var(--color-text-primary); font-weight: 600; font-size: var(--font-size-sm); margin-bottom: var(--spacing-xs);">Cipher <span style="font-weight: normal; color: var(--color-text-muted);">v<span id="settingsVersion">0.0.9</span></span></p>
+                                <p style="color: var(--color-text-primary); font-weight: 600; font-size: var(--font-size-sm); margin-bottom: var(--spacing-xs);">Cipher <span style="font-weight: normal; color: var(--color-text-muted);">v<span id="settingsVersion">0.0.11</span></span></p>
                                 <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin: 0;">
                                     E2E encrypted P2P · X25519 + XChaCha20-Poly1305 · Ed25519
                                 </p>
@@ -395,7 +393,7 @@
     </div>
 
     <!-- Recovery Phrase Modal -->
-    <div id="recoveryPhraseModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.95); z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--spacing-lg);">
+    <div id="recoveryPhraseModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--color-background); background-image: radial-gradient(circle at top left, rgba(var(--color-accent-rgb), 0.12), transparent 40%), linear-gradient(rgba(var(--color-accent-rgb), 0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(var(--color-accent-rgb), 0.02) 1px, transparent 1px), linear-gradient(rgba(var(--color-accent-rgb), 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(var(--color-accent-rgb), 0.04) 1px, transparent 1px); background-size: 100% 100%, 20px 20px, 20px 20px, 100px 100px, 100px 100px; z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--spacing-lg);">
         <div style="background: var(--glass-heavy); border-radius: var(--border-radius-lg); padding: var(--spacing-xl); max-width: 600px; width: 100%;">
             <h2 style="text-align: center; margin-bottom: var(--spacing-lg); color: var(--color-text-primary);">🔐 Save Your Recovery Phrase</h2>
 

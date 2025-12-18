@@ -2,6 +2,7 @@
 // Global mesh architecture: all nodes on cipher/content/v1
 
 use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use tauri::{Manager, State};
@@ -408,40 +409,295 @@ pub async fn iroh_generate_invite(
     };
     drop(endpoint_guard);
 
-    // Extract compact info: NodeId and relay URL only (omit direct addresses)
+    // Extract NodeId only - relay will be discovered via DHT/DNS
     let node_id = node_addr.node_id.to_string();
-    let relay_url = node_addr
-        .relay_url()
-        .map(|url| url.to_string())
-        .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string());
 
     // Get signing private key for signing the display name
     let (signing_private_key, _encryption_private_key) = db.get_user_keys(network.user_id)
         .map_err(|e| format!("Failed to get user keys: {}", e))?;
 
-    // Sign: "cipher-name:{display_name}:{public_key}" to prove ownership
-    let sign_message = format!("cipher-name:{}:{}", network.display_name, network.public_key);
+    // Sign: "cipher-name:{display_name}" - shorter message, pubkey implicit
+    let sign_message = format!("cipher-name:{}", network.display_name);
     let signature = Database::sign_message(&sign_message, &signing_private_key)
         .map_err(|e| format!("Failed to sign display name: {}", e))?;
 
-    // Create compact URI with signed display name
-    let qr_code = format!(
-        "cipher://add-friend?key={}&node={}&relay={}&name={}&sig={}",
-        network.public_key,
-        node_id,
-        urlencoding::encode(&relay_url),
-        urlencoding::encode(&network.display_name),
-        urlencoding::encode(&signature)
-    );
+    // V2 format with signature: [32 pubkey][32 node][1 name_len][name][64 sig]
+    // No relay (discovered via DHT/DNS)
+    // No compression - random signature data gets LARGER with DEFLATE
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    // Decode keys to binary
+    use base64::engine::general_purpose::STANDARD;
+    let pubkey_bytes = STANDARD.decode(&network.public_key)
+        .map_err(|e| format!("Invalid public key base64: {}", e))?;
+    let node_bytes = hex::decode(&node_id)
+        .map_err(|e| format!("Invalid node id hex: {}", e))?;
+    let sig_bytes = STANDARD.decode(&signature)
+        .map_err(|e| format!("Invalid signature base64: {}", e))?;
+
+    // Build binary payload
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&pubkey_bytes);  // 32 bytes
+    payload.extend_from_slice(&node_bytes);     // 32 bytes
+
+    // Display name (length-prefixed, max 255)
+    let name_bytes = network.display_name.as_bytes();
+    payload.push(name_bytes.len() as u8);
+    payload.extend_from_slice(name_bytes);
+
+    // Signature (64 bytes)
+    payload.extend_from_slice(&sig_bytes);
+
+    // Encode as base64url directly (no compression - random data expands with DEFLATE)
+    let encoded = URL_SAFE_NO_PAD.encode(&payload);
+
+    // Create compact URI
+    let qr_code = format!("cipher://i/{}", encoded);
 
     println!("[IROH] ✓ QR code generated successfully!");
     println!("[IROH]   Public Key: {}", network.public_key);
     println!("[IROH]   Display Name: {} (signed)", network.display_name);
     println!("[IROH]   NodeId: {}", node_id);
-    println!("[IROH]   Relay: {}", relay_url);
-    println!("[IROH]   QR code length: {}", qr_code.len());
+    println!("[IROH]   Payload: {} bytes", payload.len());
+    println!("[IROH]   QR code length: {} chars", qr_code.len());
 
     Ok(qr_code)
+}
+
+/// Parsed invite code data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedInvite {
+    pub public_key: String,
+    pub node_id: String,
+    pub relay_url: Option<String>,
+    pub display_name: Option<String>,
+    pub signature: Option<String>,
+}
+
+/// Parse an invite code (supports multiple formats)
+/// V2 minimal: cipher://i/{base64url_data} - no relay, no signature
+/// V1 compressed: cipher://f/{base64url_compressed_data}
+/// Legacy: cipher://add-friend?key=...&node=...&relay=...&name=...&sig=...
+#[tauri::command]
+pub fn parse_invite_code(invite_code: String) -> Result<ParsedInvite, String> {
+    println!("[IROH] Parsing invite code: {}...", &invite_code[..invite_code.len().min(50)]);
+
+    if invite_code.starts_with("cipher://i/") {
+        // V2 minimal format (no relay, no signature)
+        parse_minimal_invite(&invite_code)
+    } else if invite_code.starts_with("cipher://f/") {
+        // V1 compressed format (with relay and signature)
+        parse_compressed_invite(&invite_code)
+    } else if invite_code.starts_with("cipher://add-friend?") {
+        // Legacy URL parameter format
+        parse_legacy_invite(&invite_code)
+    } else {
+        Err("Invalid invite code format. Must start with cipher://".to_string())
+    }
+}
+
+/// Parse V2 format: cipher://i/{base64url_data}
+/// Format: [32 pubkey][32 node][1 name_len][name][64 sig]
+/// No relay (discovered via DHT/DNS), no compression
+fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
+    use base64::engine::general_purpose::{URL_SAFE_NO_PAD, STANDARD};
+    use base64::Engine;
+
+    // Extract base64url data after cipher://i/
+    let encoded = invite_code.strip_prefix("cipher://i/")
+        .ok_or("Invalid v2 invite format")?;
+
+    // Decode base64url directly (no compression)
+    let payload = URL_SAFE_NO_PAD.decode(encoded)
+        .map_err(|e| format!("Failed to decode base64url: {}", e))?;
+
+    // Minimum size: 32 + 32 + 1 + 64 = 129 bytes (with 0-length name)
+    if payload.len() < 129 {
+        return Err(format!("Payload too short: {} bytes", payload.len()));
+    }
+
+    let mut pos = 0;
+
+    // Read public key (32 bytes) - encode as base64 to match app format
+    let pubkey_bytes = &payload[pos..pos + 32];
+    let public_key = STANDARD.encode(pubkey_bytes);
+    pos += 32;
+
+    // Read node ID (32 bytes) - encode as hex
+    let node_bytes = &payload[pos..pos + 32];
+    let node_id = hex::encode(node_bytes);
+    pos += 32;
+
+    // Read display name (length-prefixed)
+    let name_len = payload[pos] as usize;
+    pos += 1;
+    let display_name = if name_len > 0 && pos + name_len <= payload.len() {
+        let name = String::from_utf8(payload[pos..pos + name_len].to_vec())
+            .map_err(|_| "Invalid display name encoding")?;
+        pos += name_len;
+        Some(name)
+    } else {
+        None
+    };
+
+    // Read signature (64 bytes)
+    let signature = if pos + 64 <= payload.len() {
+        let sig_bytes = &payload[pos..pos + 64];
+        Some(STANDARD.encode(sig_bytes))
+    } else {
+        None
+    };
+
+    println!("[IROH] ✓ Parsed v2 invite:");
+    println!("[IROH]   Public Key: {}", public_key);
+    println!("[IROH]   Node ID: {}", node_id);
+    println!("[IROH]   Display Name: {:?}", display_name);
+    println!("[IROH]   Signature: {}", if signature.is_some() { "present" } else { "none" });
+
+    Ok(ParsedInvite {
+        public_key,
+        node_id,
+        relay_url: None, // Discovered via DHT/DNS
+        display_name,
+        signature,
+    })
+}
+
+/// Parse V1 compressed format: cipher://f/{base64url_deflate_data}
+fn parse_compressed_invite(invite_code: &str) -> Result<ParsedInvite, String> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use flate2::read::DeflateDecoder;
+    use std::io::Read;
+
+    // Extract base64url data after cipher://f/
+    let encoded = invite_code.strip_prefix("cipher://f/")
+        .ok_or("Invalid compressed invite format")?;
+
+    // Decode base64url
+    let compressed = URL_SAFE_NO_PAD.decode(encoded)
+        .map_err(|e| format!("Failed to decode base64url: {}", e))?;
+
+    // Decompress DEFLATE
+    let mut decoder = DeflateDecoder::new(&compressed[..]);
+    let mut payload = Vec::new();
+    decoder.read_to_end(&mut payload)
+        .map_err(|e| format!("Failed to decompress: {}", e))?;
+
+    // Parse binary format: [32 pubkey][32 node][1 relay_len][relay][1 name_len][name][64 sig]
+    // Minimum size: 32 + 32 + 1 + 0 + 1 + 0 + 64 = 130 bytes
+    if payload.len() < 130 {
+        return Err(format!("Payload too short: {} bytes", payload.len()));
+    }
+
+    let mut pos = 0;
+
+    // Read public key (32 bytes) - encode as base64 to match app format
+    use base64::engine::general_purpose::STANDARD;
+    let pubkey_bytes = &payload[pos..pos + 32];
+    let public_key = STANDARD.encode(pubkey_bytes);
+    pos += 32;
+
+    // Read node ID (32 bytes) - encode as hex
+    let node_bytes = &payload[pos..pos + 32];
+    let node_id = hex::encode(node_bytes);
+    pos += 32;
+
+    // Read relay URL (length-prefixed)
+    let relay_len = payload[pos] as usize;
+    pos += 1;
+    if pos + relay_len > payload.len() {
+        return Err("Invalid relay URL length".to_string());
+    }
+    let relay_url = if relay_len > 0 {
+        Some(String::from_utf8(payload[pos..pos + relay_len].to_vec())
+            .map_err(|_| "Invalid relay URL encoding")?)
+    } else {
+        None
+    };
+    pos += relay_len;
+
+    // Read display name (length-prefixed)
+    let name_len = payload[pos] as usize;
+    pos += 1;
+    if pos + name_len > payload.len() {
+        return Err("Invalid display name length".to_string());
+    }
+    let display_name = if name_len > 0 {
+        Some(String::from_utf8(payload[pos..pos + name_len].to_vec())
+            .map_err(|_| "Invalid display name encoding")?)
+    } else {
+        None
+    };
+    pos += name_len;
+
+    // Read signature (64 bytes) - encode as base64 to match verify_signature format
+    if pos + 64 > payload.len() {
+        return Err("Invalid signature length".to_string());
+    }
+    let sig_bytes = &payload[pos..pos + 64];
+    let signature = Some(STANDARD.encode(sig_bytes));
+
+    println!("[IROH] ✓ Parsed compressed invite:");
+    println!("[IROH]   Public Key: {}", public_key);
+    println!("[IROH]   Node ID: {}", node_id);
+    println!("[IROH]   Relay: {:?}", relay_url);
+    println!("[IROH]   Display Name: {:?}", display_name);
+
+    Ok(ParsedInvite {
+        public_key,
+        node_id,
+        relay_url,
+        display_name,
+        signature,
+    })
+}
+
+/// Parse old URL parameter format: cipher://add-friend?key=...&node=...&relay=...&name=...&sig=...
+fn parse_legacy_invite(invite_code: &str) -> Result<ParsedInvite, String> {
+    let query_part = invite_code.strip_prefix("cipher://add-friend?")
+        .ok_or("Invalid legacy invite format")?;
+
+    let mut public_key = None;
+    let mut node_id = None;
+    let mut relay_url = None;
+    let mut display_name = None;
+    let mut signature = None;
+
+    for param in query_part.split('&') {
+        if let Some((key, value)) = param.split_once('=') {
+            let decoded = urlencoding::decode(value)
+                .map_err(|_| format!("Invalid encoding for {}", key))?
+                .to_string();
+            match key {
+                "key" => public_key = Some(decoded),
+                "node" => node_id = Some(decoded),
+                "relay" => relay_url = Some(decoded),
+                "name" | "display_name" => display_name = Some(decoded),
+                "sig" | "signature" => signature = Some(decoded),
+                _ => {} // Ignore unknown parameters
+            }
+        }
+    }
+
+    let public_key = public_key.ok_or("Missing public key in invite")?;
+    let node_id = node_id.ok_or("Missing node ID in invite")?;
+
+    println!("[IROH] ✓ Parsed legacy invite:");
+    println!("[IROH]   Public Key: {}", public_key);
+    println!("[IROH]   Node ID: {}", node_id);
+    println!("[IROH]   Relay: {:?}", relay_url);
+    println!("[IROH]   Display Name: {:?}", display_name);
+
+    Ok(ParsedInvite {
+        public_key,
+        node_id,
+        relay_url,
+        display_name,
+        signature,
+    })
 }
 
 /// Add a friend by public key with optional compact node info

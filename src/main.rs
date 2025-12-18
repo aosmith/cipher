@@ -32,7 +32,7 @@ use tauri::Manager;
 use app::iroh_commands::{
     iroh_add_friend_by_public_key, iroh_announce_presence, iroh_generate_invite,
     iroh_get_connection_status, iroh_initialize, iroh_publish_post, iroh_read_blob,
-    iroh_send_message, iroh_shutdown, iroh_subscribe_friend,
+    iroh_send_message, iroh_shutdown, iroh_subscribe_friend, parse_invite_code,
 };
 
 // Device management commands
@@ -225,6 +225,7 @@ fn main() {
             iroh_generate_invite,
             iroh_add_friend_by_public_key,
             iroh_read_blob,
+            parse_invite_code,
             // App Settings
             get_app_settings,
             set_storage_limit,

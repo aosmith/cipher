@@ -16,6 +16,7 @@ const PullToRefresh = {
     indicator: null,
     icon: null,
     text: null,
+    activeContainer: null, // Track which container triggered the refresh
 
     // Initialize pull-to-refresh
     init() {
@@ -75,6 +76,7 @@ const PullToRefresh = {
         if (this.isAtTop(container)) {
             this.canPull = true;
             this.startY = e.touches[0].clientY;
+            this.activeContainer = container;
         }
     },
 
@@ -131,6 +133,7 @@ const PullToRefresh = {
         if (this.isAtTop(container)) {
             this.canPull = true;
             this.startY = e.clientY;
+            this.activeContainer = container;
         }
     },
 
@@ -187,6 +190,11 @@ const PullToRefresh = {
         this.indicator.classList.add('syncing');
         this.text.textContent = 'Syncing...';
 
+        // Scroll container back to top immediately
+        if (this.activeContainer) {
+            this.activeContainer.scrollTop = 0;
+        }
+
         try {
             // Trigger P2P sync if available
             if (window.P2P && P2P.initialized) {
@@ -220,6 +228,7 @@ const PullToRefresh = {
         this.indicator.classList.remove('visible', 'pulling', 'syncing');
         this.icon.textContent = '↓';
         this.text.textContent = 'Pull down to sync';
+        this.activeContainer = null;
     }
 };
 

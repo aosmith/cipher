@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "cipher-social"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "anyhow",
  "argon2",
@@ -635,6 +635,7 @@ dependencies = [
  "chrono",
  "cocoa",
  "ed25519-dalek",
+ "flate2",
  "futures",
  "futures-lite",
  "hex",
