@@ -31,12 +31,20 @@ pub const CONTENT_TOPIC: &str = "cipher/content/v1";
 pub enum P2PMessage {
     /// User presence announcement (for device discovery and mesh health)
     /// Broadcast to global mesh - all nodes see presence, helps with peer discovery
+    /// SECURITY: Includes signed profile data so friends can verify identity
     Presence {
         user_id: SqliteUuid,
         public_key: String,
         device_id: String,
         node_addr: iroh::NodeAddr, // Full addressing info for direct peer connection
         timestamp: i64,
+        // Profile data for identity verification
+        display_name: String,
+        bio: String,
+        profile_picture: String,
+        /// Cryptographic signature of profile data (display_name|bio|profile_picture)
+        /// Signed with user's Ed25519 private key, verifiable with public_key
+        profile_signature: Option<String>,
     },
     /// Device sync request (same user, different device)
     DeviceSyncRequest {
@@ -1050,10 +1058,6 @@ impl IrohNetwork {
         let data_size = data.len() as i64;
         println!("[IROH] Message serialized, size: {} bytes", data_size);
 
-        // Track relay bytes (network contribution)
-        // This tracks all outgoing gossip messages as relay contribution
-        let _ = self.db.add_relay_used(data_size);
-
         // Get the broadcast channel for this topic
         println!("[IROH] Acquiring topics lock...");
         let topics_guard = self.topics.lock().await;
@@ -1200,6 +1204,31 @@ impl IrohNetwork {
         };
         drop(endpoint_guard);
 
+        // Get current user profile data for signed presence
+        let user = self
+            .db
+            .find_current_user_by_id(self.user_id)
+            .map_err(|e| format!("Failed to get user: {}", e))?
+            .ok_or_else(|| "User not found".to_string())?;
+
+        let display_name = user.display_name.clone();
+        let bio = user.bio.clone().unwrap_or_default();
+        let profile_picture = user.profile_picture.clone().unwrap_or_default();
+
+        // Sign profile data with private key for identity verification
+        let profile_signature = if let Some(ref private_key) = user.private_key {
+            match Database::sign_profile_data(private_key, &display_name, &bio, &profile_picture) {
+                Ok(sig) => Some(sig),
+                Err(e) => {
+                    println!("[IROH] Warning: Failed to sign profile: {}", e);
+                    None
+                }
+            }
+        } else {
+            println!("[IROH] Warning: No private key available for profile signing");
+            None
+        };
+
         let presence = P2PMessage::Presence {
             user_id: self.user_id,
             public_key: self.public_key.clone(),
@@ -1209,6 +1238,10 @@ impl IrohNetwork {
                 .unwrap_or_else(|| "unknown".to_string()),
             node_addr,
             timestamp: chrono::Utc::now().timestamp(),
+            display_name,
+            bio,
+            profile_picture,
+            profile_signature,
         };
 
         // Publish to global content topic - all nodes will see this
@@ -1469,17 +1502,41 @@ impl IrohNetwork {
                 device_id,
                 node_addr,
                 timestamp: _,
+                display_name,
+                bio,
+                profile_picture,
+                profile_signature,
             } => {
                 let peer_node_id = node_addr.node_id;
                 println!(
-                    "[IROH] Received presence from user {} device {} (NodeId: {})",
-                    public_key, device_id, peer_node_id
+                    "[IROH] Received presence from user {} ({}) device {} (NodeId: {})",
+                    display_name, &public_key[..8], device_id, peer_node_id
                 );
                 println!(
                     "[IROH]   Relay: {:?}, Direct addresses: {}",
                     node_addr.relay_url(),
                     node_addr.direct_addresses().count()
                 );
+
+                // SECURITY: Verify profile signature if present
+                let signature_valid = if let Some(ref sig) = profile_signature {
+                    let valid = Database::verify_profile_signature(
+                        &public_key,
+                        &display_name,
+                        &bio,
+                        &profile_picture,
+                        sig,
+                    );
+                    if valid {
+                        println!("[IROH] [SECURITY] Profile signature VERIFIED for {}", display_name);
+                    } else {
+                        println!("[IROH] [SECURITY] WARNING: Profile signature INVALID for {} - possible tampering!", display_name);
+                    }
+                    valid
+                } else {
+                    println!("[IROH] [SECURITY] No profile signature provided by {}", display_name);
+                    false
+                };
 
                 // Skip if this is our own device (don't store our own NodeId as a peer)
                 if self
@@ -1558,19 +1615,78 @@ impl IrohNetwork {
                         peer_user_id
                     );
 
-                    // First, ensure the peer user exists in our database
+                    // First, ensure the peer user exists in our database with their profile data
                     if let Err(e) = self.db.conn.lock().unwrap().execute(
-                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        "INSERT INTO users (id, display_name, public_key, bio, profile_picture, profile_signature, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                         ON CONFLICT(public_key) DO UPDATE SET
+                            display_name = excluded.display_name,
+                            bio = excluded.bio,
+                            profile_picture = excluded.profile_picture,
+                            profile_signature = excluded.profile_signature,
+                            updated_at = excluded.updated_at",
                         rusqlite::params![
                             peer_user_id,
-                            format!("User_{}", &public_key[..8]),  // Temporary display name
+                            &display_name,
                             &public_key,
+                            &bio,
+                            &profile_picture,
+                            &profile_signature,
                             chrono::Utc::now().to_rfc3339(),
                             chrono::Utc::now().to_rfc3339()
                         ],
                     ) {
-                        println!("[IROH] Warning: Failed to ensure peer user exists: {}", e);
+                        println!("[IROH] Warning: Failed to update peer user: {}", e);
+                    }
+
+                    // SECURITY: Check for display name changes on existing friends
+                    // Store known_display_name when first becoming friends
+                    // Warn if display name changes with valid signature (legitimate update)
+                    // or especially if signature is invalid (potential impersonation)
+                    if let Ok((known_name, _stored_sig)) = self.db.conn.lock().unwrap()
+                        .query_row(
+                            "SELECT known_display_name, friend_profile_signature FROM p2p_connections
+                             WHERE user_id = ?1 AND friend_user_id = ?2 AND status = 'accepted'",
+                            rusqlite::params![self.user_id, peer_user_id],
+                            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+                        )
+                    {
+                        if let Some(known) = known_name {
+                            if known != display_name {
+                                if signature_valid {
+                                    println!("[IROH] [SECURITY] Friend {} changed name from '{}' to '{}' (signature valid)",
+                                        &public_key[..8], known, display_name);
+                                    // Emit event to frontend - legitimate name change with valid signature
+                                    let _ = self.app_handle.emit("friend-name-changed", serde_json::json!({
+                                        "publicKey": &public_key,
+                                        "oldName": &known,
+                                        "newName": &display_name,
+                                        "signatureValid": true,
+                                        "warning": false
+                                    }));
+                                } else {
+                                    println!("[IROH] [SECURITY] WARNING: Friend {} changed name from '{}' to '{}' but signature is INVALID!",
+                                        &public_key[..8], known, display_name);
+                                    // Emit warning event to frontend - potential impersonation attempt!
+                                    let _ = self.app_handle.emit("friend-name-changed", serde_json::json!({
+                                        "publicKey": &public_key,
+                                        "oldName": &known,
+                                        "newName": &display_name,
+                                        "signatureValid": false,
+                                        "warning": true,
+                                        "message": "This friend's display name changed but their signature is invalid. This could indicate tampering or impersonation."
+                                    }));
+                                }
+                            }
+                        }
+                        // Update stored signature if we have a valid new one
+                        if signature_valid {
+                            let _ = self.db.conn.lock().unwrap().execute(
+                                "UPDATE p2p_connections SET friend_profile_signature = ?1
+                                 WHERE user_id = ?2 AND friend_user_id = ?3",
+                                rusqlite::params![&profile_signature, self.user_id, peer_user_id],
+                            );
+                        }
                     }
 
                     // Only update peer address for EXISTING accepted friendships
@@ -2190,6 +2306,157 @@ impl IrohNetwork {
                                         timestamp: envelope.timestamp,
                                     },
                                 );
+                            }
+                            super::crypto::ContentPayload::CommunityPost {
+                                community_id,
+                                community_name,
+                                content,
+                                attachments,
+                                show_in_main_feed,
+                            } => {
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
+                                println!("[IROH] Received community post in '{}' from {}: {} chars",
+                                    community_name, envelope.sender_public_key, content.len());
+
+                                // Parse community_id from string
+                                let community_uuid = match super::types::SqliteUuid::parse_str(&community_id) {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        println!("[IROH] Failed to parse community_id: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                // Ensure sender exists in database
+                                if let Err(e) = self.db.conn.lock().unwrap().execute(
+                                    "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                                    rusqlite::params![
+                                        sender_user_id,
+                                        format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
+                                        &envelope.sender_public_key,
+                                        chrono::Utc::now().to_rfc3339(),
+                                        chrono::Utc::now().to_rfc3339()
+                                    ],
+                                ) {
+                                    println!("[IROH] Warning: Failed to ensure community post sender exists: {}", e);
+                                }
+
+                                // Create the post in database
+                                match self.db.create_post(sender_user_id, &content, false) {
+                                    Ok(post) => {
+                                        // Link it to the community
+                                        if let Err(e) = self.db.create_community_post(community_uuid, post.id, show_in_main_feed) {
+                                            println!("[IROH] Warning: Failed to link post to community: {}", e);
+                                        }
+
+                                        // Emit to UI
+                                        #[derive(serde::Serialize, Clone)]
+                                        struct CommunityPostEvent {
+                                            community_id: String,
+                                            community_name: String,
+                                            post_id: super::types::SqliteUuid,
+                                            user_id: super::types::SqliteUuid,
+                                            public_key: String,
+                                            content: String,
+                                            show_in_main_feed: bool,
+                                            timestamp: i64,
+                                            attachments: Option<Vec<super::types::MediaAttachmentWithData>>,
+                                        }
+
+                                        let _ = self.app_handle.emit(
+                                            "community-post-received",
+                                            CommunityPostEvent {
+                                                community_id: community_id.clone(),
+                                                community_name: community_name.clone(),
+                                                post_id: post.id,
+                                                user_id: sender_user_id,
+                                                public_key: envelope.sender_public_key.clone(),
+                                                content,
+                                                show_in_main_feed,
+                                                timestamp: envelope.timestamp,
+                                                attachments,
+                                            },
+                                        );
+                                        println!("[IROH] [OK] Stored and emitted community post");
+                                    }
+                                    Err(e) => {
+                                        println!("[IROH] Failed to create community post: {}", e);
+                                    }
+                                }
+                            }
+                            super::crypto::ContentPayload::CommunityMemberAdded {
+                                community_id,
+                                community_name,
+                                new_member_public_key,
+                                new_member_display_name,
+                            } => {
+                                println!("[IROH] Received community member added: {} joined '{}'",
+                                    new_member_display_name, community_name);
+
+                                // Parse community_id from string
+                                let community_uuid = match super::types::SqliteUuid::parse_str(&community_id) {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        println!("[IROH] Failed to parse community_id: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                // Get or create user_id for the new member
+                                let new_member_user_id = super::types::SqliteUuid::from_public_key(&new_member_public_key);
+
+                                // Ensure the new member user exists in database
+                                if let Err(e) = self.db.conn.lock().unwrap().execute(
+                                    "INSERT OR IGNORE INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+                                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                    rusqlite::params![
+                                        new_member_user_id,
+                                        &new_member_display_name,
+                                        &new_member_public_key,
+                                        &new_member_public_key,
+                                        chrono::Utc::now().to_rfc3339(),
+                                        chrono::Utc::now().to_rfc3339()
+                                    ],
+                                ) {
+                                    println!("[IROH] Warning: Failed to ensure new member exists: {}", e);
+                                }
+
+                                // Add member to community (ignore if already exists)
+                                if let Err(e) = self.db.add_community_member(
+                                    community_uuid,
+                                    new_member_user_id,
+                                    &new_member_public_key,
+                                    Some(&new_member_display_name),
+                                    None, // invited_by not available in this message
+                                ) {
+                                    // Ignore duplicate errors
+                                    if !e.to_string().contains("UNIQUE constraint failed") {
+                                        println!("[IROH] Warning: Failed to add community member: {}", e);
+                                    }
+                                }
+
+                                // Emit to UI
+                                #[derive(serde::Serialize, Clone)]
+                                struct CommunityMemberAddedEvent {
+                                    community_id: String,
+                                    community_name: String,
+                                    new_member_user_id: super::types::SqliteUuid,
+                                    new_member_public_key: String,
+                                    new_member_display_name: String,
+                                }
+
+                                let _ = self.app_handle.emit(
+                                    "community-member-added",
+                                    CommunityMemberAddedEvent {
+                                        community_id,
+                                        community_name,
+                                        new_member_user_id,
+                                        new_member_public_key,
+                                        new_member_display_name,
+                                    },
+                                );
+                                println!("[IROH] [OK] Community member added and emitted");
                             }
                             _ => {
                                 println!("[IROH] Received other sealed content type");

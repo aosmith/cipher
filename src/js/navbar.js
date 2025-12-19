@@ -13,10 +13,6 @@ const Navbar = {
                     </div>
                     <!-- Right side controls -->
                     <div class="nav-controls">
-                        <!-- Invite Friend button (logged in only) -->
-                        <button id="navInviteBtn" class="nav-invite-btn logged-in-only hidden" onclick="Navbar.copyInviteLink()" title="Copy invite link">
-                            <span class="invite-icon">+</span>
-                        </button>
                         <!-- Combined P2P & Sync Status (logged in only) -->
                         <div id="p2pStatus" class="p2p-status logged-in-only hidden" title="Click for connection details" onclick="showConnectionStatus()">
                             <span class="p2p-status-dot offline"></span>
@@ -34,6 +30,20 @@ const Navbar = {
                             <span></span>
                         </button>
                     </div>
+
+                    <!-- Notifications Panel -->
+                    <div id="notificationsPanel" class="notifications-panel hidden">
+                        <div class="notifications-header">
+                            <h4>Notifications</h4>
+                            <div class="notifications-header-actions">
+                                <button class="btn-text" onclick="Navbar.markAllRead()">Mark All Read</button>
+                                <button class="notifications-close" onclick="Navbar.closeNotifications()" title="Close">&times;</button>
+                            </div>
+                        </div>
+                        <div id="notificationsList" class="notifications-list">
+                            <p class="text-center text-muted">No notifications</p>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Backdrop overlay -->
@@ -44,10 +54,25 @@ const Navbar = {
                     <div class="nav-section">
                         <h4 class="nav-section-title">Social</h4>
                         <div class="nav-links">
-                            <a class="nav-link hover-slide active" id="postsNavLink" onclick="closeHamburgerMenu(); showFeed()">📰 Feed</a>
+                            <a class="nav-link hover-slide" id="postsNavLink" onclick="closeHamburgerMenu(); showFeed()">📰 Feed</a>
                             <a class="nav-link hover-slide" id="createPostNavLink" onclick="closeHamburgerMenu(); showCreatePostPage()">✏️ Create Post</a>
                             <a class="nav-link hover-slide" id="messagesNavLink" onclick="closeHamburgerMenu(); showMessages()">💬 Messages</a>
                             <a class="nav-link hover-slide" id="friendsNavLink" onclick="closeHamburgerMenu(); showFriends()">👥 Friends</a>
+                            <a class="nav-link hover-slide" id="communitiesNavLink" onclick="closeHamburgerMenu(); showCommunities()">🏘️ Communities</a>
+                        </div>
+                    </div>
+
+                    <div class="nav-section">
+                        <h4 class="nav-section-title">Quick Actions</h4>
+                        <div class="nav-links">
+                            <a class="nav-action hover-slide" id="navInviteLink" onclick="Navbar.copyInviteLink()">
+                                <span>➕ Copy Invite Link</span>
+                                <span id="inviteCopyStatus" class="nav-link-status"></span>
+                            </a>
+                            <a class="nav-action hover-slide" id="navNotificationsLink" onclick="Navbar.toggleNotifications()">
+                                <span>🔔 Notifications</span>
+                                <span id="notificationBadge" class="notification-badge hidden">0</span>
+                            </a>
                         </div>
                     </div>
 
@@ -109,13 +134,11 @@ const Navbar = {
 
     // Copy invite link to clipboard
     async copyInviteLink() {
-        const btn = document.getElementById('navInviteBtn');
-        const originalContent = btn.innerHTML;
+        const statusEl = document.getElementById('inviteCopyStatus');
 
         try {
             // Show loading state
-            btn.innerHTML = '<span class="invite-icon">...</span>';
-            btn.disabled = true;
+            if (statusEl) statusEl.textContent = '...';
 
             // Generate invite code using P2P
             const inviteCode = await P2P.generateInvite();
@@ -124,20 +147,18 @@ const Navbar = {
             await navigator.clipboard.writeText(inviteCode);
 
             // Show success state
-            btn.innerHTML = '<span class="invite-icon">✓</span>';
+            if (statusEl) statusEl.textContent = 'Copied!';
 
             // Reset after 2 seconds
             setTimeout(() => {
-                btn.innerHTML = originalContent;
-                btn.disabled = false;
+                if (statusEl) statusEl.textContent = '';
             }, 2000);
 
         } catch (error) {
             console.error('Failed to copy invite link:', error);
-            btn.innerHTML = '<span class="invite-icon">!</span>';
+            if (statusEl) statusEl.textContent = 'Failed';
             setTimeout(() => {
-                btn.innerHTML = originalContent;
-                btn.disabled = false;
+                if (statusEl) statusEl.textContent = '';
             }, 2000);
         }
     },
@@ -185,6 +206,247 @@ const Navbar = {
         const activeLink = document.getElementById(linkId);
         if (activeLink) {
             activeLink.classList.add('active');
+        }
+    },
+
+    // Toggle notifications panel
+    toggleNotifications: function() {
+        const panel = document.getElementById('notificationsPanel');
+        if (panel) {
+            const isHidden = panel.classList.contains('hidden');
+            if (isHidden) {
+                this.loadNotifications();
+                panel.classList.remove('hidden');
+                // Close hamburger menu if open
+                closeHamburgerMenu();
+            } else {
+                panel.classList.add('hidden');
+            }
+        }
+    },
+
+    // Close notifications panel
+    closeNotifications: function() {
+        const panel = document.getElementById('notificationsPanel');
+        if (panel) {
+            panel.classList.add('hidden');
+        }
+    },
+
+    // Load notifications
+    loadNotifications: async function() {
+        if (typeof currentUser === 'undefined' || !currentUser) return;
+
+        try {
+            const notifications = await TauriAPI.invoke('get_notifications', { userId: currentUser.id });
+            this.renderNotifications(notifications);
+            this.updateBadge(notifications.filter(n => !n.read).length);
+        } catch (error) {
+            console.error('Failed to load notifications:', error);
+        }
+    },
+
+    // Render notifications list
+    renderNotifications: function(notifications) {
+        const list = document.getElementById('notificationsList');
+        if (!list) return;
+
+        if (!notifications || notifications.length === 0) {
+            list.innerHTML = '<p class="text-center text-muted">No notifications</p>';
+            return;
+        }
+
+        list.innerHTML = notifications.map(notification => {
+            const icon = this.getNotificationIcon(notification.notificationType);
+            const timeAgo = this.formatTimeAgo(notification.createdAt);
+            const unreadClass = notification.read ? '' : 'unread';
+
+            return `
+                <div class="notification-item ${unreadClass}" data-notification-id="${notification.id}" onclick="Navbar.handleNotificationClick('${notification.id}', '${notification.notificationType}', ${notification.data ? "'" + notification.data.replace(/'/g, "\\'") + "'" : 'null'})">
+                    <div class="notification-icon">${icon}</div>
+                    <div class="notification-content">
+                        <div class="notification-title">${Utils.escapeHtml(notification.title)}</div>
+                        <div class="notification-message">${Utils.escapeHtml(notification.message)}</div>
+                        <div class="notification-time">${timeAgo}</div>
+                    </div>
+                    <button class="notification-dismiss" onclick="event.stopPropagation(); Navbar.dismissNotification('${notification.id}')" title="Dismiss">×</button>
+                </div>
+            `;
+        }).join('');
+    },
+
+    // Get icon for notification type
+    getNotificationIcon: function(type) {
+        const icons = {
+            'friend_request': '👋',
+            'friend_accepted': '🤝',
+            'post_reaction': '👍',
+            'post_comment': '💬',
+            'post_share': '↗️',
+            'community_invite': '🏘️',
+            'community_post': '📰',
+            'message': '✉️',
+            'default': '🔔'
+        };
+        return icons[type] || icons['default'];
+    },
+
+    // Format time ago
+    formatTimeAgo: function(dateString) {
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return diffMins + 'm ago';
+        if (diffHours < 24) return diffHours + 'h ago';
+        if (diffDays < 7) return diffDays + 'd ago';
+        return date.toLocaleDateString();
+    },
+
+    // Update notification badge
+    updateBadge: function(count) {
+        const badge = document.getElementById('notificationBadge');
+        if (badge) {
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+    },
+
+    // Handle notification click
+    handleNotificationClick: async function(notificationId, type, data) {
+        if (typeof currentUser === 'undefined' || !currentUser) return;
+
+        try {
+            // Mark as read
+            await TauriAPI.invoke('mark_notification_read', {
+                notificationId: notificationId,
+                userId: currentUser.id
+            });
+
+            // Update UI
+            const item = document.querySelector(`[data-notification-id="${notificationId}"]`);
+            if (item) item.classList.remove('unread');
+
+            // Refresh badge count
+            const count = await TauriAPI.invoke('get_unread_notification_count', { userId: currentUser.id });
+            this.updateBadge(count);
+
+            // Navigate based on type
+            this.closeNotifications();
+            switch (type) {
+                case 'friend_request':
+                case 'friend_accepted':
+                    showFriends();
+                    break;
+                case 'post_reaction':
+                case 'post_comment':
+                case 'post_share':
+                case 'community_post':
+                    showFeed();
+                    break;
+                case 'community_invite':
+                    showCommunities();
+                    break;
+                case 'message':
+                    showMessages();
+                    break;
+            }
+        } catch (error) {
+            console.error('Failed to handle notification:', error);
+        }
+    },
+
+    // Dismiss notification
+    dismissNotification: async function(notificationId) {
+        if (typeof currentUser === 'undefined' || !currentUser) return;
+
+        try {
+            await TauriAPI.invoke('delete_notification', {
+                notificationId: notificationId,
+                userId: currentUser.id
+            });
+
+            // Remove from UI
+            const item = document.querySelector(`[data-notification-id="${notificationId}"]`);
+            if (item) {
+                item.style.opacity = '0';
+                item.style.transform = 'translateX(100%)';
+                setTimeout(() => {
+                    item.remove();
+                    // Check if list is empty
+                    const list = document.getElementById('notificationsList');
+                    if (list && list.children.length === 0) {
+                        list.innerHTML = '<p class="text-center text-muted">No notifications</p>';
+                    }
+                }, 200);
+            }
+
+            // Refresh badge
+            const count = await TauriAPI.invoke('get_unread_notification_count', { userId: currentUser.id });
+            this.updateBadge(count);
+        } catch (error) {
+            console.error('Failed to dismiss notification:', error);
+        }
+    },
+
+    // Mark all notifications as read
+    markAllRead: async function() {
+        if (typeof currentUser === 'undefined' || !currentUser) return;
+
+        try {
+            await TauriAPI.invoke('mark_all_notifications_read', { userId: currentUser.id });
+
+            // Update UI
+            document.querySelectorAll('.notification-item.unread').forEach(item => {
+                item.classList.remove('unread');
+            });
+
+            this.updateBadge(0);
+        } catch (error) {
+            console.error('Failed to mark all as read:', error);
+        }
+    },
+
+    // Start notification polling (call when user logs in)
+    startNotificationPolling: function() {
+        // Load initial count
+        this.loadNotifications();
+
+        // Poll every 30 seconds
+        if (this._pollInterval) clearInterval(this._pollInterval);
+        this._pollInterval = setInterval(() => {
+            if (typeof currentUser !== 'undefined' && currentUser) {
+                this.refreshBadge();
+            }
+        }, 30000);
+    },
+
+    // Stop notification polling (call when user logs out)
+    stopNotificationPolling: function() {
+        if (this._pollInterval) {
+            clearInterval(this._pollInterval);
+            this._pollInterval = null;
+        }
+        this.updateBadge(0);
+    },
+
+    // Refresh just the badge count
+    refreshBadge: async function() {
+        if (typeof currentUser === 'undefined' || !currentUser) return;
+
+        try {
+            const count = await TauriAPI.invoke('get_unread_notification_count', { userId: currentUser.id });
+            this.updateBadge(count);
+        } catch (error) {
+            console.error('Failed to refresh notification count:', error);
         }
     }
 };

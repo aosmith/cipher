@@ -7,12 +7,14 @@ const PullToRefresh = {
     // Configuration
     threshold: 80, // Pixels to pull before triggering refresh
     maxPull: 120, // Maximum pull distance
+    deadZone: 15, // Minimum pull before engaging (prevents accidental triggers)
 
     // State
     startY: 0,
     currentY: 0,
     pulling: false,
     canPull: false,
+    engaged: false, // Whether pull-to-refresh has actually engaged (past dead zone)
     indicator: null,
     icon: null,
     text: null,
@@ -66,13 +68,19 @@ const PullToRefresh = {
         container.addEventListener('mouseup', (e) => this.handleMouseUp(e, container));
     },
 
-    // Check if container is scrolled to top
+    // Check if container is scrolled to top (with small tolerance for Android)
     isAtTop(container) {
-        return container.scrollTop === 0;
+        return container.scrollTop <= 1;
     },
 
     // Touch event handlers
     handleTouchStart(e, container) {
+        // Reset state for new touch
+        this.canPull = false;
+        this.pulling = false;
+        this.engaged = false;
+
+        // Only enable pull-to-refresh if starting at the very top
         if (this.isAtTop(container)) {
             this.canPull = true;
             this.startY = e.touches[0].clientY;
@@ -86,13 +94,24 @@ const PullToRefresh = {
         this.currentY = e.touches[0].clientY;
         const pullDistance = this.currentY - this.startY;
 
-        if (pullDistance > 0 && this.isAtTop(container)) {
-            // Prevent default scrolling when pulling down
+        // If user scrolls up (negative pull), disable pull-to-refresh for this touch
+        if (pullDistance < -5) {
+            this.canPull = false;
+            this.engaged = false;
+            return;
+        }
+
+        // Only engage after passing the dead zone AND still at top
+        if (pullDistance > this.deadZone && this.isAtTop(container)) {
+            // Now we're engaged - prevent default scrolling
+            if (!this.engaged) {
+                this.engaged = true;
+            }
             e.preventDefault();
 
             this.pulling = true;
-            const clampedDistance = Math.min(pullDistance, this.maxPull);
-            const pullRatio = clampedDistance / this.threshold;
+            const effectiveDistance = pullDistance - this.deadZone;
+            const clampedDistance = Math.min(effectiveDistance, this.maxPull);
 
             // Show indicator
             this.indicator.classList.add('visible');
@@ -105,18 +124,23 @@ const PullToRefresh = {
                 this.indicator.classList.remove('pulling');
                 this.text.textContent = 'Pull down to sync';
             }
+        } else if (this.engaged) {
+            // Already engaged but moved back up - keep preventing default
+            e.preventDefault();
         }
     },
 
     handleTouchEnd(e, container) {
         if (!this.pulling) {
             this.canPull = false;
+            this.engaged = false;
             return;
         }
 
         const pullDistance = this.currentY - this.startY;
+        const effectiveDistance = pullDistance - this.deadZone;
 
-        if (pullDistance >= this.threshold) {
+        if (effectiveDistance >= this.threshold) {
             // Trigger refresh
             this.triggerSync();
         } else {
@@ -126,6 +150,7 @@ const PullToRefresh = {
 
         this.pulling = false;
         this.canPull = false;
+        this.engaged = false;
     },
 
     // Mouse event handlers (for desktop testing)
@@ -229,6 +254,7 @@ const PullToRefresh = {
         this.icon.textContent = '↓';
         this.text.textContent = 'Pull down to sync';
         this.activeContainer = null;
+        this.engaged = false;
     }
 };
 

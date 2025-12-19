@@ -276,7 +276,7 @@ const UI = {
     },
 
     setActiveNavLink(activeId) {
-        const navLinks = ['postsNavLink', 'createPostNavLink', 'messagesNavLink', 'friendsNavLink', 'profileNavLink'];
+        const navLinks = ['postsNavLink', 'createPostNavLink', 'messagesNavLink', 'friendsNavLink', 'profileNavLink', 'communitiesNavLink'];
         navLinks.forEach(id => {
             const element = document.getElementById(id);
             if (element) {
@@ -286,7 +286,7 @@ const UI = {
     },
 
     hideAllTabs() {
-        const tabs = ['postsTab', 'createPostTab', 'messagesTab', 'friendsTab', 'profileTab', 'addFriendTab', 'settingsTab'];
+        const tabs = ['postsTab', 'createPostTab', 'messagesTab', 'friendsTab', 'profileTab', 'addFriendTab', 'settingsTab', 'communitiesTab', 'communityDetailTab'];
         tabs.forEach(tabId => {
             const tab = document.getElementById(tabId);
             if (tab) tab.classList.add('hidden');
@@ -304,6 +304,133 @@ const UI = {
             const content = document.getElementById(contentId);
             if (content) this.updateModalLayout(content);
         }, 100);
+    },
+
+    showImageViewer(src) {
+        // Create fullscreen image viewer
+        const viewer = document.createElement('div');
+        viewer.className = 'image-viewer';
+        viewer.id = 'imageViewer';
+        viewer.innerHTML = `
+            <div class="image-viewer-backdrop" onclick="UI.closeImageViewer()"></div>
+            <img src="${src}" class="image-viewer-img" onclick="UI.closeImageViewer()">
+            <div class="image-viewer-controls">
+                <button class="image-viewer-save" onclick="UI.saveImage('${src}')" title="Save image">
+                    <span>💾</span> Save
+                </button>
+                <button class="image-viewer-close-btn" onclick="UI.closeImageViewer()" title="Close">
+                    &times;
+                </button>
+            </div>
+        `;
+        document.body.appendChild(viewer);
+
+        // Prevent body scroll
+        document.body.style.overflow = 'hidden';
+    },
+
+    closeImageViewer() {
+        const viewer = document.getElementById('imageViewer');
+        if (viewer) {
+            viewer.remove();
+            document.body.style.overflow = '';
+        }
+    },
+
+    async saveImage(src) {
+        try {
+            // Generate filename with timestamp
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const filename = `cipher-image-${timestamp}.png`;
+
+            // For data URLs, extract the base64 data
+            if (src.startsWith('data:')) {
+                const base64Data = src.split(',')[1];
+                const mimeType = src.split(';')[0].split(':')[1];
+                const extension = mimeType.split('/')[1] || 'png';
+                const finalFilename = `cipher-image-${timestamp}.${extension}`;
+
+                // Try to save via Tauri backend
+                try {
+                    await TauriAPI.invoke('save_media_to_downloads', {
+                        base64Data: base64Data,
+                        filename: finalFilename,
+                        mimeType: mimeType
+                    });
+                    UI.showToast('Image saved to Downloads');
+                    return;
+                } catch (e) {
+                    console.log('Tauri save failed, falling back to browser download:', e);
+                }
+
+                // Fallback: browser download
+                const link = document.createElement('a');
+                link.href = src;
+                link.download = finalFilename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                UI.showToast('Image download started');
+            } else {
+                // For regular URLs, fetch and save
+                const response = await fetch(src);
+                const blob = await response.blob();
+                const extension = blob.type.split('/')[1] || 'png';
+                const finalFilename = `cipher-image-${timestamp}.${extension}`;
+
+                // Try Tauri save
+                try {
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+                    await TauriAPI.invoke('save_media_to_downloads', {
+                        base64Data: base64Data,
+                        filename: finalFilename,
+                        mimeType: blob.type
+                    });
+                    UI.showToast('Image saved to Downloads');
+                    return;
+                } catch (e) {
+                    console.log('Tauri save failed, falling back to browser download:', e);
+                }
+
+                // Fallback: browser download
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = finalFilename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                UI.showToast('Image download started');
+            }
+        } catch (error) {
+            console.error('Failed to save image:', error);
+            UI.showToast('Failed to save image');
+        }
+    },
+
+    showToast(message, type = 'info', duration = 3000) {
+        // Remove existing toast
+        const existingToast = document.getElementById('uiToast');
+        if (existingToast) existingToast.remove();
+
+        const toast = document.createElement('div');
+        toast.id = 'uiToast';
+        toast.className = `ui-toast ui-toast-${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+
+        // Trigger animation
+        requestAnimationFrame(() => {
+            toast.classList.add('show');
+        });
+
+        // Remove after duration
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
     },
 
     updateUserInterface() {
@@ -331,6 +458,8 @@ function showLogin() {
     // Hide logged-in navbar elements using Navbar module
     if (typeof Navbar !== 'undefined') {
         Navbar.updateLoginState(false);
+        // Stop notification polling
+        Navbar.stopNotificationPolling();
     }
     UI.clearErrors();
 
@@ -349,6 +478,8 @@ function showDashboard() {
     // Show logged-in navbar elements using Navbar module
     if (typeof Navbar !== 'undefined') {
         Navbar.updateLoginState(true);
+        // Start notification polling
+        Navbar.startNotificationPolling();
     }
     UI.clearErrors();
     UI.updateUserInterface();
@@ -428,8 +559,8 @@ function showCreatePostPage() {
                 }
 
                 // Check size limits
-                const maxFileSize = 10 * 1024 * 1024; // 10MB
-                const maxTotalSize = 50 * 1024 * 1024; // 50MB
+                const maxFileSize = 64 * 1024 * 1024; // 64MB per file
+                const maxTotalSize = 256 * 1024 * 1024; // 256MB total
                 let hasOversizedFile = false;
 
                 for (let i = 0; i < this.files.length; i++) {
@@ -440,9 +571,9 @@ function showCreatePostPage() {
                 }
 
                 if (hasOversizedFile) {
-                    countDisplay.innerHTML = `<span style="color: var(--color-error);">⚠️ Some files exceed 10MB limit</span>`;
+                    countDisplay.innerHTML = `<span style="color: var(--color-error);">⚠️ Some files exceed 64MB limit</span>`;
                 } else if (totalSize > maxTotalSize) {
-                    countDisplay.innerHTML = `<span style="color: var(--color-error);">⚠️ Total size exceeds 50MB limit</span>`;
+                    countDisplay.innerHTML = `<span style="color: var(--color-error);">⚠️ Total size exceeds 256MB limit</span>`;
                 } else {
                     countDisplay.textContent = `${fileCount} file${fileCount !== 1 ? 's' : ''} selected (${Utils.formatFileSize(totalSize)} total)`;
                 }
@@ -515,25 +646,7 @@ async function showSettings() {
 
         // Load settings from backend
         try {
-            const settings = await invoke('get_app_settings');
-
-            // Relay settings
-            const relayLimitSelect = document.getElementById('relayLimit');
-            const relayLimitDisplay = document.getElementById('relayLimitDisplay');
-            const relayUsedEl = document.getElementById('relayUsed');
-
-            if (relayLimitSelect) {
-                // Convert bytes to MB for dropdown
-                const relayLimitMB = settings.relayLimitBytes === -1 ? '-1' :
-                    String(Math.round(settings.relayLimitBytes / (1024 * 1024)));
-                relayLimitSelect.value = relayLimitMB;
-            }
-            if (relayLimitDisplay) {
-                relayLimitDisplay.textContent = formatBytesLimit(settings.relayLimitBytes);
-            }
-            if (relayUsedEl) {
-                relayUsedEl.textContent = formatBytes(settings.relayUsedBytes);
-            }
+            const settings = await TauriAPI.invoke('get_app_settings');
 
             // Storage settings
             const storageLimitSelect = document.getElementById('storageLimit');
@@ -554,6 +667,12 @@ async function showSettings() {
         } catch (error) {
             console.error('Failed to load app settings:', error);
         }
+
+        // Load safety settings (blocked/muted users)
+        await SafetyManager.loadAll();
+
+        // Load device list
+        await DeviceManager.loadDevices();
     });
 }
 
@@ -574,30 +693,6 @@ function formatBytesLimit(bytes) {
     return `${Math.round(bytes / (1024 * 1024 * 1024))} GB`;
 }
 
-// Save message relay limit
-async function saveRelayLimit() {
-    const relayLimitSelect = document.getElementById('relayLimit');
-    const relayLimitDisplay = document.getElementById('relayLimitDisplay');
-
-    if (relayLimitSelect) {
-        const limitMB = relayLimitSelect.value;
-        // Convert MB to bytes (-1 stays as -1 for unlimited)
-        const limitBytes = limitMB === '-1' ? -1 : parseInt(limitMB) * 1024 * 1024;
-
-        try {
-            await invoke('set_relay_limit', { limitBytes });
-
-            if (relayLimitDisplay) {
-                relayLimitDisplay.textContent = formatBytesLimit(limitBytes);
-            }
-
-            console.log(`Message relay limit set to ${formatBytesLimit(limitBytes)}`);
-        } catch (error) {
-            console.error('Failed to save relay limit:', error);
-        }
-    }
-}
-
 // Save storage contribution limit
 async function saveStorageLimit() {
     const storageLimitSelect = document.getElementById('storageLimit');
@@ -609,7 +704,7 @@ async function saveStorageLimit() {
         const limitBytes = parseInt(limitGB) * 1024 * 1024 * 1024;
 
         try {
-            await invoke('set_storage_limit', { limitBytes });
+            await TauriAPI.invoke('set_storage_limit', { limitBytes });
 
             if (storageLimitDisplay) {
                 storageLimitDisplay.textContent = formatBytesLimit(limitBytes);
@@ -639,7 +734,7 @@ async function saveProfileSettings() {
     }
 
     try {
-        await invoke('update_user_profile', {
+        await TauriAPI.invoke('update_user_profile', {
             userId: currentUser.id,
             displayName: null,  // Don't change display name
             bio: bio || null,
@@ -936,18 +1031,18 @@ const PostManager = {
         try {
             // Validate file sizes before processing
             if (attachments && attachments.length > 0) {
-                const maxFileSize = 10 * 1024 * 1024; // 10MB limit per file
-                const maxTotalSize = 50 * 1024 * 1024; // 50MB total limit
+                const maxFileSize = 64 * 1024 * 1024; // 64MB per file
+                const maxTotalSize = 256 * 1024 * 1024; // 256MB total
                 let totalSize = 0;
 
                 for (let i = 0; i < attachments.length; i++) {
                     const file = attachments[i];
                     if (file.size > maxFileSize) {
-                        throw new Error(`File "${file.name}" is too large. Maximum file size is 10MB.`);
+                        throw new Error(`File "${file.name}" is too large. Maximum file size is 64MB.`);
                     }
                     totalSize += file.size;
                     if (totalSize > maxTotalSize) {
-                        throw new Error('Total attachment size exceeds 50MB limit.');
+                        throw new Error('Total attachment size exceeds 256MB limit.');
                     }
                 }
             }
@@ -1069,7 +1164,7 @@ const PostManager = {
                 const dataUrl = `data:${media.fileType};base64,${media.data}`;
                 console.log('createMediaPreview - Base64 validation passed [OK]');
                 console.log('createMediaPreview - Creating image with data URL (length:', dataUrl.length, ')');
-                return `<img src="${dataUrl}" alt="Image" class="post-image">`;
+                return `<img src="${dataUrl}" alt="Image" class="post-image" onclick="UI.showImageViewer(this.src)">`;
             } else {
                 console.warn('Image has no data - showing placeholder');
                 return `<div class="media-placeholder">
@@ -1227,6 +1322,867 @@ const ProfileManager = {
     }
 };
 
+// Post Interactions - Reactions, Comments, Sharing, Edit
+const PostInteractions = {
+    EMOJIS: ['👍', '❤️', '😂', '😮', '😢', '😡'],
+
+    // Get reaction summary for a post (emoji -> count)
+    async getReactionSummary(postId) {
+        try {
+            return await TauriAPI.invoke('get_post_reaction_summary', { postId });
+        } catch (error) {
+            console.warn('Failed to get reaction summary:', error);
+            return [];
+        }
+    },
+
+    // Get the current user's reaction on a post
+    async getUserReaction(postId) {
+        if (!currentUser) return null;
+        try {
+            const reactions = await TauriAPI.invoke('get_post_reactions', { postId });
+            const userReaction = reactions.find(r => r.userId === currentUser.id);
+            return userReaction ? userReaction.emoji : null;
+        } catch (error) {
+            console.warn('Failed to get user reaction:', error);
+            return null;
+        }
+    },
+
+    // Get comment count for a post
+    async getCommentCount(postId) {
+        try {
+            return await TauriAPI.invoke('get_post_comment_count', { postId });
+        } catch (error) {
+            console.warn('Failed to get comment count:', error);
+            return 0;
+        }
+    },
+
+    // Render reaction summary HTML
+    renderReactionSummary(summary, userReaction) {
+        if (!summary || summary.length === 0) {
+            return '<span class="no-reactions">Be first to react</span>';
+        }
+        return summary.map(([emoji, count]) => `
+            <button class="reaction-chip ${userReaction === emoji ? 'user-reacted' : ''}"
+                    onclick="PostInteractions.toggleReaction(this, '${emoji}')"
+                    data-emoji="${emoji}">
+                <span class="reaction-emoji">${emoji}</span>
+                <span class="reaction-count">${count}</span>
+            </button>
+        `).join('');
+    },
+
+    // Toggle a reaction on/off
+    async toggleReaction(element, emoji) {
+        const postEl = element.closest('.post');
+        const postId = postEl?.dataset.postId;
+        if (!postId || !currentUser) return;
+
+        const wasSelected = element.classList.contains('user-reacted');
+
+        try {
+            if (wasSelected) {
+                await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id });
+            } else {
+                // Remove any existing reaction first, then add new one
+                try {
+                    await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id });
+                } catch (e) { /* ignore if no existing reaction */ }
+                await TauriAPI.invoke('add_post_reaction', { postId, userId: currentUser.id, emoji });
+            }
+            // Refresh the reactions display
+            await this.refreshReactions(postId);
+        } catch (error) {
+            console.error('Failed to toggle reaction:', error);
+        }
+    },
+
+    // Show reaction picker popup
+    showReactionPicker(event, postId) {
+        event.stopPropagation();
+        // Remove any existing picker
+        this.closeReactionPicker();
+
+        const picker = document.createElement('div');
+        picker.className = 'reaction-picker';
+        picker.id = 'reactionPicker';
+        picker.innerHTML = this.EMOJIS.map(emoji =>
+            `<button class="picker-emoji" onclick="PostInteractions.addReaction('${postId}', '${emoji}')">${emoji}</button>`
+        ).join('');
+
+        // Position near the button, but ensure it stays on screen
+        const rect = event.target.getBoundingClientRect();
+        const pickerWidth = 280; // Approximate width of picker
+        const padding = 16;
+
+        picker.style.position = 'fixed';
+        picker.style.top = `${rect.bottom + 5}px`;
+
+        // Check if picker would overflow right edge
+        if (rect.left + pickerWidth > window.innerWidth - padding) {
+            // Align to right edge of screen
+            picker.style.right = `${padding}px`;
+            picker.style.left = 'auto';
+        } else {
+            picker.style.left = `${Math.max(padding, rect.left)}px`;
+        }
+
+        document.body.appendChild(picker);
+
+        // Close picker when clicking outside
+        setTimeout(() => {
+            document.addEventListener('click', this.closeReactionPicker, { once: true });
+        }, 0);
+    },
+
+    closeReactionPicker() {
+        const picker = document.getElementById('reactionPicker');
+        if (picker) picker.remove();
+    },
+
+    // Add a reaction from the picker
+    async addReaction(postId, emoji) {
+        this.closeReactionPicker();
+        if (!currentUser) return;
+
+        try {
+            // Remove existing reaction first
+            try {
+                await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id });
+            } catch (e) { /* ignore */ }
+            await TauriAPI.invoke('add_post_reaction', { postId, userId: currentUser.id, emoji });
+            await this.refreshReactions(postId);
+        } catch (error) {
+            console.error('Failed to add reaction:', error);
+        }
+    },
+
+    // Refresh reactions display for a post
+    async refreshReactions(postId) {
+        const summary = await this.getReactionSummary(postId);
+        const userReaction = await this.getUserReaction(postId);
+        const container = document.getElementById(`reactions-${postId}`);
+        if (container) {
+            container.innerHTML = this.renderReactionSummary(summary, userReaction);
+        }
+    },
+
+    // Toggle comments section visibility
+    async toggleComments(postId) {
+        const section = document.getElementById(`comments-section-${postId}`);
+        if (!section) return;
+
+        const isHidden = section.classList.contains('hidden');
+        if (isHidden) {
+            section.classList.remove('hidden');
+            await this.loadComments(postId);
+        } else {
+            section.classList.add('hidden');
+        }
+    },
+
+    // Load comments for a post
+    async loadComments(postId) {
+        const container = document.getElementById(`comments-list-${postId}`);
+        if (!container) return;
+
+        try {
+            const comments = await TauriAPI.invoke('get_post_comments', { postId });
+            if (comments.length === 0) {
+                container.innerHTML = '<p class="no-comments">No comments yet. Be the first!</p>';
+            } else {
+                container.innerHTML = comments.map(comment => this.renderComment(comment, postId)).join('');
+            }
+        } catch (error) {
+            console.error('Failed to load comments:', error);
+            container.innerHTML = '<p class="comment-error">Failed to load comments</p>';
+        }
+    },
+
+    // Render a single comment
+    renderComment(comment, postId) {
+        const isOwn = currentUser && comment.userId === currentUser.id;
+        const timeAgo = this.formatTimeAgo(new Date(comment.createdAt));
+        const displayName = getDisplayName(comment.userId);
+
+        return `
+            <div class="comment" data-comment-id="${comment.id}" style="margin-left: ${(comment.depth || 0) * 20}px">
+                <div class="comment-header">
+                    <span class="comment-author">${Utils.escapeHtml(displayName)}</span>
+                    <span class="comment-time">${timeAgo}</span>
+                </div>
+                <div class="comment-content">${Utils.escapeHtml(comment.content)}</div>
+                <div class="comment-actions">
+                    <button class="comment-action" onclick="PostInteractions.showReplyInput('${postId}', '${comment.id}')">Reply</button>
+                    ${isOwn ? `<button class="comment-action comment-delete" onclick="PostInteractions.deleteComment('${postId}', '${comment.id}')">Delete</button>` : ''}
+                </div>
+                <div class="reply-input-wrapper hidden" id="reply-input-${comment.id}">
+                    <input type="text" class="comment-input" placeholder="Write a reply..." onkeypress="if(event.key==='Enter') PostInteractions.submitReply('${postId}', '${comment.id}')">
+                    <button class="comment-submit-btn" onclick="PostInteractions.submitReply('${postId}', '${comment.id}')">Reply</button>
+                </div>
+            </div>
+        `;
+    },
+
+    // Format time ago
+    formatTimeAgo(date) {
+        const seconds = Math.floor((new Date() - date) / 1000);
+        if (seconds < 60) return 'just now';
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        if (days < 7) return `${days}d ago`;
+        return date.toLocaleDateString();
+    },
+
+    // Submit a new comment
+    async submitComment(postId) {
+        const input = document.getElementById(`comment-input-${postId}`);
+        if (!input || !currentUser) return;
+
+        const content = input.value.trim();
+        if (!content) return;
+
+        try {
+            await TauriAPI.invoke('add_post_comment', {
+                postId,
+                userId: currentUser.id,
+                content,
+                parentId: null
+            });
+            input.value = '';
+            await this.loadComments(postId);
+
+            // Update comment count in button
+            const count = await this.getCommentCount(postId);
+            const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+            if (postEl) {
+                const countEl = postEl.querySelector('.action-count');
+                if (countEl) countEl.textContent = count;
+            }
+        } catch (error) {
+            console.error('Failed to add comment:', error);
+            alert('Failed to add comment');
+        }
+    },
+
+    // Show reply input
+    showReplyInput(postId, commentId) {
+        const wrapper = document.getElementById(`reply-input-${commentId}`);
+        if (wrapper) {
+            wrapper.classList.toggle('hidden');
+            if (!wrapper.classList.contains('hidden')) {
+                wrapper.querySelector('input')?.focus();
+            }
+        }
+    },
+
+    // Submit a reply
+    async submitReply(postId, parentId) {
+        const wrapper = document.getElementById(`reply-input-${parentId}`);
+        const input = wrapper?.querySelector('input');
+        if (!input || !currentUser) return;
+
+        const content = input.value.trim();
+        if (!content) return;
+
+        try {
+            await TauriAPI.invoke('add_post_comment', {
+                postId,
+                userId: currentUser.id,
+                content,
+                parentId
+            });
+            input.value = '';
+            wrapper.classList.add('hidden');
+            await this.loadComments(postId);
+
+            // Update comment count
+            const count = await this.getCommentCount(postId);
+            const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+            if (postEl) {
+                const countEl = postEl.querySelector('.action-count');
+                if (countEl) countEl.textContent = count;
+            }
+        } catch (error) {
+            console.error('Failed to add reply:', error);
+            alert('Failed to add reply');
+        }
+    },
+
+    // Delete a comment
+    async deleteComment(postId, commentId) {
+        if (!confirm('Delete this comment?')) return;
+        if (!currentUser) return;
+
+        try {
+            await TauriAPI.invoke('delete_post_comment', {
+                commentId,
+                userId: currentUser.id
+            });
+            await this.loadComments(postId);
+
+            // Update comment count
+            const count = await this.getCommentCount(postId);
+            const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+            if (postEl) {
+                const countEl = postEl.querySelector('.action-count');
+                if (countEl) countEl.textContent = count;
+            }
+        } catch (error) {
+            console.error('Failed to delete comment:', error);
+            alert('Failed to delete comment');
+        }
+    },
+
+    // Show share modal
+    showShareModal(postId) {
+        const modal = document.getElementById('sharePostModal');
+        if (!modal) {
+            this.createShareModal();
+        }
+
+        // Store postId for later use
+        document.getElementById('sharePostModal').dataset.postId = postId;
+
+        // Load post preview
+        const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+        if (postEl) {
+            const content = postEl.querySelector('.post-content')?.textContent || '';
+            const author = postEl.querySelector('.post-meta')?.textContent?.split('•')[0]?.trim() || 'Unknown';
+            document.getElementById('sharePreviewContent').textContent =
+                content.length > 100 ? content.substring(0, 100) + '...' : content;
+            document.getElementById('sharePreviewAuthor').textContent = `@${author}`;
+        }
+
+        document.getElementById('sharePostModal').classList.remove('hidden');
+        document.getElementById('shareComment').value = '';
+    },
+
+    createShareModal() {
+        const modal = document.createElement('div');
+        modal.id = 'sharePostModal';
+        modal.className = 'modal hidden';
+        modal.innerHTML = `
+            <div class="modal-backdrop" onclick="PostInteractions.closeShareModal()"></div>
+            <div class="modal-dialog" style="max-width: 400px;">
+                <div class="modal-header">
+                    <h3>Share Post</h3>
+                    <button class="modal-close" onclick="PostInteractions.closeShareModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="share-preview">
+                        <p id="sharePreviewContent" class="share-preview-text"></p>
+                        <p id="sharePreviewAuthor" class="share-preview-author"></p>
+                    </div>
+                    <div class="form-group" style="margin-top: var(--spacing-lg);">
+                        <label for="shareComment">Add your thoughts (optional)</label>
+                        <textarea id="shareComment" class="textarea" rows="2" placeholder="What do you think?"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="PostInteractions.closeShareModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="PostInteractions.confirmShare()">Share</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    },
+
+    closeShareModal() {
+        const modal = document.getElementById('sharePostModal');
+        if (modal) modal.classList.add('hidden');
+    },
+
+    async confirmShare() {
+        const modal = document.getElementById('sharePostModal');
+        const postId = modal?.dataset.postId;
+        if (!postId || !currentUser) return;
+
+        const comment = document.getElementById('shareComment')?.value.trim() || null;
+
+        try {
+            await TauriAPI.invoke('share_post', {
+                postId,
+                userId: currentUser.id,
+                comment
+            });
+            this.closeShareModal();
+            alert('Post shared successfully!');
+            // Reload posts to show shared post
+            await loadPosts();
+        } catch (error) {
+            console.error('Failed to share post:', error);
+            alert('Failed to share post: ' + error);
+        }
+    },
+
+    // Show post menu (edit, delete)
+    showPostMenu(event, postId) {
+        event.stopPropagation();
+        this.closePostMenu();
+
+        const menu = document.createElement('div');
+        menu.className = 'post-menu';
+        menu.id = 'postMenu';
+        menu.innerHTML = `
+            <button class="post-menu-item" onclick="PostInteractions.editPost('${postId}')">
+                ✏️ Edit Post
+            </button>
+            <button class="post-menu-item post-menu-danger" onclick="PostInteractions.deletePost('${postId}')">
+                🗑️ Delete Post
+            </button>
+        `;
+
+        const rect = event.target.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.right = `${window.innerWidth - rect.right}px`;
+        menu.style.top = `${rect.bottom + 5}px`;
+
+        document.body.appendChild(menu);
+
+        setTimeout(() => {
+            document.addEventListener('click', this.closePostMenu, { once: true });
+        }, 0);
+    },
+
+    closePostMenu() {
+        const menu = document.getElementById('postMenu');
+        if (menu) menu.remove();
+    },
+
+    // Edit a post
+    async editPost(postId) {
+        this.closePostMenu();
+
+        const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+        if (!postEl) return;
+
+        const contentEl = postEl.querySelector('.post-content');
+        const currentContent = contentEl?.textContent || '';
+
+        // Replace content with edit form
+        const originalContent = contentEl.innerHTML;
+        contentEl.innerHTML = `
+            <div class="edit-post-wrapper">
+                <textarea class="textarea edit-post-textarea" id="edit-content-${postId}">${Utils.escapeHtml(currentContent)}</textarea>
+                <div class="edit-post-actions">
+                    <button class="btn btn-sm btn-primary" onclick="PostInteractions.saveEdit('${postId}')">Save</button>
+                    <button class="btn btn-sm btn-secondary" onclick="PostInteractions.cancelEdit('${postId}', '${encodeURIComponent(originalContent)}')">Cancel</button>
+                </div>
+            </div>
+        `;
+        document.getElementById(`edit-content-${postId}`)?.focus();
+    },
+
+    async saveEdit(postId) {
+        const textarea = document.getElementById(`edit-content-${postId}`);
+        if (!textarea || !currentUser) return;
+
+        const newContent = textarea.value.trim();
+        if (!newContent) {
+            alert('Post content cannot be empty');
+            return;
+        }
+
+        try {
+            await TauriAPI.invoke('edit_post', {
+                postId,
+                userId: currentUser.id,
+                content: newContent
+            });
+            await loadPosts();
+        } catch (error) {
+            console.error('Failed to edit post:', error);
+            alert('Failed to edit post: ' + error);
+        }
+    },
+
+    cancelEdit(postId, encodedOriginal) {
+        const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+        const contentEl = postEl?.querySelector('.post-content');
+        if (contentEl) {
+            contentEl.innerHTML = decodeURIComponent(encodedOriginal);
+        }
+    },
+
+    // Delete a post
+    async deletePost(postId) {
+        this.closePostMenu();
+        if (!confirm('Are you sure you want to delete this post?')) return;
+        if (!currentUser) return;
+
+        try {
+            await TauriAPI.invoke('delete_post', {
+                postId,
+                userId: currentUser.id
+            });
+            await loadPosts();
+        } catch (error) {
+            console.error('Failed to delete post:', error);
+            alert('Failed to delete post: ' + error);
+        }
+    }
+};
+
+// Safety Manager - Block & Mute functionality
+const SafetyManager = {
+    pendingBlockUserId: null,
+    pendingMuteUserId: null,
+
+    // Show block user modal
+    showBlockModal(userId, displayName) {
+        this.pendingBlockUserId = userId;
+        document.getElementById('blockUserName').textContent = displayName || 'this user';
+        document.getElementById('blockReason').value = '';
+        document.getElementById('blockUserModal').classList.remove('hidden');
+    },
+
+    closeBlockModal() {
+        this.pendingBlockUserId = null;
+        document.getElementById('blockUserModal').classList.add('hidden');
+    },
+
+    async confirmBlock() {
+        if (!this.pendingBlockUserId || !currentUser) return;
+
+        const reason = document.getElementById('blockReason')?.value.trim() || null;
+
+        try {
+            await TauriAPI.invoke('block_user', {
+                blockerId: currentUser.id,
+                blockedId: this.pendingBlockUserId,
+                reason
+            });
+            this.closeBlockModal();
+            alert('User blocked successfully');
+            // Refresh blocked list in settings
+            await this.loadBlockedUsers();
+            // Refresh posts to hide blocked user's content
+            await loadPosts();
+        } catch (error) {
+            console.error('Failed to block user:', error);
+            alert('Failed to block user: ' + error);
+        }
+    },
+
+    async unblockUser(blockedId) {
+        if (!currentUser) return;
+        if (!confirm('Unblock this user?')) return;
+
+        try {
+            await TauriAPI.invoke('unblock_user', {
+                blockerId: currentUser.id,
+                blockedId
+            });
+            await this.loadBlockedUsers();
+        } catch (error) {
+            console.error('Failed to unblock user:', error);
+            alert('Failed to unblock user: ' + error);
+        }
+    },
+
+    async loadBlockedUsers() {
+        if (!currentUser) return;
+
+        try {
+            const blocked = await TauriAPI.invoke('get_blocked_users', { userId: currentUser.id });
+            const container = document.getElementById('blockedUsersList');
+            const countEl = document.getElementById('blockedCount');
+
+            if (countEl) countEl.textContent = blocked.length;
+
+            if (!container) return;
+
+            if (blocked.length === 0) {
+                container.innerHTML = '<p style="color: var(--color-text-muted); font-size: var(--font-size-xs); text-align: center; padding: var(--spacing-sm);">No blocked users</p>';
+            } else {
+                container.innerHTML = blocked.map(user => `
+                    <div class="safety-item">
+                        <span class="safety-item-name">${Utils.escapeHtml(getDisplayName(user.blockedId))}</span>
+                        <button class="btn btn-sm btn-secondary" onclick="SafetyManager.unblockUser('${user.blockedId}')">Unblock</button>
+                    </div>
+                `).join('');
+            }
+        } catch (error) {
+            console.error('Failed to load blocked users:', error);
+        }
+    },
+
+    // Show mute user modal
+    showMuteModal(userId, displayName) {
+        this.pendingMuteUserId = userId;
+        document.getElementById('muteUserName').textContent = displayName || 'this user';
+        document.getElementById('muteNotifications').checked = true;
+        document.getElementById('muteMessages').checked = true;
+        document.getElementById('mutePosts').checked = true;
+        document.getElementById('muteDuration').value = '0';
+        document.getElementById('muteUserModal').classList.remove('hidden');
+    },
+
+    closeMuteModal() {
+        this.pendingMuteUserId = null;
+        document.getElementById('muteUserModal').classList.add('hidden');
+    },
+
+    async confirmMute() {
+        if (!this.pendingMuteUserId || !currentUser) return;
+
+        const muteNotifications = document.getElementById('muteNotifications').checked;
+        const muteMessages = document.getElementById('muteMessages').checked;
+        const mutePosts = document.getElementById('mutePosts').checked;
+        const durationHours = parseInt(document.getElementById('muteDuration').value) || 0;
+
+        // Calculate expiry time if duration is set
+        let expiresAt = null;
+        if (durationHours > 0) {
+            const expiry = new Date();
+            expiry.setHours(expiry.getHours() + durationHours);
+            expiresAt = expiry.toISOString();
+        }
+
+        try {
+            await TauriAPI.invoke('mute_user', {
+                muterId: currentUser.id,
+                mutedId: this.pendingMuteUserId,
+                muteNotifications,
+                muteMessages,
+                mutePosts,
+                expiresAt
+            });
+            this.closeMuteModal();
+            alert('User muted successfully');
+            await this.loadMutedUsers();
+        } catch (error) {
+            console.error('Failed to mute user:', error);
+            alert('Failed to mute user: ' + error);
+        }
+    },
+
+    async unmuteUser(mutedId) {
+        if (!currentUser) return;
+        if (!confirm('Unmute this user?')) return;
+
+        try {
+            await TauriAPI.invoke('unmute_user', {
+                muterId: currentUser.id,
+                mutedId
+            });
+            await this.loadMutedUsers();
+        } catch (error) {
+            console.error('Failed to unmute user:', error);
+            alert('Failed to unmute user: ' + error);
+        }
+    },
+
+    async loadMutedUsers() {
+        if (!currentUser) return;
+
+        try {
+            const muted = await TauriAPI.invoke('get_muted_users', { userId: currentUser.id });
+            const container = document.getElementById('mutedUsersList');
+            const countEl = document.getElementById('mutedCount');
+
+            if (countEl) countEl.textContent = muted.length;
+
+            if (!container) return;
+
+            if (muted.length === 0) {
+                container.innerHTML = '<p style="color: var(--color-text-muted); font-size: var(--font-size-xs); text-align: center; padding: var(--spacing-sm);">No muted users</p>';
+            } else {
+                container.innerHTML = muted.map(user => {
+                    const flags = [];
+                    if (user.muteNotifications) flags.push('🔔');
+                    if (user.muteMessages) flags.push('💬');
+                    if (user.mutePosts) flags.push('📰');
+                    const expiry = user.expiresAt ? `until ${new Date(user.expiresAt).toLocaleDateString()}` : 'forever';
+
+                    return `
+                        <div class="safety-item">
+                            <div class="safety-item-info">
+                                <span class="safety-item-name">${Utils.escapeHtml(getDisplayName(user.mutedId))}</span>
+                                <span class="safety-item-details">${flags.join(' ')} · ${expiry}</span>
+                            </div>
+                            <button class="btn btn-sm btn-secondary" onclick="SafetyManager.unmuteUser('${user.mutedId}')">Unmute</button>
+                        </div>
+                    `;
+                }).join('');
+            }
+        } catch (error) {
+            console.error('Failed to load muted users:', error);
+        }
+    },
+
+    // Load all safety settings
+    async loadAll() {
+        await Promise.all([
+            this.loadBlockedUsers(),
+            this.loadMutedUsers()
+        ]);
+    }
+};
+
+// Device Manager - Device management functionality
+const DeviceManager = {
+    async loadDevices() {
+        if (!currentUser) return;
+
+        try {
+            const devices = await TauriAPI.invoke('get_user_devices', { userId: currentUser.id });
+            const container = document.getElementById('devicesList');
+            if (!container) return;
+
+            if (devices.length === 0) {
+                container.innerHTML = '<p style="color: var(--color-text-muted); font-size: var(--font-size-xs); text-align: center; padding: var(--spacing-sm);">No devices found</p>';
+            } else {
+                container.innerHTML = devices.map(device => {
+                    const isCurrentDevice = device.id === currentUser.deviceId;
+                    const lastSync = device.lastSync ? PostInteractions.formatTimeAgo(new Date(device.lastSync)) : 'Never';
+                    const deviceIcon = device.deviceName?.toLowerCase().includes('iphone') ? '📱' :
+                                       device.deviceName?.toLowerCase().includes('ipad') ? '📱' :
+                                       device.deviceName?.toLowerCase().includes('mac') ? '💻' : '📱';
+
+                    return `
+                        <div class="device-item">
+                            <div class="device-info">
+                                <span class="device-icon">${deviceIcon}</span>
+                                <div class="device-details">
+                                    <span class="device-name">${Utils.escapeHtml(device.deviceName || 'Unknown Device')} ${isCurrentDevice ? '(This device)' : ''}</span>
+                                    <span class="device-sync">Last active: ${isCurrentDevice ? 'Now' : lastSync}</span>
+                                </div>
+                            </div>
+                            <div class="device-actions">
+                                <button class="btn btn-sm btn-secondary" onclick="DeviceManager.renameDevice('${device.id}')">Rename</button>
+                                ${!isCurrentDevice ? `<button class="btn btn-sm btn-danger" onclick="DeviceManager.removeDevice('${device.id}')">Remove</button>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        } catch (error) {
+            console.error('Failed to load devices:', error);
+        }
+    },
+
+    async renameDevice(deviceId) {
+        const newName = prompt('Enter new device name:');
+        if (!newName || !newName.trim()) return;
+
+        try {
+            await TauriAPI.invoke('update_device_name', {
+                deviceId,
+                deviceName: newName.trim()
+            });
+            await this.loadDevices();
+        } catch (error) {
+            console.error('Failed to rename device:', error);
+            alert('Failed to rename device: ' + error);
+        }
+    },
+
+    async removeDevice(deviceId) {
+        if (!confirm('Remove this device? It will need to be re-authenticated to use your account.')) return;
+
+        try {
+            await TauriAPI.invoke('remove_device', { deviceId });
+            await this.loadDevices();
+        } catch (error) {
+            console.error('Failed to remove device:', error);
+            alert('Failed to remove device: ' + error);
+        }
+    }
+};
+
+// Recent Contacts - Quick access to recently messaged contacts
+const RecentContacts = {
+    async load() {
+        if (!currentUser) return;
+
+        const container = document.getElementById('recentContacts');
+        if (!container) return;
+
+        try {
+            // Get messages and extract unique contacts
+            const messages = await TauriAPI.invoke('get_messages_for_user', { userId: currentUser.id });
+
+            // Build a map of contact -> most recent message time
+            const contactMap = new Map();
+            for (const msg of messages) {
+                const contactId = msg.senderId === currentUser.id ? msg.recipientId : msg.senderId;
+                const msgTime = new Date(msg.createdAt).getTime();
+
+                if (!contactMap.has(contactId) || contactMap.get(contactId).time < msgTime) {
+                    contactMap.set(contactId, { id: contactId, time: msgTime });
+                }
+            }
+
+            // Sort by most recent and take top 5
+            const recentContactIds = Array.from(contactMap.values())
+                .sort((a, b) => b.time - a.time)
+                .slice(0, 5)
+                .map(c => c.id);
+
+            if (recentContactIds.length === 0) {
+                container.innerHTML = '<span class="no-recent">No recent contacts</span>';
+                return;
+            }
+
+            // Get user details for each contact
+            const contacts = await Promise.all(recentContactIds.map(async (id) => {
+                try {
+                    const user = await TauriAPI.invoke('get_user_by_id', { userId: id });
+                    return user;
+                } catch {
+                    return null;
+                }
+            }));
+
+            const validContacts = contacts.filter(c => c);
+
+            container.innerHTML = validContacts.map(contact => `
+                <button class="recent-contact-chip" onclick="RecentContacts.select('${contact.id}')" title="${Utils.escapeHtml(contact.displayName)}">
+                    <span class="recent-contact-avatar">${this.getInitials(contact.displayName)}</span>
+                    <span class="recent-contact-name">${Utils.escapeHtml(contact.displayName)}</span>
+                </button>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load recent contacts:', error);
+            container.innerHTML = '<span class="no-recent">Failed to load</span>';
+        }
+    },
+
+    getInitials(name) {
+        if (!name) return '?';
+        const parts = name.trim().split(/\s+/);
+        if (parts.length >= 2) {
+            return (parts[0][0] + parts[1][0]).toUpperCase();
+        }
+        return name.slice(0, 2).toUpperCase();
+    },
+
+    async select(userId) {
+        // Get user details and add to selected recipients
+        try {
+            const user = await TauriAPI.invoke('get_user_by_id', { userId: userId });
+            if (user) {
+                // Check if already selected
+                if (!selectedRecipients.find(r => r.id === user.id)) {
+                    selectedRecipients.push(user);
+                    updateSelectedRecipientsUI();
+                }
+                // Focus the message input
+                document.getElementById('messageContent')?.focus();
+            }
+        } catch (error) {
+            console.error('Failed to select contact:', error);
+        }
+    }
+};
+
 // Load functions
 async function loadPosts() {
     try {
@@ -1254,15 +2210,24 @@ async function loadPosts() {
             `;
         } else {
             postsStatusMessage.innerHTML = '';
-            const postsWithMedia = await Promise.all(posts.map(async post => {
+            // Load posts with media and reactions
+            const postsWithData = await Promise.all(posts.map(async post => {
                 const mediaAttachments = await PostManager.getMediaAttachments(post.id);
-                return { ...post, mediaAttachments };
+                const reactionSummary = await PostInteractions.getReactionSummary(post.id);
+                const commentCount = await PostInteractions.getCommentCount(post.id);
+                const userReaction = await PostInteractions.getUserReaction(post.id);
+                return { ...post, mediaAttachments, reactionSummary, commentCount, userReaction };
             }));
 
-            postsContainer.innerHTML = postsWithMedia.map(post => `
+            postsContainer.innerHTML = postsWithData.map(post => `
                 <div class="post glass-card hover-lift-md" data-post-id="${post.id}">
-                    <div class="post-meta">
-                        ${post.displayName || 'Unknown User'} • ${new Date(post.createdAt).toLocaleDateString()}
+                    <div class="post-header">
+                        <div class="post-meta">
+                            ${post.displayName || 'Unknown User'} • ${new Date(post.createdAt).toLocaleDateString()}
+                        </div>
+                        ${post.userId === currentUser?.id ? `
+                            <button class="post-menu-btn" onclick="PostInteractions.showPostMenu(event, '${post.id}')" title="More options">⋯</button>
+                        ` : ''}
                     </div>
                     ${post.mediaAttachments && post.mediaAttachments.length > 0 ? `
                         <div class="post-media">
@@ -1270,6 +2235,39 @@ async function loadPosts() {
                         </div>
                     ` : ''}
                     <div class="post-content">${Utils.escapeHtml(post.content)}</div>
+
+                    <!-- Post Footer: Reactions + Actions -->
+                    <div class="post-footer">
+                        <div class="post-reactions-bar">
+                            <div class="reactions-summary" id="reactions-${post.id}">
+                                ${PostInteractions.renderReactionSummary(post.reactionSummary, post.userReaction)}
+                            </div>
+                            <button class="reaction-add-btn" onclick="PostInteractions.showReactionPicker(event, '${post.id}')" title="Add reaction">
+                                <span class="reaction-icon">+</span>
+                            </button>
+                        </div>
+                        <div class="post-actions">
+                            <button class="post-action-btn" onclick="PostInteractions.toggleComments('${post.id}')">
+                                <span class="action-icon">💬</span>
+                                <span class="action-count">${post.commentCount || 0}</span>
+                            </button>
+                            <button class="post-action-btn" onclick="PostInteractions.showShareModal('${post.id}')">
+                                <span class="action-icon">↗️</span>
+                                <span class="action-text">Share</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Comments Section (hidden by default) -->
+                    <div class="post-comments-section hidden" id="comments-section-${post.id}">
+                        <div class="comments-list" id="comments-list-${post.id}">
+                            <!-- Comments loaded dynamically -->
+                        </div>
+                        <div class="comment-input-wrapper">
+                            <input type="text" class="comment-input" id="comment-input-${post.id}" placeholder="Write a comment..." onkeypress="if(event.key==='Enter') PostInteractions.submitComment('${post.id}')">
+                            <button class="comment-submit-btn" onclick="PostInteractions.submitComment('${post.id}')">Post</button>
+                        </div>
+                    </div>
                 </div>
             `).join('');
         }
@@ -1282,6 +2280,9 @@ async function loadPosts() {
 
 async function loadMessages() {
     if (!currentUser) return;
+
+    // Load recent contacts quick access
+    RecentContacts.load();
 
     try {
         const friends = await TauriAPI.invoke('get_friends', { userId: currentUser.id });
@@ -1356,13 +2357,16 @@ async function loadMessages() {
                         </div>
                     `;
                 } else {
+                    // Calculate remaining time for disappearing messages
+                    const disappearInfo = message.disappearsAt ? getDisappearTimeRemaining(message.disappearsAt) : null;
                     return `
-                        <div class="post glass-card hover-lift-md" data-message-id="${message.id}">
+                        <div class="post glass-card hover-lift-md ${disappearInfo ? 'disappearing-message' : ''}" data-message-id="${message.id}">
                             <div class="post-meta">
                                 ${getDisplayName(message.senderId)}
                                 → ${getDisplayName(message.recipientId)}
                                 • ${new Date(message.createdAt).toLocaleDateString()}
                                 ${message.encrypted ? ' • 🔒 Encrypted' : ''}
+                                ${disappearInfo ? ` • <span class="disappear-timer" title="Disappears in ${disappearInfo}">⏱️ ${disappearInfo}</span>` : ''}
                                 ${message.threadId ? ` • 💬 Reply to Message ${message.threadId}` : ''}
                                 ${message.senderId === currentUser.id && message.isRead ? ' • <span style="color: var(--color-success)">✓✓ Read</span>' : ''}
                             </div>
@@ -1971,6 +2975,26 @@ function setupTauriEventListeners() {
         }
     });
 
+    // Listen for friend name changes (security feature)
+    listen('friend-name-changed', (event) => {
+        console.log('[EVENT] Friend name changed:', event.payload);
+        const { oldName, newName, signatureValid, warning, message } = event.payload;
+
+        if (warning) {
+            // Security warning - invalid signature, possible impersonation
+            UI.showToast(`⚠️ SECURITY WARNING: "${oldName}" changed to "${newName}" with INVALID signature! ${message || ''}`, 'error', 10000);
+        } else if (signatureValid) {
+            // Legitimate name change with valid signature
+            UI.showToast(`ℹ️ "${oldName}" changed their name to "${newName}"`, 'info', 5000);
+        }
+
+        // Refresh friends list to show new name
+        const friendsTab = document.getElementById('friendsTab');
+        if (friendsTab && !friendsTab.classList.contains('hidden')) {
+            loadFriends();
+        }
+    });
+
     // Listen for decrypted posts from sealed envelopes (Phase 2 encryption)
     listen('sealed-post-received', async (event) => {
         console.log('[EVENT] Sealed post received:', event.payload);
@@ -2238,9 +3262,14 @@ async function sendMessage() {
     const content = messageContentInput.value.trim();
     const replyToId = messageContentInput.getAttribute('data-reply-to');
 
+    // Get disappearing message timer value
+    const timerSelect = document.getElementById('messageTimer');
+    const disappearAfterSeconds = timerSelect ? parseInt(timerSelect.value) || null : null;
+
     console.log('[SEND_MESSAGE] selectedRecipients:', selectedRecipients);
     console.log('[SEND_MESSAGE] content:', content);
     console.log('[SEND_MESSAGE] currentUser.id:', currentUser.id);
+    console.log('[SEND_MESSAGE] disappearAfterSeconds:', disappearAfterSeconds);
 
     if (selectedRecipients.length === 0 || !content) {
         UI.showError('dashboardError', 'Please select at least one recipient and enter a message');
@@ -2260,11 +3289,12 @@ async function sendMessage() {
                     content: content
                 });
             } else {
-                // Send as a regular message
+                // Send as a regular message with optional disappearing timer
                 await TauriAPI.invoke('send_encrypted_message', {
                     senderId: currentUser.id,
                     recipientId: recipient.id,
-                    content: content
+                    content: content,
+                    disappearAfterSeconds: disappearAfterSeconds
                 });
             }
         });
@@ -2275,16 +3305,42 @@ async function sendMessage() {
         messageContentInput.value = '';
         messageContentInput.placeholder = 'Enter your message';
         messageContentInput.removeAttribute('data-reply-to');
+
+        // Reset timer to Off after sending
+        if (timerSelect) timerSelect.value = '0';
+
         clearSelectedRecipients();
 
-        const successMsg = replyToId
+        let successMsg = replyToId
             ? 'Reply sent successfully!'
             : `Message sent to ${recipientCount} recipient${recipientCount > 1 ? 's' : ''}!`;
+        if (disappearAfterSeconds) {
+            successMsg += ' (disappears after ' + formatDisappearTime(disappearAfterSeconds) + ')';
+        }
         UI.showSuccess('dashboardError', successMsg);
         loadMessages();
     } catch (error) {
         UI.showError('dashboardError', 'Failed to send message: ' + error);
     }
+}
+
+// Format disappearing time for display
+function formatDisappearTime(seconds) {
+    if (seconds < 60) return seconds + 's';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h';
+    return Math.floor(seconds / 86400) + 'd';
+}
+
+// Get remaining time until message disappears
+function getDisappearTimeRemaining(disappearsAt) {
+    if (!disappearsAt) return null;
+    const now = new Date();
+    const expires = new Date(disappearsAt);
+    const diffMs = expires - now;
+    if (diffMs <= 0) return 'expired';
+    const diffSeconds = Math.floor(diffMs / 1000);
+    return formatDisappearTime(diffSeconds);
 }
 
 // Friend management
@@ -3797,6 +4853,421 @@ async function refreshConnectionStatus(showLoading = false) {
     }
 }
 
+// ============================================
+// Community Functions
+// ============================================
+
+// Current community being viewed
+let currentCommunityId = null;
+
+// Show communities list
+async function showCommunities() {
+    UI.hideAllTabs();
+    document.getElementById('communitiesTab').classList.remove('hidden');
+    Navbar.setActiveLink('communitiesNavLink');
+    await loadCommunities();
+}
+
+// Load communities list
+async function loadCommunities() {
+    const container = document.getElementById('communitiesList');
+    if (!currentUser) return;
+
+    try {
+        const communities = await TauriAPI.invoke('get_my_communities', { userId: currentUser.id });
+
+        if (!communities || communities.length === 0) {
+            container.innerHTML = '<p style="text-align: center; color: var(--color-text-muted); padding: var(--spacing-xl);">No communities yet. Create one or join with an invite code.</p>';
+            return;
+        }
+
+        container.innerHTML = communities.map(c => `
+            <div class="friend-item" style="cursor: pointer;" onclick="showCommunityDetail('${c.id}')">
+                <div class="friend-info">
+                    <div class="friend-name" style="font-weight: 600;">${Utils.escapeHtml(c.name)}</div>
+                    <div class="friend-username" style="font-size: var(--font-size-sm); color: var(--color-text-secondary);">
+                        ${c.memberCount} member${c.memberCount !== 1 ? 's' : ''}
+                    </div>
+                </div>
+                <span style="color: var(--color-text-muted);">→</span>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Failed to load communities:', error);
+        container.innerHTML = '<p style="text-align: center; color: var(--color-error);">Failed to load communities</p>';
+    }
+}
+
+// Show create community modal
+function showCreateCommunityModal() {
+    console.log('[COMMUNITY] showCreateCommunityModal called');
+    const modal = document.getElementById('createCommunityModal');
+    console.log('[COMMUNITY] Modal element:', modal);
+    if (modal) {
+        modal.classList.remove('hidden');
+        console.log('[COMMUNITY] Modal classes after remove hidden:', modal.className);
+    } else {
+        console.error('[COMMUNITY] createCommunityModal element not found!');
+    }
+    document.getElementById('newCommunityName').value = '';
+    document.getElementById('newCommunityDescription').value = '';
+    document.getElementById('createCommunityError').classList.add('hidden');
+}
+
+function closeCreateCommunityModal() {
+    document.getElementById('createCommunityModal').classList.add('hidden');
+}
+
+// Create a new community
+async function createCommunity() {
+    console.log('[COMMUNITY] createCommunity called');
+    const name = document.getElementById('newCommunityName').value.trim();
+    const description = document.getElementById('newCommunityDescription').value.trim() || null;
+    const errorEl = document.getElementById('createCommunityError');
+
+    if (!name) {
+        errorEl.textContent = 'Please enter a community name';
+        errorEl.classList.remove('hidden');
+        return;
+    }
+
+    if (!currentUser) {
+        console.error('[COMMUNITY] No user found');
+        errorEl.textContent = 'Please log in first';
+        errorEl.classList.remove('hidden');
+        return;
+    }
+
+    try {
+        console.log('[COMMUNITY] Creating community:', name);
+        const community = await TauriAPI.invoke('create_community', {
+            userId: currentUser.id,
+            name,
+            description
+        });
+        console.log('[COMMUNITY] Community created:', community);
+
+        closeCreateCommunityModal();
+        await loadCommunities();
+        showCommunityDetail(community.id);
+    } catch (error) {
+        console.error('[COMMUNITY] Failed to create community:', error);
+        errorEl.textContent = error.toString();
+        errorEl.classList.remove('hidden');
+    }
+}
+
+// Show community detail view
+async function showCommunityDetail(communityId) {
+    currentCommunityId = communityId;
+    UI.hideAllTabs();
+    document.getElementById('communityDetailTab').classList.remove('hidden');
+    Navbar.setActiveLink('communitiesNavLink');
+
+    try {
+        const data = await TauriAPI.invoke('get_community', { communityId });
+        if (!data) {
+            showCommunities();
+            return;
+        }
+
+        document.getElementById('communityDetailName').textContent = data.community.name;
+        document.getElementById('communityDetailDescription').textContent = data.community.description || '';
+
+        await loadCommunityFeed(communityId);
+    } catch (error) {
+        console.error('Failed to load community:', error);
+        showCommunities();
+    }
+}
+
+// Load community feed
+async function loadCommunityFeed(communityId) {
+    const container = document.getElementById('communityFeed');
+    console.log('[COMMUNITY] Loading feed for community:', communityId);
+
+    try {
+        const posts = await TauriAPI.invoke('get_community_feed', { communityId });
+        console.log('[COMMUNITY] Received posts:', posts?.length || 0);
+
+        if (!posts || posts.length === 0) {
+            container.innerHTML = '<p style="text-align: center; color: var(--color-text-muted); padding: var(--spacing-xl);">No posts yet. Be the first to share something!</p>';
+            return;
+        }
+
+        // Load media attachments for each post
+        const postsWithMedia = await Promise.all(posts.map(async post => {
+            const mediaAttachments = await PostManager.getMediaAttachments(post.id);
+            return { ...post, mediaAttachments };
+        }));
+
+        container.innerHTML = postsWithMedia.map(post => `
+            <div class="post" style="max-width: 600px; margin: 0 auto var(--spacing-md) auto;">
+                <div class="post-header">
+                    <span class="post-author">${Utils.escapeHtml(post.displayName || 'Unknown')}</span>
+                    <span class="post-time">${PostInteractions.formatTimeAgo(new Date(post.createdAt))}</span>
+                </div>
+                ${post.mediaAttachments && post.mediaAttachments.length > 0 ? `
+                    <div class="post-media" style="margin: var(--spacing-sm) 0;">
+                        ${post.mediaAttachments.map(media => PostManager.createMediaPreview(media)).join('')}
+                    </div>
+                ` : ''}
+                ${post.content ? `<div class="post-content">${Utils.escapeHtml(post.content)}</div>` : ''}
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Failed to load community feed:', error);
+        container.innerHTML = `<p style="text-align: center; color: var(--color-error);">Failed to load posts: ${error}</p>`;
+    }
+}
+
+// Preview community post attachments
+function previewCommunityAttachments(event) {
+    const files = event.target.files;
+    const previewContainer = document.getElementById('communityAttachmentPreview');
+
+    if (!files || files.length === 0) {
+        previewContainer.style.display = 'none';
+        previewContainer.innerHTML = '';
+        return;
+    }
+
+    previewContainer.style.display = 'flex';
+    previewContainer.style.flexWrap = 'wrap';
+    previewContainer.style.gap = 'var(--spacing-sm)';
+    previewContainer.innerHTML = '';
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const preview = document.createElement('div');
+        preview.style.cssText = 'position: relative; width: 80px; height: 80px; border-radius: var(--radius-md); overflow: hidden; background: var(--glass-bg);';
+
+        if (file.type.startsWith('image/')) {
+            const img = document.createElement('img');
+            img.style.cssText = 'width: 100%; height: 100%; object-fit: cover;';
+            img.src = URL.createObjectURL(file);
+            preview.appendChild(img);
+        } else if (file.type.startsWith('video/')) {
+            preview.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-text-secondary);">🎬</div>';
+        }
+
+        // Add remove button
+        const removeBtn = document.createElement('button');
+        removeBtn.innerHTML = '×';
+        removeBtn.style.cssText = 'position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-size: 14px; line-height: 1;';
+        removeBtn.onclick = () => clearCommunityAttachments();
+        preview.appendChild(removeBtn);
+
+        previewContainer.appendChild(preview);
+    }
+}
+
+function clearCommunityAttachments() {
+    const fileInput = document.getElementById('communityPostAttachments');
+    const previewContainer = document.getElementById('communityAttachmentPreview');
+    fileInput.value = '';
+    previewContainer.style.display = 'none';
+    previewContainer.innerHTML = '';
+}
+
+// Create a post in the current community
+async function createCommunityPost() {
+    if (!currentCommunityId) {
+        console.error('[COMMUNITY] No currentCommunityId set');
+        return;
+    }
+
+    const content = document.getElementById('communityPostContent').value.trim();
+    const fileInput = document.getElementById('communityPostAttachments');
+    const hasFiles = fileInput && fileInput.files && fileInput.files.length > 0;
+
+    // Require either content or attachments
+    if (!content && !hasFiles) return;
+
+    if (!currentUser) {
+        console.error('[COMMUNITY] No currentUser set');
+        return;
+    }
+
+    try {
+        console.log('[COMMUNITY] Creating post in community:', currentCommunityId, 'by user:', currentUser.id);
+
+        // Create the post (always show in main feed)
+        const post = await TauriAPI.invoke('create_community_post', {
+            communityId: currentCommunityId,
+            userId: currentUser.id,
+            content: content || '',
+            showInMainFeed: true
+        });
+        console.log('[COMMUNITY] Post created:', post.id);
+
+        // Upload attachments if any
+        if (hasFiles) {
+            console.log('[COMMUNITY] Uploading', fileInput.files.length, 'attachments');
+            await PostManager.uploadAttachments(post.id, fileInput.files);
+        }
+
+        // Publish to community members via P2P (non-critical, don't block)
+        try {
+            await TauriAPI.invoke('publish_community_post', {
+                communityId: currentCommunityId,
+                postId: post.id
+            });
+            console.log('[COMMUNITY] Post published via P2P');
+        } catch (publishError) {
+            console.warn('[COMMUNITY] P2P publish failed (non-critical):', publishError);
+        }
+
+        // Clear input and reload feed
+        document.getElementById('communityPostContent').value = '';
+        clearCommunityAttachments();
+        await loadCommunityFeed(currentCommunityId);
+    } catch (error) {
+        console.error('Failed to create community post:', error);
+        alert('Failed to create post: ' + error);
+    }
+}
+
+// Join community by invite code
+async function joinCommunityByInvite() {
+    const inviteCode = document.getElementById('communityInviteCode').value.trim().toUpperCase();
+    if (!inviteCode) return;
+
+    if (!currentUser) return;
+
+    try {
+        const community = await TauriAPI.invoke('join_community_by_invite', {
+            userId: currentUser.id,
+            inviteCode
+        });
+
+        if (community) {
+            document.getElementById('communityInviteCode').value = '';
+
+            // Announce ourselves to the community
+            await TauriAPI.invoke('announce_community_member', {
+                communityId: community.id,
+                newMemberId: currentUser.id
+            });
+
+            await loadCommunities();
+            showCommunityDetail(community.id);
+        } else {
+            alert('Invalid or expired invite code');
+        }
+    } catch (error) {
+        console.error('Failed to join community:', error);
+        alert('Failed to join community: ' + error);
+    }
+}
+
+// Show community settings modal
+async function showCommunitySettings() {
+    if (!currentCommunityId) return;
+
+    document.getElementById('communitySettingsModal').classList.remove('hidden');
+    document.getElementById('communityInviteResult').classList.add('hidden');
+
+    try {
+        const members = await TauriAPI.invoke('get_community_members', { communityId: currentCommunityId });
+        document.getElementById('communityMemberCount').textContent = members.length;
+
+        const container = document.getElementById('communityMembersList');
+        container.innerHTML = members.map(m => `
+            <div style="padding: var(--spacing-sm); border-bottom: 1px solid var(--glass-border);">
+                <span style="font-weight: ${m.role === 'creator' ? '600' : '400'};">
+                    ${Utils.escapeHtml(m.displayName || 'Unknown')}
+                </span>
+                ${m.role === 'creator' ? '<span style="color: var(--color-primary); font-size: var(--font-size-sm);"> (creator)</span>' : ''}
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Failed to load community members:', error);
+    }
+}
+
+function closeCommunitySettings() {
+    document.getElementById('communitySettingsModal').classList.add('hidden');
+}
+
+// Generate community invite
+async function generateCommunityInvite() {
+    if (!currentCommunityId) return;
+
+    if (!currentUser) return;
+
+    try {
+        const invite = await TauriAPI.invoke('create_community_invite', {
+            communityId: currentCommunityId,
+            creatorId: currentUser.id,
+            usesRemaining: 10, // Default: 10 uses
+            hoursValid: 24 * 7 // 1 week
+        });
+
+        document.getElementById('communityInviteCodeDisplay').textContent = invite.inviteCode;
+        document.getElementById('communityInviteResult').classList.remove('hidden');
+    } catch (error) {
+        console.error('Failed to generate invite:', error);
+        alert('Failed to generate invite: ' + error);
+    }
+}
+
+// Copy community invite code
+function copyCommunityInvite() {
+    const code = document.getElementById('communityInviteCodeDisplay').textContent;
+    navigator.clipboard.writeText(code).then(() => {
+        alert('Invite code copied!');
+    });
+}
+
+// Leave the current community
+async function leaveCommunity() {
+    if (!currentCommunityId) return;
+
+    if (!confirm('Are you sure you want to leave this community?')) return;
+
+    if (!currentUser) return;
+
+    try {
+        const result = await TauriAPI.invoke('leave_community', {
+            communityId: currentCommunityId,
+            userId: currentUser.id
+        });
+
+        if (result) {
+            closeCommunitySettings();
+            currentCommunityId = null;
+            showCommunities();
+        } else {
+            alert('Cannot leave community. You may be the creator.');
+        }
+    } catch (error) {
+        console.error('Failed to leave community:', error);
+        alert('Failed to leave community: ' + error);
+    }
+}
+
+// Listen for community-related P2P events
+if (typeof window.__TAURI__ !== 'undefined') {
+    window.__TAURI__.event.listen('community-post-received', (event) => {
+        console.log('Received community post:', event.payload);
+        // Refresh feed if viewing the relevant community
+        if (currentCommunityId && event.payload.communityId === currentCommunityId) {
+            loadCommunityFeed(currentCommunityId);
+        }
+    });
+
+    window.__TAURI__.event.listen('community-member-added', (event) => {
+        console.log('New community member:', event.payload);
+        // Refresh member list if viewing settings
+        if (currentCommunityId && event.payload.communityId === currentCommunityId) {
+            if (!document.getElementById('communitySettingsModal').classList.contains('hidden')) {
+                showCommunitySettings();
+            }
+        }
+    });
+}
+
 // Export functions to global scope for onclick handlers
 Object.assign(window, {
     handleLogout, showLogin, showFeed, showPosts, showMessages,
@@ -3816,7 +5287,15 @@ Object.assign(window, {
     // Friend request functions
     acceptFriendRequest, rejectFriendRequest,
     // Connection status functions
-    showConnectionStatus, closeConnectionStatus, refreshConnectionStatus
+    showConnectionStatus, closeConnectionStatus, refreshConnectionStatus,
+    // Community functions
+    showCommunities, showCreateCommunityModal, closeCreateCommunityModal, createCommunity,
+    showCommunityDetail, createCommunityPost, joinCommunityByInvite,
+    showCommunitySettings, closeCommunitySettings, generateCommunityInvite, copyCommunityInvite, leaveCommunity,
+    // Post interactions
+    PostInteractions,
+    // Safety & Device management
+    SafetyManager, DeviceManager
 });
 
 console.log('[MAIN.JS] Functions exported to window scope');

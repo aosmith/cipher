@@ -267,35 +267,95 @@ impl Database {
         Ok(mnemonic.to_string())
     }
 
-    /// Derive signing and encryption key seeds directly from recovery phrase
-    /// This is the new simplified key derivation that doesn't require username/password
+    /// Derive signing and encryption key seeds from recovery phrase AND display name
+    ///
+    /// SECURITY: The display name is cryptographically bound to the identity.
+    /// This prevents an attacker who obtains a recovery phrase from impersonating
+    /// the user with a different display name to existing contacts.
+    ///
+    /// To restore an account, you need BOTH the recovery phrase AND the exact display name.
+    ///
     /// Returns (signing_seed, encryption_seed)
     pub fn derive_keys_from_recovery_phrase(
         recovery_phrase: &str,
+        display_name: &str,
     ) -> Result<([u8; 32], [u8; 32]), String> {
         // Validate recovery phrase first
         if !Self::validate_recovery_phrase(recovery_phrase) {
             return Err("Invalid recovery phrase".to_string());
         }
 
-        // Use the recovery phrase as input with domain separation for each key type
-        // No salt needed - the phrase itself has 256 bits of entropy
+        // Validate display name
+        let display_name = display_name.trim();
+        if display_name.is_empty() {
+            return Err("Display name cannot be empty".to_string());
+        }
 
-        // Derive signing key seed
+        // SECURITY: Combine recovery phrase with display name
+        // The display name becomes part of the key derivation input
+        // Format: "recovery_phrase|display_name"
+        let combined_input = format!("{}|{}", recovery_phrase, display_name);
+
+        // Derive signing key seed with v3 domain separator (breaking change from v2)
         let signing_seed = pbkdf2_hmac_array::<Sha256, 32>(
-            recovery_phrase.as_bytes(),
-            b"cipher_signing_v2:", // New version to avoid conflicts
+            combined_input.as_bytes(),
+            b"cipher_signing_v3_with_name:", // v3: includes display name
             100_000,
         );
 
         // Derive encryption key seed
         let encryption_seed = pbkdf2_hmac_array::<Sha256, 32>(
-            recovery_phrase.as_bytes(),
-            b"cipher_encryption_v2:", // New version to avoid conflicts
+            combined_input.as_bytes(),
+            b"cipher_encryption_v3_with_name:", // v3: includes display name
             100_000,
         );
 
         Ok((signing_seed, encryption_seed))
+    }
+
+    /// Sign profile data (display_name, bio, profile_picture) with the user's private key
+    ///
+    /// SECURITY: This signature proves that the profile data was set by the owner
+    /// of the private key. Friends can verify this signature to detect tampering.
+    ///
+    /// Format signed: "profile_v1|display_name|bio|profile_picture"
+    pub fn sign_profile_data(
+        private_key_b64: &str,
+        display_name: &str,
+        bio: &str,
+        profile_picture: &str,
+    ) -> Result<String, String> {
+        // Create canonical format for signing
+        // Using pipe separator and explicit empty strings for null values
+        let data_to_sign = format!(
+            "profile_v1|{}|{}|{}",
+            display_name,
+            bio,
+            profile_picture
+        );
+
+        Self::sign_message(&data_to_sign, private_key_b64)
+    }
+
+    /// Verify a profile signature against the user's public key
+    ///
+    /// Returns true if the signature is valid for the given profile data
+    pub fn verify_profile_signature(
+        public_key_b64: &str,
+        display_name: &str,
+        bio: &str,
+        profile_picture: &str,
+        signature_b64: &str,
+    ) -> bool {
+        // Recreate the canonical format
+        let data_to_verify = format!(
+            "profile_v1|{}|{}|{}",
+            display_name,
+            bio,
+            profile_picture
+        );
+
+        Self::verify_signature(&data_to_verify, signature_b64, public_key_b64)
     }
 
     /// Validate a BIP39 recovery phrase
@@ -347,9 +407,13 @@ impl Database {
 
 // Standalone crypto functions for testing
 #[allow(dead_code)]
-pub fn derive_private_key_from_recovery_phrase(recovery_phrase: &str) -> Result<String, String> {
-    // Derive the signing key from recovery phrase
-    let (signing_seed, _) = Database::derive_keys_from_recovery_phrase(recovery_phrase)?;
+pub fn derive_private_key_from_recovery_phrase(
+    recovery_phrase: &str,
+    display_name: &str,
+) -> Result<String, String> {
+    // Derive the signing key from recovery phrase + display name
+    let (signing_seed, _) =
+        Database::derive_keys_from_recovery_phrase(recovery_phrase, display_name)?;
     let private_key_b64 = general_purpose::STANDARD.encode(signing_seed);
     Ok(private_key_b64)
 }

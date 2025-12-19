@@ -24,7 +24,7 @@ use app::{
     send_voice_message, share_post, start_notification_server, unblock_user, unmute_user,
     update_mute_settings, update_recent_contact, update_user_profile, upload_media_file,
     upload_profile_picture, use_friend_invite, validate_recovery_phrase, verify_message_signature,
-    Database,
+    save_media_to_downloads, Database,
 };
 use tauri::Manager;
 
@@ -45,9 +45,13 @@ use app::{
 use app::{apply_sync_data, get_sync_data, get_sync_status, update_all_sync_timestamps};
 
 // App settings commands
-use app::{
-    add_relay_used, add_storage_used, can_relay_data, can_store_data, get_app_settings,
-    set_relay_limit, set_storage_limit,
+use app::{add_storage_used, can_store_data, get_app_settings, set_storage_limit};
+
+// Community commands
+use app::community_commands::{
+    announce_community_member, create_community, create_community_invite, create_community_post,
+    get_community, get_community_feed, get_community_members, get_my_communities,
+    join_community_by_invite, leave_community, publish_community_post,
 };
 
 /// Initialize the database for the Tauri application
@@ -190,6 +194,7 @@ fn main() {
             upload_media_file,
             get_media_attachments,
             get_media_file_data,
+            save_media_to_downloads,
             // QR codes
             generate_qr_code,
             parse_qr_code_data,
@@ -229,11 +234,20 @@ fn main() {
             // App Settings
             get_app_settings,
             set_storage_limit,
-            set_relay_limit,
             can_store_data,
-            can_relay_data,
             add_storage_used,
-            add_relay_used
+            // Communities
+            create_community,
+            get_my_communities,
+            get_community,
+            get_community_members,
+            leave_community,
+            create_community_invite,
+            join_community_by_invite,
+            create_community_post,
+            get_community_feed,
+            publish_community_post,
+            announce_community_member
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

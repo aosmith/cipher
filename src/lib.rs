@@ -13,6 +13,13 @@ use app::iroh_commands::{
 };
 
 #[cfg(mobile)]
+use app::community_commands::{
+    announce_community_member, create_community, create_community_invite, create_community_post,
+    get_community, get_community_feed, get_community_members, get_my_communities,
+    join_community_by_invite, leave_community, publish_community_post,
+};
+
+#[cfg(mobile)]
 #[tauri::mobile_entry_point]
 fn main() {
     tauri::Builder::default()
@@ -142,6 +149,7 @@ fn main() {
             upload_media_file,
             get_media_attachments,
             get_media_file_data,
+            save_media_to_downloads,
             // QR codes
             generate_qr_code,
             parse_qr_code_data,
@@ -189,11 +197,20 @@ fn main() {
             // App Settings
             get_app_settings,
             set_storage_limit,
-            set_relay_limit,
             can_store_data,
-            can_relay_data,
             add_storage_used,
-            add_relay_used
+            // Communities
+            create_community,
+            get_my_communities,
+            get_community,
+            get_community_members,
+            leave_community,
+            create_community_invite,
+            join_community_by_invite,
+            create_community_post,
+            get_community_feed,
+            publish_community_post,
+            announce_community_member
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

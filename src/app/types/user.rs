@@ -17,6 +17,9 @@ pub struct User {
     pub device_id: Option<String>,
     pub bio: Option<String>,
     pub profile_picture: Option<String>,
+    /// Cryptographic signature of profile data (display_name|bio|profile_picture)
+    /// Used by friends to verify the profile hasn't been tampered with
+    pub profile_signature: Option<String>,
     #[serde(skip_serializing)] // Never serialize recovery phrase hash
     #[allow(dead_code)] // Field is used but not detected by dead code analysis
     pub recovery_phrase_hash: Option<String>,

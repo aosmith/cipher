@@ -1,5 +1,6 @@
 // Type modules for Cipher application
 
+pub mod community;
 pub mod device;
 pub mod media;
 pub mod messaging;
@@ -11,6 +12,7 @@ pub mod user;
 pub mod uuid;
 
 // Re-export all types for convenient use
+pub use community::*;
 pub use device::*;
 pub use media::*;
 pub use messaging::*;

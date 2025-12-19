@@ -29,6 +29,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: row.get("profile_signature").ok().flatten(),
                 recovery_phrase_hash: row.get("recovery_phrase_hash")?,
                 recovery_phrase_shown: row.get("recovery_phrase_shown")?,
                 created_at: row.get("created_at")?,
@@ -71,6 +72,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: None, // Friend's signature stored separately
                 recovery_phrase_hash: None,
                 recovery_phrase_shown: false,
                 created_at: row.get("created_at")?,
@@ -102,9 +104,11 @@ impl Database {
         // Generate 24-word recovery phrase
         let recovery_phrase = Self::generate_recovery_phrase(None)?;
 
-        // Derive keys from recovery phrase only (no username/password needed)
+        // SECURITY: Derive keys from recovery phrase AND display name
+        // This cryptographically binds the display name to the identity
+        // User must remember both to restore their account
         let (signing_seed, encryption_seed) =
-            Self::derive_keys_from_recovery_phrase(&recovery_phrase)?;
+            Self::derive_keys_from_recovery_phrase(&recovery_phrase, &display_name)?;
 
         // Generate signing keypair
         let (signing_public, signing_private) =
@@ -147,6 +151,7 @@ impl Database {
             device_id: Some(device_id),
             bio: None,
             profile_picture: None,
+            profile_signature: None, // Will be signed when profile is set up
             recovery_phrase_hash: Some(recovery_phrase_hash),
             recovery_phrase_shown: false,
             created_at: now.clone(),
@@ -156,8 +161,17 @@ impl Database {
         Ok((user, recovery_phrase))
     }
 
-    /// Restore user from recovery phrase on new device or after data loss
-    /// Returns User with keys derived from recovery phrase
+    /// Restore a user from their recovery phrase AND display name on new device or after data loss.
+    /// Returns User with keys derived from recovery phrase + display name.
+    ///
+    /// SECURITY: The display_name is cryptographically bound to the identity.
+    /// Keys are derived from BOTH the recovery phrase AND the display name.
+    /// If the wrong display name is provided, different keys will be generated,
+    /// and the restore will effectively create a new identity (which won't match
+    /// the user's existing friends/data).
+    ///
+    /// This prevents impersonation: even with the recovery phrase, an attacker
+    /// cannot restore as a different display name because they would get different keys.
     pub fn restore_user_from_recovery_phrase(
         &self,
         display_name: String,
@@ -170,9 +184,10 @@ impl Database {
             .map_err(|e| format!("Failed to acquire lock: {}", e))?;
         let now = Utc::now().to_rfc3339();
 
-        // Derive keys from recovery phrase
+        // SECURITY: Derive keys from recovery phrase AND display name
+        // Wrong display name = wrong keys = restore fails to match existing identity
         let (signing_seed, encryption_seed) =
-            Self::derive_keys_from_recovery_phrase(&recovery_phrase)?;
+            Self::derive_keys_from_recovery_phrase(&recovery_phrase, &display_name)?;
 
         // Generate signing keypair
         let (signing_public, signing_private) =
@@ -203,50 +218,81 @@ impl Database {
         }
         .and_then(|_| self.find_user_by_public_key(&signing_public).ok().flatten());
 
-        if existing_user.is_some() {
-            // User exists - this is a restore on a new device
-            // Update device_id for this device
+        if let Some(existing) = existing_user {
+            // User exists - this is a restore on the same device
+            // Only update device_id, preserve existing display_name
             conn.execute(
-                "UPDATE users SET device_id = ?1, display_name = ?2, updated_at = ?3 WHERE public_key = ?4",
-                params![&device_id, &display_name, &now, &signing_public],
+                "UPDATE users SET device_id = ?1, updated_at = ?2 WHERE public_key = ?3",
+                params![&device_id, &now, &signing_public],
             ).map_err(|e| format!("Database error: {}", e))?;
+
+            // Register device in devices table
+            conn.execute(
+                "INSERT INTO devices (id, user_public_key, device_name, last_sync, created_at)
+                 VALUES (?1, ?2, NULL, ?3, ?3)
+                 ON CONFLICT(id) DO UPDATE SET
+                    user_public_key = excluded.user_public_key,
+                    last_sync = excluded.last_sync",
+                params![&device_id, &signing_public, &now],
+            )
+            .map_err(|e| format!("Failed to register device: {}", e))?;
+
+            // Return the existing user with preserved display_name
+            return Ok(User {
+                id: existing.id,
+                display_name: existing.display_name, // Preserve existing
+                public_key: Some(signing_public),
+                private_key: Some(signing_private),
+                encryption_public_key: Some(encryption_public),
+                encryption_private_key: Some(encryption_private),
+                device_id: Some(device_id),
+                bio: existing.bio,
+                profile_picture: existing.profile_picture,
+                profile_signature: existing.profile_signature,
+                recovery_phrase_hash: existing.recovery_phrase_hash,
+                recovery_phrase_shown: true,
+                created_at: existing.created_at,
+                updated_at: now,
+            });
         } else {
-            // New user being restored (shouldn't happen normally, but handle gracefully)
+            // New device restore - user doesn't exist locally
+            // SECURITY: The display_name is cryptographically bound to the keys
+            // If wrong display_name was provided, we have wrong keys, but that's fine -
+            // it just means this restore won't connect to the original identity
             conn.execute(
                 "INSERT INTO users (id, display_name, public_key, private_key, encryption_public_key, encryption_private_key, device_id, bio, profile_picture, recovery_phrase_hash, recovery_phrase_shown, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![user_id, &display_name, &signing_public, &signing_private, &encryption_public, &encryption_private, &device_id, "", "", &recovery_phrase_hash, true, &now, &now],
             ).map_err(|e| format!("Database error: {}", e))?;
+
+            // Register device in devices table
+            conn.execute(
+                "INSERT INTO devices (id, user_public_key, device_name, last_sync, created_at)
+                 VALUES (?1, ?2, NULL, ?3, ?3)
+                 ON CONFLICT(id) DO UPDATE SET
+                    user_public_key = excluded.user_public_key,
+                    last_sync = excluded.last_sync",
+                params![&device_id, &signing_public, &now],
+            )
+            .map_err(|e| format!("Failed to register device: {}", e))?;
+
+            Ok(User {
+                id: user_id,
+                display_name,
+                public_key: Some(signing_public),
+                private_key: Some(signing_private),
+                encryption_public_key: Some(encryption_public),
+                encryption_private_key: Some(encryption_private),
+                device_id: Some(device_id),
+                bio: None,
+                profile_picture: None,
+                profile_signature: None, // New account, no signature yet
+                recovery_phrase_hash: Some(recovery_phrase_hash),
+                recovery_phrase_shown: true, // Already shown during restore
+                created_at: now.clone(),
+                updated_at: now,
+            })
         }
-
-        // Register device in devices table
-        conn.execute(
-            "INSERT INTO devices (id, user_public_key, device_name, last_sync, created_at)
-             VALUES (?1, ?2, NULL, ?3, ?3)
-             ON CONFLICT(id) DO UPDATE SET
-                user_public_key = excluded.user_public_key,
-                last_sync = excluded.last_sync",
-            params![&device_id, &signing_public, &now],
-        )
-        .map_err(|e| format!("Failed to register device: {}", e))?;
-
-        let user = User {
-            id: user_id,
-            display_name,
-            public_key: Some(signing_public),
-            private_key: Some(signing_private),
-            encryption_public_key: Some(encryption_public),
-            encryption_private_key: Some(encryption_private),
-            device_id: Some(device_id),
-            bio: None,
-            profile_picture: None,
-            recovery_phrase_hash: Some(recovery_phrase_hash),
-            recovery_phrase_shown: true, // Already shown during restore
-            created_at: now.clone(),
-            updated_at: now,
-        };
-
-        Ok(user)
     }
 
     pub fn find_user_by_public_key(&self, public_key: &str) -> SqliteResult<Option<User>> {
@@ -269,6 +315,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: row.get("profile_signature").ok().flatten(),
                 recovery_phrase_hash: None,
                 recovery_phrase_shown: false,
                 created_at: row.get("created_at")?,
@@ -336,6 +383,7 @@ impl Database {
             device_id: None,
             bio: None,
             profile_picture: None,
+            profile_signature: None, // Peer signature stored in friends table
             recovery_phrase_hash: None,
             recovery_phrase_shown: false,
             created_at: now.clone(),
@@ -347,7 +395,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, display_name, public_key, private_key, encryption_public_key, encryption_private_key,
-                    device_id, bio, profile_picture, recovery_phrase_hash, recovery_phrase_shown,
+                    device_id, bio, profile_picture, profile_signature, recovery_phrase_hash, recovery_phrase_shown,
                     created_at, updated_at
              FROM users WHERE id = ?1"
         )?;
@@ -363,6 +411,44 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: row.get("profile_signature").ok().flatten(),
+                recovery_phrase_hash: None,
+                recovery_phrase_shown: false,
+                created_at: row.get("created_at")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })?;
+
+        #[allow(clippy::never_loop)]
+        for user in user_iter {
+            return Ok(Some(user?));
+        }
+        Ok(None)
+    }
+
+    /// Get the current user with their private keys for encryption operations.
+    /// ONLY use this for the currently logged-in user, never for other users.
+    pub fn find_current_user_by_id(&self, user_id: SqliteUuid) -> SqliteResult<Option<User>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, display_name, public_key, private_key, encryption_public_key, encryption_private_key,
+                    device_id, bio, profile_picture, profile_signature, recovery_phrase_hash, recovery_phrase_shown,
+                    created_at, updated_at
+             FROM users WHERE id = ?1"
+        )?;
+
+        let user_iter = stmt.query_map([user_id], |row| {
+            Ok(User {
+                id: row.get("id")?,
+                display_name: row.get("display_name")?,
+                public_key: row.get("public_key")?,
+                private_key: row.get("private_key")?, // Include private key for current user
+                encryption_public_key: row.get("encryption_public_key")?,
+                encryption_private_key: row.get("encryption_private_key")?, // Include encryption private key
+                device_id: row.get("device_id")?,
+                bio: row.get("bio")?,
+                profile_picture: row.get("profile_picture")?,
+                profile_signature: row.get("profile_signature").ok().flatten(),
                 recovery_phrase_hash: None,
                 recovery_phrase_shown: false,
                 created_at: row.get("created_at")?,
@@ -387,16 +473,26 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
 
+        // SECURITY: Changing display_name after account creation is NOT allowed
+        // because the display_name is cryptographically bound to the keys.
+        // If we allowed changes, the user's public key would no longer match
+        // what friends expect for that display_name.
+        if display_name.is_some() {
+            // Log warning but don't fail - just ignore the display_name change
+            eprintln!("WARNING: Attempted to change display_name after account creation. This is not allowed as display_name is cryptographically bound to identity.");
+        }
+
         // Use COALESCE to keep existing values when None is passed
+        // Note: display_name is intentionally NOT updated
         conn.execute(
-            "UPDATE users SET display_name = COALESCE(?1, display_name), bio = COALESCE(?2, bio), profile_picture = COALESCE(?3, profile_picture), updated_at = ?4 WHERE id = ?5",
-            params![display_name, bio, profile_picture, now, user_id],
+            "UPDATE users SET bio = COALESCE(?1, bio), profile_picture = COALESCE(?2, profile_picture), updated_at = ?3 WHERE id = ?4",
+            params![bio, profile_picture, now, user_id],
         )?;
 
         // Return updated user
         let mut stmt = conn.prepare(
             "SELECT id, display_name, public_key, private_key, encryption_public_key, encryption_private_key,
-                    device_id, bio, profile_picture, recovery_phrase_hash, recovery_phrase_shown,
+                    device_id, bio, profile_picture, profile_signature, recovery_phrase_hash, recovery_phrase_shown,
                     created_at, updated_at
              FROM users WHERE id = ?1"
         )?;
@@ -412,6 +508,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: row.get("profile_signature").ok().flatten(),
                 recovery_phrase_hash: row.get("recovery_phrase_hash")?,
                 recovery_phrase_shown: row.get("recovery_phrase_shown")?,
                 created_at: row.get("created_at")?,

@@ -23,6 +23,9 @@ use ::uuid::Uuid;
 pub mod iroh_commands;
 pub mod iroh_network;
 
+// Community commands
+pub mod community_commands;
+
 // Crypto module for sealed box encryption
 pub mod crypto;
 
@@ -618,6 +621,70 @@ pub async fn upload_media_file(
         file_type,
         file_size,
     })
+}
+
+/// Save media file to device's downloads/pictures folder
+#[tauri::command]
+pub async fn save_media_to_downloads(
+    base64_data: String,
+    filename: String,
+    _mime_type: String,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    // Decode base64 data
+    let file_bytes = general_purpose::STANDARD
+        .decode(&base64_data)
+        .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
+
+    // Determine the save directory based on platform
+    #[cfg(target_os = "android")]
+    let save_dir = {
+        // On Android, save to the app's external files directory which is accessible
+        // Use Pictures subdirectory for images
+        let base_dir = app_handle
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+        // Try to use a more accessible location
+        let pictures_dir = base_dir.join("Pictures");
+        fs::create_dir_all(&pictures_dir)
+            .map_err(|e| format!("Failed to create Pictures directory: {}", e))?;
+        pictures_dir
+    };
+
+    #[cfg(not(target_os = "android"))]
+    let save_dir = {
+        // On desktop, use the downloads directory
+        let download_dir = app_handle
+            .path()
+            .download_dir()
+            .map_err(|e| format!("Failed to get downloads dir: {}", e))?;
+
+        // Create a Cipher subdirectory
+        let cipher_dir = download_dir.join("Cipher");
+        fs::create_dir_all(&cipher_dir)
+            .map_err(|e| format!("Failed to create Cipher directory: {}", e))?;
+        cipher_dir
+    };
+
+    // Sanitize filename
+    let safe_filename = filename
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect::<String>();
+
+    let file_path = save_dir.join(&safe_filename);
+
+    // Write the file
+    let mut file = fs::File::create(&file_path)
+        .map_err(|e| format!("Failed to create file: {}", e))?;
+    file.write_all(&file_bytes)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+
+    println!("[SAVE_MEDIA] Saved {} ({} bytes) to {:?}", safe_filename, file_bytes.len(), file_path);
+
+    Ok(file_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -1936,14 +2003,6 @@ pub async fn set_storage_limit(
 }
 
 #[tauri::command]
-pub async fn set_relay_limit(
-    limit_bytes: i64,
-    db: State<'_, Database>,
-) -> Result<(), String> {
-    db.set_relay_limit(limit_bytes).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn can_store_data(
     bytes: i64,
     db: State<'_, Database>,
@@ -1952,26 +2011,10 @@ pub async fn can_store_data(
 }
 
 #[tauri::command]
-pub async fn can_relay_data(
-    bytes: i64,
-    db: State<'_, Database>,
-) -> Result<bool, String> {
-    db.can_relay(bytes).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn add_storage_used(
     bytes: i64,
     db: State<'_, Database>,
 ) -> Result<i64, String> {
     db.add_storage_used(bytes).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn add_relay_used(
-    bytes: i64,
-    db: State<'_, Database>,
-) -> Result<i64, String> {
-    db.add_relay_used(bytes).map_err(|e| e.to_string())
 }
 

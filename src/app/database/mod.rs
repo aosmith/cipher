@@ -31,6 +31,7 @@ impl Database {
 }
 
 // Module declarations
+mod communities;
 pub mod crypto;
 mod devices;
 mod friends;

@@ -108,9 +108,15 @@
                             <div id="restoreAccountSection" class="hidden">
                                 <h3 style="text-align: center; margin-bottom: var(--spacing-lg);">Restore Account</h3>
 
+                                <div style="background: var(--color-surface-elevated); border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: var(--spacing-md); margin-bottom: var(--spacing-lg);">
+                                    <p style="color: var(--color-warning); font-size: var(--font-size-sm); margin: 0;">
+                                        <strong>Security Note:</strong> Your display name is cryptographically bound to your identity. Enter it exactly as it was when you created your account.
+                                    </p>
+                                </div>
+
                                 <form onsubmit="handleRestoreAccount(); return false;">
                                     <div class="form-group">
-                                        <input type="text" id="restoreDisplayName" placeholder="Your display name" tabindex="1" required>
+                                        <input type="text" id="restoreDisplayName" placeholder="Your exact display name" tabindex="1" required>
                                     </div>
                                     <div class="form-group">
                                         <textarea id="restoreRecoveryPhrase" class="textarea" placeholder="Enter your 24-word recovery phrase" rows="3" tabindex="2" required></textarea>
@@ -186,6 +192,17 @@
                     <div class="modal-content" id="messagesContent">
                         <div class="modal-header">
                             <h3 class="tab-header">Messages</h3>
+
+                            <!-- Recent Contacts Quick Access -->
+                            <div class="recent-contacts-section">
+                                <div class="recent-contacts-header">
+                                    <span class="recent-label">Recent:</span>
+                                    <div id="recentContacts" class="recent-contacts-list">
+                                        <!-- Recent contacts will be loaded here -->
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Send Message Form -->
                             <div class="form-section">
                                 <h4>New Message</h4>
@@ -204,8 +221,18 @@
                                     <textarea id="messageContent" class="textarea" placeholder="Enter your message" required></textarea>
                                 </div>
                                 <div class="message-input-actions">
-                                    <button class="btn" onclick="sendMessage()">Send</button>
-                                    <button id="voiceRecordButton" class="btn btn-secondary" onclick="startVoiceRecording()">🎤 Voice</button>
+                                    <div class="message-timer-wrapper">
+                                        <select id="messageTimer" class="timer-select" title="Disappearing message timer">
+                                            <option value="0">⏱️ Off</option>
+                                            <option value="30">30s</option>
+                                            <option value="300">5m</option>
+                                            <option value="3600">1h</option>
+                                            <option value="86400">24h</option>
+                                            <option value="604800">7d</option>
+                                        </select>
+                                    </div>
+                                    <button id="voiceRecordButton" class="btn btn-secondary" onclick="startVoiceRecording()">🎤</button>
+                                    <button class="btn btn-primary" onclick="sendMessage()">Send</button>
                                 </div>
                                 <div id="dashboardError" class="error hidden" style="margin-top: var(--spacing-md);"></div>
                             </div>
@@ -300,6 +327,142 @@
                     </div>
                 </div>
 
+                <!-- Communities Tab -->
+                <div id="communitiesTab" class="hidden">
+                    <div class="modal-content" id="communitiesContent">
+                        <div class="modal-scrollable">
+                            <!-- Page Header -->
+                            <div class="page-header-centered">
+                                <h2>Communities</h2>
+                                <p class="page-subtitle">Connect with groups</p>
+                            </div>
+
+                            <!-- Action Cards -->
+                            <div class="community-actions">
+                                <!-- Create Community Card -->
+                                <button type="button" class="action-card" onclick="window.showCreateCommunityModal()">
+                                    <span class="action-card-icon">✨</span>
+                                    <span class="action-card-text">Create New</span>
+                                </button>
+
+                                <!-- Join Community Section -->
+                                <div class="join-community-section" style="flex-direction: column; align-items: stretch;">
+                                    <input type="text" id="communityInviteCode" class="input-field" placeholder="Paste invite code..." style="width: 100%; margin-bottom: 0.75rem;">
+                                    <button type="button" class="btn btn-primary" onclick="window.joinCommunityByInvite()" style="width: 100%;">Join Community</button>
+                                </div>
+                            </div>
+
+                            <!-- Your Communities Section -->
+                            <div class="section-divider">
+                                <span>Your Communities</span>
+                            </div>
+                            <div id="communitiesList" class="communities-list">
+                                <!-- Communities will be loaded here -->
+                                <div class="empty-state">
+                                    <div class="empty-state-icon">🏘️</div>
+                                    <p class="empty-state-title">No communities yet</p>
+                                    <p class="empty-state-subtitle">Create one or join with an invite code</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Community Detail Tab -->
+                <div id="communityDetailTab" class="hidden">
+                    <div class="modal-content" id="communityDetailContent">
+                        <div class="modal-scrollable">
+                            <!-- Community Header -->
+                            <div class="community-detail-header">
+                                <button class="back-button" onclick="showCommunities()">
+                                    <span class="back-arrow">←</span>
+                                    <span>Back</span>
+                                </button>
+                                <button class="settings-icon-button" onclick="showCommunitySettings()" title="Settings">
+                                    ⚙️
+                                </button>
+                            </div>
+
+                            <!-- Community Info -->
+                            <div style="max-width: 600px; margin: 0 auto var(--spacing-md) auto; text-align: center; padding: 0 var(--spacing-md);">
+                                <h2 id="communityDetailName" style="font-size: var(--font-size-lg); font-weight: 600; margin-bottom: var(--spacing-xs); color: var(--color-text-primary);"></h2>
+                                <p id="communityDetailDescription" style="color: var(--color-text-secondary); font-size: var(--font-size-sm);"></p>
+                            </div>
+
+                            <!-- Create Community Post -->
+                            <div style="max-width: 600px; margin: 0 auto var(--spacing-lg) auto; padding: 0 var(--spacing-md);">
+                                <div style="background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-lg); padding: var(--spacing-sm); backdrop-filter: blur(10px);">
+                                    <textarea id="communityPostContent" class="textarea" placeholder="Share something with the community..." rows="2" style="width: 100%; box-sizing: border-box; background: transparent; border: none; resize: none; font-size: var(--font-size-sm); padding: var(--spacing-xs);"></textarea>
+                                    <div id="communityAttachmentPreview" class="attachment-preview" style="display: none; margin: var(--spacing-xs) 0;"></div>
+                                    <div style="display: flex; justify-content: flex-end; align-items: center; gap: var(--spacing-sm); padding-top: var(--spacing-xs); border-top: 1px solid var(--glass-border);">
+                                        <input type="file" id="communityPostAttachments" multiple accept="image/*,video/*" style="display: none;" onchange="previewCommunityAttachments(event)">
+                                        <button type="button" onclick="document.getElementById('communityPostAttachments').click()" style="background: none; border: none; color: var(--color-text-muted); cursor: pointer; padding: 6px; font-size: 18px; line-height: 1;" title="Add photo or video">
+                                            🖼️
+                                        </button>
+                                        <button class="btn btn-primary" onclick="createCommunityPost()" style="padding: 6px 20px; font-size: 13px; border-radius: 16px;">Post</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Community Feed -->
+                            <div style="max-width: 600px; margin: 0 auto;">
+                                <div id="communityFeed">
+                                    <!-- Community posts will be loaded here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Community Settings Modal -->
+                <div id="communitySettingsModal" class="modal hidden">
+                    <div class="modal-backdrop" onclick="closeCommunitySettings()"></div>
+                    <div class="modal-dialog" style="max-width: 400px;">
+                        <div class="modal-header">
+                            <h3>Community Settings</h3>
+                            <button class="modal-close" onclick="closeCommunitySettings()">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <h4 style="margin-bottom: var(--spacing-md);">Members (<span id="communityMemberCount">0</span>)</h4>
+                            <div id="communityMembersList" style="max-height: 200px; overflow-y: auto; margin-bottom: var(--spacing-lg);">
+                                <!-- Members will be loaded here -->
+                            </div>
+
+                            <h4 style="margin-bottom: var(--spacing-md);">Invite Link</h4>
+                            <button class="btn btn-primary" onclick="generateCommunityInvite()" style="width: 100%; margin-bottom: var(--spacing-md);">Generate Invite Link</button>
+                            <div id="communityInviteResult" class="hidden" style="padding: var(--spacing-md); background: var(--glass-light); border-radius: var(--border-radius-md); margin-bottom: var(--spacing-lg);">
+                                <code id="communityInviteCodeDisplay" style="word-break: break-all; display: block; margin-bottom: var(--spacing-sm);"></code>
+                                <button class="btn btn-secondary btn-sm" onclick="copyCommunityInvite()" style="width: 100%;">Copy to Clipboard</button>
+                            </div>
+
+                            <button class="btn btn-danger" onclick="leaveCommunity()" style="width: 100%;">Leave Community</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Community Modal -->
+                <div id="createCommunityModal" class="modal hidden">
+                    <div class="modal-backdrop" onclick="closeCreateCommunityModal()"></div>
+                    <div class="modal-dialog" style="max-width: 400px;">
+                        <div class="modal-header">
+                            <h3>Create Community</h3>
+                            <button class="modal-close" onclick="closeCreateCommunityModal()">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-group" style="margin-bottom: var(--spacing-lg);">
+                                <label for="newCommunityName">Name</label>
+                                <input type="text" id="newCommunityName" class="textarea" placeholder="Community name..." maxlength="50">
+                            </div>
+                            <div class="form-group" style="margin-bottom: var(--spacing-lg);">
+                                <label for="newCommunityDescription">Description (optional)</label>
+                                <textarea id="newCommunityDescription" class="textarea" placeholder="What is this community about?" rows="3" maxlength="200"></textarea>
+                            </div>
+                            <div id="createCommunityError" class="error hidden" style="margin-bottom: var(--spacing-md);"></div>
+                            <button class="btn btn-primary" onclick="createCommunity()" style="width: 100%;">Create Community</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Settings Tab -->
                 <div id="settingsTab" class="hidden">
                     <div class="modal-content" id="settingsContent">
@@ -317,33 +480,9 @@
                                     </div>
                                     <div style="margin-bottom: var(--spacing-sm);">
                                         <label for="settingsBio" style="display: block; margin-bottom: var(--spacing-xs); color: var(--color-text-primary); font-weight: 600;">Bio</label>
-                                        <textarea id="settingsBio" class="textarea" placeholder="Tell us about yourself..." rows="2" style="text-align: left;"></textarea>
+                                        <textarea id="settingsBio" class="textarea" placeholder="Tell us about yourself..." rows="2" style="text-align: center;"></textarea>
                                     </div>
                                     <button id="saveProfileBtn" class="btn btn-primary btn-sm" onclick="saveProfileSettings()">Save Bio</button>
-                                </div>
-
-                                <!-- Message Relay Section -->
-                                <div class="settings-section" style="width: 100%; margin-bottom: var(--spacing-md); padding: var(--spacing-md); background: var(--glass-regular); border-radius: var(--border-radius-md); text-align: center; box-sizing: border-box;">
-                                    <h4 style="margin-bottom: var(--spacing-sm); color: var(--color-text-primary); font-size: var(--font-size-base);">📡 Message Relay</h4>
-                                    <p style="color: var(--color-text-secondary); font-size: var(--font-size-xs); margin-bottom: var(--spacing-sm);">Help messages reach friends-of-friends by relaying encrypted data.</p>
-
-                                    <div style="margin-bottom: var(--spacing-sm);">
-                                        <label for="relayLimit" style="display: block; margin-bottom: var(--spacing-xs); color: var(--color-text-primary); font-weight: 600;">Monthly Limit</label>
-                                        <select id="relayLimit" style="text-align: center; width: 140px; padding: 8px 12px; font-size: var(--font-size-sm); background: var(--glass-light); border: 1px solid var(--glass-regular-border); border-radius: var(--border-radius-sm); color: var(--color-text-primary);" onchange="saveRelayLimit()">
-                                            <option value="0">None (0 MB)</option>
-                                            <option value="128">128 MB</option>
-                                            <option value="256">256 MB</option>
-                                            <option value="512">512 MB</option>
-                                            <option value="1024">1 GB</option>
-                                            <option value="2048" selected>2 GB</option>
-                                            <option value="5120">5 GB</option>
-                                            <option value="-1">Unlimited</option>
-                                        </select>
-                                    </div>
-
-                                    <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin: 0;">
-                                        <strong>Used:</strong> <span id="relayUsed">0 MB</span> / <span id="relayLimitDisplay">2 GB</span>
-                                    </p>
                                 </div>
 
                                 <!-- Storage Section -->
@@ -357,8 +496,9 @@
                                             <option value="0">None (0 GB)</option>
                                             <option value="1">1 GB</option>
                                             <option value="2">2 GB</option>
-                                            <option value="4" selected>4 GB</option>
+                                            <option value="4">4 GB</option>
                                             <option value="8">8 GB</option>
+                                            <option value="10" selected>10 GB</option>
                                             <option value="16">16 GB</option>
                                             <option value="32">32 GB</option>
                                             <option value="64">64 GB</option>
@@ -366,7 +506,7 @@
                                     </div>
 
                                     <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin: 0;">
-                                        <strong>Used:</strong> <span id="storageUsed">0 MB</span> / <span id="storageLimitDisplay">4 GB</span>
+                                        <strong>Used:</strong> <span id="storageUsed">0 MB</span> / <span id="storageLimitDisplay">10 GB</span>
                                     </p>
                                 </div>
 
@@ -375,6 +515,41 @@
                                     <h4 style="margin-bottom: var(--spacing-sm); color: var(--color-text-primary); font-size: var(--font-size-base);">🔐 Security</h4>
                                     <p style="color: var(--color-text-secondary); font-size: var(--font-size-xs);">Your 24-word recovery phrase was shown once at account creation.</p>
                                     <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); margin-top: var(--spacing-xs);"><strong>Not stored anywhere</strong> — only you have it.</p>
+                                </div>
+
+                                <!-- Safety Section (Block/Mute) -->
+                                <div class="settings-section" style="width: 100%; margin-bottom: var(--spacing-md); padding: var(--spacing-md); background: var(--glass-regular); border-radius: var(--border-radius-md); box-sizing: border-box;">
+                                    <h4 style="margin-bottom: var(--spacing-md); color: var(--color-text-primary); font-size: var(--font-size-base); text-align: center;">🛡️ Safety</h4>
+
+                                    <!-- Blocked Users -->
+                                    <div style="margin-bottom: var(--spacing-lg);">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
+                                            <span style="color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: 600;">Blocked Users</span>
+                                            <span id="blockedCount" style="color: var(--color-text-muted); font-size: var(--font-size-xs);">0</span>
+                                        </div>
+                                        <div id="blockedUsersList" class="safety-list">
+                                            <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); text-align: center; padding: var(--spacing-sm);">No blocked users</p>
+                                        </div>
+                                    </div>
+
+                                    <!-- Muted Users -->
+                                    <div>
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
+                                            <span style="color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: 600;">Muted Users</span>
+                                            <span id="mutedCount" style="color: var(--color-text-muted); font-size: var(--font-size-xs);">0</span>
+                                        </div>
+                                        <div id="mutedUsersList" class="safety-list">
+                                            <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); text-align: center; padding: var(--spacing-sm);">No muted users</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Devices Section -->
+                                <div class="settings-section" style="width: 100%; margin-bottom: var(--spacing-md); padding: var(--spacing-md); background: var(--glass-regular); border-radius: var(--border-radius-md); box-sizing: border-box;">
+                                    <h4 style="margin-bottom: var(--spacing-md); color: var(--color-text-primary); font-size: var(--font-size-base); text-align: center;">📱 Your Devices</h4>
+                                    <div id="devicesList" class="devices-list">
+                                        <p style="color: var(--color-text-muted); font-size: var(--font-size-xs); text-align: center; padding: var(--spacing-sm);">Loading devices...</p>
+                                    </div>
                                 </div>
                             </div>
 
@@ -403,10 +578,16 @@
                 </p>
             </div>
 
+            <div style="background: var(--color-surface-elevated); border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: var(--spacing-md); margin-bottom: var(--spacing-lg);">
+                <p style="color: var(--color-warning); font-size: var(--font-size-sm); margin: 0;">
+                    <strong>Important:</strong> To restore your account, you'll need both your recovery phrase AND your exact display name. Save them together!
+                </p>
+            </div>
+
             <div style="text-align: center; margin-bottom: var(--spacing-lg);">
                 <button class="btn btn-primary" onclick="copyRecoveryPhrase()" style="margin-bottom: var(--spacing-md);">📋 Copy to Clipboard</button>
                 <p style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">Write this down and keep it safe!</p>
-                <p style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">You'll need these 24 words to restore your account.</p>
+                <p style="color: var(--color-text-secondary); font-size: var(--font-size-sm);">You'll need these 24 words + your display name to restore your account.</p>
             </div>
 
             <div style="text-align: center;">
@@ -462,6 +643,77 @@
             <div style="text-align: center; margin-top: var(--spacing-lg);">
                 <p style="color: white; margin-bottom: var(--spacing-md);">Point camera at QR code</p>
                 <button class="btn btn-secondary" onclick="closeCameraScanner()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Block User Modal -->
+    <div id="blockUserModal" class="modal hidden">
+        <div class="modal-backdrop" onclick="SafetyManager.closeBlockModal()"></div>
+        <div class="modal-dialog" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>Block User</h3>
+                <button class="modal-close" onclick="SafetyManager.closeBlockModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="block-warning">Block <strong id="blockUserName"></strong>?</p>
+                <ul class="block-effects">
+                    <li>They won't be able to see your posts</li>
+                    <li>They won't be able to send you messages</li>
+                    <li>They won't see your profile</li>
+                </ul>
+                <div class="form-group" style="margin-top: var(--spacing-lg);">
+                    <label for="blockReason">Reason (optional)</label>
+                    <textarea id="blockReason" class="textarea" rows="2" placeholder="Why are you blocking this user?"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="SafetyManager.closeBlockModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="SafetyManager.confirmBlock()">Block User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mute User Modal -->
+    <div id="muteUserModal" class="modal hidden">
+        <div class="modal-backdrop" onclick="SafetyManager.closeMuteModal()"></div>
+        <div class="modal-dialog" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>Mute User</h3>
+                <button class="modal-close" onclick="SafetyManager.closeMuteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: var(--spacing-lg);">Mute <strong id="muteUserName"></strong></p>
+
+                <div class="mute-options">
+                    <label class="mute-option">
+                        <input type="checkbox" id="muteNotifications" checked>
+                        <span>Mute notifications</span>
+                    </label>
+                    <label class="mute-option">
+                        <input type="checkbox" id="muteMessages" checked>
+                        <span>Mute messages</span>
+                    </label>
+                    <label class="mute-option">
+                        <input type="checkbox" id="mutePosts" checked>
+                        <span>Mute posts in feed</span>
+                    </label>
+                </div>
+
+                <div class="form-group" style="margin-top: var(--spacing-lg);">
+                    <label for="muteDuration">Duration</label>
+                    <select id="muteDuration" class="select-input">
+                        <option value="1">1 hour</option>
+                        <option value="24">24 hours</option>
+                        <option value="168">7 days</option>
+                        <option value="720">30 days</option>
+                        <option value="0" selected>Forever</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="SafetyManager.closeMuteModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="SafetyManager.confirmMute()">Mute User</button>
             </div>
         </div>
     </div>

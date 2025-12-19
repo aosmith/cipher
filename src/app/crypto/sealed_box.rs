@@ -25,6 +25,8 @@ pub enum ContentType {
     FriendRequest,
     FriendAccepted,
     KeyRotation,
+    CommunityPost,
+    CommunityMemberAdded,
 }
 
 /// Envelope for gossiped content - contains multiple sealed boxes
@@ -80,6 +82,21 @@ pub enum ContentPayload {
         /// Signature over the new key (base64)
         signature: String,
     },
+    /// A post in a community
+    CommunityPost {
+        community_id: String,
+        community_name: String,
+        content: String,
+        attachments: Option<Vec<MediaAttachmentWithData>>,
+        show_in_main_feed: bool,
+    },
+    /// Notification that a new member joined a community
+    CommunityMemberAdded {
+        community_id: String,
+        community_name: String,
+        new_member_public_key: String,
+        new_member_display_name: String,
+    },
 }
 
 impl GossipEnvelope {
@@ -109,6 +126,78 @@ impl GossipEnvelope {
             message_id,
             timestamp,
             content_type: ContentType::Post,
+            sender_public_key: sender_public_key.to_string(),
+            sealed_boxes,
+        })
+    }
+
+    /// Create a new envelope for a community post, encrypted for all community members
+    pub fn new_community_post(
+        sender_public_key: &str,
+        community_id: &str,
+        community_name: &str,
+        content: &str,
+        attachments: Option<Vec<MediaAttachmentWithData>>,
+        show_in_main_feed: bool,
+        member_public_keys: &[String],
+        sender_encryption_private_key: &str,
+    ) -> Result<Self, String> {
+        let message_id = generate_message_id();
+        let timestamp = chrono::Utc::now().timestamp();
+
+        let payload = ContentPayload::CommunityPost {
+            community_id: community_id.to_string(),
+            community_name: community_name.to_string(),
+            content: content.to_string(),
+            attachments,
+            show_in_main_feed,
+        };
+
+        let sealed_boxes = create_sealed_boxes_for_recipients(
+            &payload,
+            member_public_keys,
+            sender_encryption_private_key,
+        )?;
+
+        Ok(GossipEnvelope {
+            message_id,
+            timestamp,
+            content_type: ContentType::CommunityPost,
+            sender_public_key: sender_public_key.to_string(),
+            sealed_boxes,
+        })
+    }
+
+    /// Create a new envelope to notify members about a new community member
+    pub fn new_community_member_added(
+        sender_public_key: &str,
+        community_id: &str,
+        community_name: &str,
+        new_member_public_key: &str,
+        new_member_display_name: &str,
+        member_public_keys: &[String],
+        sender_encryption_private_key: &str,
+    ) -> Result<Self, String> {
+        let message_id = generate_message_id();
+        let timestamp = chrono::Utc::now().timestamp();
+
+        let payload = ContentPayload::CommunityMemberAdded {
+            community_id: community_id.to_string(),
+            community_name: community_name.to_string(),
+            new_member_public_key: new_member_public_key.to_string(),
+            new_member_display_name: new_member_display_name.to_string(),
+        };
+
+        let sealed_boxes = create_sealed_boxes_for_recipients(
+            &payload,
+            member_public_keys,
+            sender_encryption_private_key,
+        )?;
+
+        Ok(GossipEnvelope {
+            message_id,
+            timestamp,
+            content_type: ContentType::CommunityMemberAdded,
             sender_public_key: sender_public_key.to_string(),
             sealed_boxes,
         })

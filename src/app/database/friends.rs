@@ -171,7 +171,7 @@ impl Database {
     }
 
     /// Generate a random 8-character invite code (uppercase letters and digits)
-    fn generate_invite_code() -> String {
+    pub fn generate_invite_code() -> String {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         let mut code = String::with_capacity(8);
@@ -243,6 +243,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: None, // Friend signature tracked in p2p_connections
                 recovery_phrase_hash: None,
                 recovery_phrase_shown: false,
                 created_at: row.get("created_at")?,
@@ -285,6 +286,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: None,
                 recovery_phrase_hash: None,
                 recovery_phrase_shown: false,
                 created_at: row.get("created_at")?,
@@ -386,6 +388,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: None,
                 recovery_phrase_hash: None,
                 recovery_phrase_shown: false,
                 created_at: row.get("created_at")?,
@@ -466,6 +469,7 @@ impl Database {
                 device_id: row.get("device_id")?,
                 bio: row.get("bio")?,
                 profile_picture: row.get("profile_picture")?,
+                profile_signature: None,
                 recovery_phrase_hash: None,
                 recovery_phrase_shown: false,
                 created_at: row.get("created_at")?,

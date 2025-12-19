@@ -13,6 +13,7 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
             device_id TEXT,
             bio TEXT,
             profile_picture TEXT,
+            profile_signature TEXT,
             recovery_phrase_hash TEXT,
             recovery_phrase_shown BOOLEAN DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -50,6 +51,8 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
             updated_at TEXT NOT NULL,
             iroh_node_id TEXT,
             friend_relay_url TEXT,
+            known_display_name TEXT,
+            friend_profile_signature TEXT,
             FOREIGN KEY (user_id) REFERENCES users (id),
             FOREIGN KEY (friend_user_id) REFERENCES users (id),
             FOREIGN KEY (initiated_by) REFERENCES users (id),
@@ -325,6 +328,71 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
+    // Create communities table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS communities (
+            id BLOB PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            avatar TEXT,
+            creator_id BLOB NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (creator_id) REFERENCES users (id)
+        )",
+        [],
+    )?;
+
+    // Create community_members table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS community_members (
+            id BLOB PRIMARY KEY,
+            community_id BLOB NOT NULL,
+            user_id BLOB NOT NULL,
+            public_key TEXT NOT NULL,
+            display_name TEXT,
+            role TEXT NOT NULL DEFAULT 'member',
+            invited_by BLOB,
+            joined_at TEXT NOT NULL,
+            FOREIGN KEY (community_id) REFERENCES communities (id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users (id),
+            FOREIGN KEY (invited_by) REFERENCES users (id),
+            UNIQUE(community_id, user_id)
+        )",
+        [],
+    )?;
+
+    // Create community_posts table (maps posts to communities)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS community_posts (
+            id BLOB PRIMARY KEY,
+            community_id BLOB NOT NULL,
+            post_id BLOB NOT NULL,
+            show_in_main_feed BOOLEAN DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (community_id) REFERENCES communities (id) ON DELETE CASCADE,
+            FOREIGN KEY (post_id) REFERENCES posts (id) ON DELETE CASCADE,
+            UNIQUE(community_id, post_id)
+        )",
+        [],
+    )?;
+
+    // Create community_invites table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS community_invites (
+            id BLOB PRIMARY KEY,
+            community_id BLOB NOT NULL,
+            creator_id BLOB NOT NULL,
+            invite_code TEXT UNIQUE NOT NULL,
+            uses_remaining INTEGER NOT NULL DEFAULT 1,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (community_id) REFERENCES communities (id) ON DELETE CASCADE,
+            FOREIGN KEY (creator_id) REFERENCES users (id)
+        )",
+        [],
+    )?;
+
     // Create app_settings table for global application settings
     conn.execute(
         "CREATE TABLE IF NOT EXISTS app_settings (
@@ -336,15 +404,11 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
     )?;
 
     // Insert default settings if they don't exist
-    // Default storage: 4 GB (4294967296 bytes)
-    // Default relay: 2 GB/month (2147483648 bytes)
+    // Default storage: 10 GB (10737418240 bytes)
     conn.execute(
         "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES
-            ('storage_limit_bytes', '4294967296', datetime('now')),
-            ('relay_limit_bytes', '2147483648', datetime('now')),
-            ('storage_used_bytes', '0', datetime('now')),
-            ('relay_used_bytes', '0', datetime('now')),
-            ('relay_reset_at', datetime('now'), datetime('now'))",
+            ('storage_limit_bytes', '10737418240', datetime('now')),
+            ('storage_used_bytes', '0', datetime('now'))",
         [],
     )?;
 
@@ -381,6 +445,24 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     // Migration: Rename username to display_name in friend_invites table
     let _ = conn.execute(
         "ALTER TABLE friend_invites RENAME COLUMN username TO display_name",
+        [],
+    );
+
+    // Migration: Add profile_signature column to users table
+    let _ = conn.execute(
+        "ALTER TABLE users ADD COLUMN profile_signature TEXT",
+        [],
+    );
+
+    // Migration: Add known_display_name to p2p_connections for tracking friend name changes
+    let _ = conn.execute(
+        "ALTER TABLE p2p_connections ADD COLUMN known_display_name TEXT",
+        [],
+    );
+
+    // Migration: Add friend_profile_signature to p2p_connections for signature verification
+    let _ = conn.execute(
+        "ALTER TABLE p2p_connections ADD COLUMN friend_profile_signature TEXT",
         [],
     );
 
