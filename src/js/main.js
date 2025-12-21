@@ -5130,16 +5130,25 @@ async function createCommunityPost() {
 
 // Join community by invite code
 async function joinCommunityByInvite() {
-    const inviteCode = document.getElementById('communityInviteCode').value.trim().toUpperCase();
-    if (!inviteCode) return;
+    const inviteCode = document.getElementById('communityInviteCode').value.trim();
+    console.log('[COMMUNITY] Joining with invite code:', inviteCode);
+    if (!inviteCode) {
+        console.log('[COMMUNITY] No invite code provided');
+        return;
+    }
 
-    if (!currentUser) return;
+    if (!currentUser) {
+        console.log('[COMMUNITY] No current user');
+        return;
+    }
 
     try {
+        console.log('[COMMUNITY] Calling join_community_by_invite with userId:', currentUser.id);
         const community = await TauriAPI.invoke('join_community_by_invite', {
             userId: currentUser.id,
             inviteCode
         });
+        console.log('[COMMUNITY] Result:', community);
 
         if (community) {
             document.getElementById('communityInviteCode').value = '';

@@ -67,6 +67,8 @@ pub async fn leave_community(
 }
 
 /// Create an invite code for a community
+/// Returns a self-contained invite URI: cipher://c/{base64url_data}
+/// Format: [16 community_id][1 name_len][name][32 creator_pubkey][32 node_id]
 #[tauri::command]
 pub async fn create_community_invite(
     community_id: SqliteUuid,
@@ -75,27 +77,266 @@ pub async fn create_community_invite(
     hours_valid: Option<i64>,
     db: State<'_, Database>,
 ) -> Result<CommunityInvite, String> {
-    let uses = uses_remaining.unwrap_or(1);
-    let hours = hours_valid.unwrap_or(24);
+    let _uses = uses_remaining.unwrap_or(1);
+    let _hours = hours_valid.unwrap_or(24);
 
     println!(
-        "[COMMUNITY] Creating invite for community {:?} with {} uses, valid for {} hours",
-        community_id, uses, hours
+        "[COMMUNITY] Creating self-contained invite for community {:?}",
+        community_id
     );
 
-    db.create_community_invite(community_id, creator_id, uses, hours)
-        .map_err(|e| format!("Failed to create invite: {}", e))
+    // Get community info
+    let community = db
+        .get_community(community_id)
+        .map_err(|e| format!("Failed to get community: {}", e))?
+        .ok_or("Community not found")?;
+
+    // Get creator's public key
+    let creator = db
+        .find_current_user_by_id(creator_id)
+        .map_err(|e| format!("Failed to get creator: {}", e))?
+        .ok_or("Creator not found")?;
+
+    let creator_pubkey = creator
+        .encryption_public_key
+        .ok_or("Creator missing public key")?;
+
+    // Get node ID from Iroh network
+    let network = IROH_NETWORK
+        .lock()
+        .map_err(|_| "Failed to lock network")?
+        .as_ref()
+        .ok_or("P2P network not initialized")?
+        .clone();
+
+    let node_id = {
+        let endpoint_guard = network.endpoint.blocking_lock();
+        if let Some(endpoint) = endpoint_guard.as_ref() {
+            endpoint.node_id().to_string()
+        } else {
+            return Err("Endpoint not initialized".to_string());
+        }
+    };
+
+    // Build binary payload
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use base64::Engine;
+
+    let mut payload = Vec::new();
+
+    // Community ID (16 bytes)
+    payload.extend_from_slice(community_id.as_bytes());
+
+    // Community name (length-prefixed, max 255)
+    let name_bytes = community.name.as_bytes();
+    if name_bytes.len() > 255 {
+        return Err("Community name too long".to_string());
+    }
+    payload.push(name_bytes.len() as u8);
+    payload.extend_from_slice(name_bytes);
+
+    // Creator's public key (32 bytes)
+    let pubkey_bytes = STANDARD
+        .decode(&creator_pubkey)
+        .map_err(|e| format!("Invalid public key: {}", e))?;
+    payload.extend_from_slice(&pubkey_bytes);
+
+    // Node ID (32 bytes)
+    let node_bytes = hex::decode(&node_id)
+        .map_err(|e| format!("Invalid node id: {}", e))?;
+    payload.extend_from_slice(&node_bytes);
+
+    // Encode as base64url
+    let encoded = URL_SAFE_NO_PAD.encode(&payload);
+    let invite_code = format!("cipher://c/{}", encoded);
+
+    println!(
+        "[COMMUNITY] Generated invite URI: {} chars, payload: {} bytes",
+        invite_code.len(),
+        payload.len()
+    );
+
+    // Return a CommunityInvite struct with the new code
+    // (We're not storing it in the database anymore since it's self-contained)
+    Ok(CommunityInvite {
+        id: SqliteUuid::new(),
+        community_id,
+        community_name: community.name,
+        creator_id,
+        invite_code,
+        uses_remaining: -1, // Unlimited for self-contained invites
+        expires_at: "".to_string(), // No expiration
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// Parsed community invite data
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ParsedCommunityInvite {
+    pub community_id: SqliteUuid,
+    pub community_name: String,
+    pub creator_public_key: String,
+    pub node_id: String,
+}
+
+/// Parse a community invite URI
+fn parse_community_invite(invite_code: &str) -> Result<ParsedCommunityInvite, String> {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use base64::Engine;
+
+    if !invite_code.starts_with("cipher://c/") {
+        return Err("Invalid community invite format. Must start with cipher://c/".to_string());
+    }
+
+    let encoded = &invite_code[11..]; // Skip "cipher://c/"
+    let payload = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|e| format!("Invalid invite encoding: {}", e))?;
+
+    // Minimum size: 16 (UUID) + 1 (name_len) + 32 (pubkey) + 32 (node_id) = 81
+    if payload.len() < 81 {
+        return Err("Invite data too short".to_string());
+    }
+
+    let mut offset = 0;
+
+    // Community ID (16 bytes)
+    let community_id = SqliteUuid::from_bytes(
+        payload[offset..offset + 16]
+            .try_into()
+            .map_err(|_| "Invalid community ID")?,
+    );
+    offset += 16;
+
+    // Community name (length-prefixed)
+    let name_len = payload[offset] as usize;
+    offset += 1;
+    if offset + name_len > payload.len() {
+        return Err("Invalid name length".to_string());
+    }
+    let community_name = String::from_utf8(payload[offset..offset + name_len].to_vec())
+        .map_err(|_| "Invalid community name encoding")?;
+    offset += name_len;
+
+    // Creator's public key (32 bytes)
+    if offset + 32 > payload.len() {
+        return Err("Missing public key".to_string());
+    }
+    let creator_public_key = STANDARD.encode(&payload[offset..offset + 32]);
+    offset += 32;
+
+    // Node ID (32 bytes)
+    if offset + 32 > payload.len() {
+        return Err("Missing node ID".to_string());
+    }
+    let node_id = hex::encode(&payload[offset..offset + 32]);
+
+    Ok(ParsedCommunityInvite {
+        community_id,
+        community_name,
+        creator_public_key,
+        node_id,
+    })
 }
 
 /// Join a community using an invite code
+/// Supports self-contained URI format: cipher://c/{base64url_data}
 #[tauri::command]
 pub async fn join_community_by_invite(
     user_id: SqliteUuid,
     invite_code: String,
     db: State<'_, Database>,
 ) -> Result<Option<Community>, String> {
-    println!("[COMMUNITY] User {:?} joining with invite code: {}", user_id, invite_code);
+    println!(
+        "[COMMUNITY] User {:?} joining with invite code: {}...",
+        user_id,
+        &invite_code[..invite_code.len().min(50)]
+    );
 
+    // Try to parse as self-contained invite first
+    if invite_code.starts_with("cipher://c/") {
+        let parsed = parse_community_invite(&invite_code)?;
+        println!(
+            "[COMMUNITY] Parsed invite: community='{}', id={:?}",
+            parsed.community_name, parsed.community_id
+        );
+
+        // Check if community already exists locally
+        let existing = db
+            .get_community(parsed.community_id)
+            .map_err(|e| format!("Database error: {}", e))?;
+
+        let community = if let Some(c) = existing {
+            println!("[COMMUNITY] Community already exists locally");
+            c
+        } else {
+            // Create the community locally
+            println!("[COMMUNITY] Creating community locally from invite");
+
+            // First ensure the creator user exists
+            let creator_user_id = SqliteUuid::from_public_key(&parsed.creator_public_key);
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    creator_user_id,
+                    "Community Creator",
+                    &parsed.creator_public_key,
+                    &parsed.creator_public_key,
+                    chrono::Utc::now().to_rfc3339(),
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(|e| format!("Failed to ensure creator exists: {}", e))?;
+            drop(conn);
+
+            // Create the community
+            db.create_community_with_id(
+                parsed.community_id,
+                creator_user_id,
+                &parsed.community_name,
+                None,
+            )
+            .map_err(|e| format!("Failed to create community: {}", e))?
+        };
+
+        // Check if user is already a member
+        let is_member = db
+            .is_community_member(parsed.community_id, user_id)
+            .map_err(|e| format!("Failed to check membership: {}", e))?;
+
+        if !is_member {
+            // Get user's public key
+            let user = db
+                .find_current_user_by_id(user_id)
+                .map_err(|e| format!("Failed to get user: {}", e))?
+                .ok_or("User not found")?;
+
+            let user_pubkey = user
+                .encryption_public_key
+                .ok_or("User missing public key")?;
+
+            // Add user as member
+            db.add_community_member(
+                parsed.community_id,
+                user_id,
+                &user_pubkey,
+                Some(&user.display_name),
+                None,
+            )
+            .map_err(|e| format!("Failed to add member: {}", e))?;
+
+            println!("[COMMUNITY] User added as member");
+        } else {
+            println!("[COMMUNITY] User is already a member");
+        }
+
+        return Ok(Some(community));
+    }
+
+    // Fall back to legacy database lookup (for backwards compatibility)
+    println!("[COMMUNITY] Trying legacy database lookup");
     db.use_community_invite(user_id, &invite_code)
         .map_err(|e| format!("Failed to join community: {}", e))
 }

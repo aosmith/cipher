@@ -64,6 +64,36 @@ impl Database {
         })
     }
 
+    /// Create a community with a specific ID (used when joining via invite)
+    pub fn create_community_with_id(
+        &self,
+        community_id: SqliteUuid,
+        creator_id: SqliteUuid,
+        name: &str,
+        description: Option<&str>,
+    ) -> SqliteResult<Community> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+
+        // Create the community (no creator membership - they're on another device)
+        conn.execute(
+            "INSERT INTO communities (id, name, description, avatar, creator_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?5)",
+            params![community_id, name, description, creator_id, &now],
+        )?;
+
+        Ok(Community {
+            id: community_id,
+            name: name.to_string(),
+            description: description.map(|s| s.to_string()),
+            avatar: None,
+            creator_id,
+            member_count: 0, // Will be updated when members join
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
     /// Get a community by ID
     pub fn get_community(&self, community_id: SqliteUuid) -> SqliteResult<Option<Community>> {
         let conn = self.conn.lock().unwrap();
