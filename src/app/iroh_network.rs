@@ -198,6 +198,13 @@ pub struct IrohNetwork {
     device_seed: [u8; 32], // Device keypair seed for DHT publishing
     app_handle: tauri::AppHandle,
     db: Database,
+    /// Health tracking: last time presence was successfully sent
+    last_presence_success: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Health tracking: last time heartbeat was successfully sent
+    last_heartbeat_success: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Flag to signal background loops should stop (for clean shutdown)
+    /// Public so app lifecycle handlers can signal shutdown
+    pub shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl IrohNetwork {
@@ -235,6 +242,9 @@ impl IrohNetwork {
             device_seed,
             app_handle,
             db,
+            last_presence_success: Arc::new(Mutex::new(None)),
+            last_heartbeat_success: Arc::new(Mutex::new(None)),
+            shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -1251,14 +1261,29 @@ impl IrohNetwork {
     /// Start background loop for presence announcements
     fn start_presence_loop(&self) {
         let network = Arc::new(self.clone_for_background());
+        let shutdown_flag = self.shutdown_flag.clone();
+        let last_success = self.last_presence_success.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
 
-                if let Err(e) = network.announce_presence().await {
-                    println!("[IROH] Failed to announce presence: {}", e);
+                // Check if we should stop
+                if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("[IROH] Presence loop stopping due to shutdown flag");
+                    break;
+                }
+
+                match network.announce_presence().await {
+                    Ok(_) => {
+                        // Track successful presence announcement
+                        let mut guard = last_success.lock().await;
+                        *guard = Some(std::time::Instant::now());
+                    }
+                    Err(e) => {
+                        println!("[IROH] Failed to announce presence: {}", e);
+                    }
                 }
             }
         });
@@ -2958,6 +2983,9 @@ impl IrohNetwork {
             device_seed: self.device_seed,
             app_handle: self.app_handle.clone(),
             db: self.db.clone(),
+            last_presence_success: self.last_presence_success.clone(),
+            last_heartbeat_success: self.last_heartbeat_success.clone(),
+            shutdown_flag: self.shutdown_flag.clone(),
         }
     }
 
@@ -3130,6 +3158,8 @@ impl IrohNetwork {
     /// Start heartbeat sender - sends heartbeats to cipher/presence every 15 seconds
     fn start_heartbeat_sender(&self) {
         let network = Arc::new(self.clone_for_background());
+        let shutdown_flag = self.shutdown_flag.clone();
+        let last_success = self.last_heartbeat_success.clone();
 
         tokio::spawn(async move {
             // Wait a bit for initialization
@@ -3138,6 +3168,12 @@ impl IrohNetwork {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
             loop {
                 interval.tick().await;
+
+                // Check if we should stop
+                if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("[HEARTBEAT] Heartbeat sender stopping due to shutdown flag");
+                    break;
+                }
 
                 // Process any pending topic subscriptions from message handlers
                 network.process_pending_subscriptions().await;
@@ -3155,10 +3191,16 @@ impl IrohNetwork {
                     };
 
                     // Send to global content topic
-                    if let Err(e) = network.publish_message(CONTENT_TOPIC, heartbeat).await {
-                        println!("[HEARTBEAT] Failed to send heartbeat: {}", e);
-                    } else {
-                        println!("[HEARTBEAT] [OK] Sent heartbeat");
+                    match network.publish_message(CONTENT_TOPIC, heartbeat).await {
+                        Ok(_) => {
+                            println!("[HEARTBEAT] [OK] Sent heartbeat");
+                            // Track successful heartbeat
+                            let mut guard = last_success.lock().await;
+                            *guard = Some(std::time::Instant::now());
+                        }
+                        Err(e) => {
+                            println!("[HEARTBEAT] Failed to send heartbeat: {}", e);
+                        }
                     }
                 } else {
                     drop(endpoint_guard);
@@ -3172,6 +3214,7 @@ impl IrohNetwork {
     /// Start heartbeat monitor - removes peers that haven't sent heartbeat in 45 seconds
     fn start_heartbeat_monitor(&self) {
         let network = Arc::new(self.clone_for_background());
+        let shutdown_flag = self.shutdown_flag.clone();
 
         tokio::spawn(async move {
             // Wait a bit for initialization
@@ -3182,6 +3225,12 @@ impl IrohNetwork {
 
             loop {
                 tokio::time::sleep(interval).await;
+
+                // Check if we should stop
+                if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("[HEARTBEAT] Heartbeat monitor stopping due to shutdown flag");
+                    break;
+                }
 
                 let now = std::time::Instant::now();
                 let heartbeats = network.peer_heartbeats.lock().await;
@@ -3218,9 +3267,124 @@ impl IrohNetwork {
         println!("[HEARTBEAT] Started heartbeat monitor (checks every 30s, timeout 45s)");
     }
 
+    /// Check network health and return detailed status
+    /// Returns: (is_healthy, needs_reconnect, status_details)
+    pub async fn health_check(&self) -> (bool, bool, serde_json::Value) {
+        let now = std::time::Instant::now();
+        let max_stale_time = std::time::Duration::from_secs(60); // Consider unhealthy if no success in 60s
+
+        // Check endpoint exists
+        let endpoint_guard = self.endpoint.lock().await;
+        let has_endpoint = endpoint_guard.is_some();
+        let relay_connected = if let Some(endpoint) = endpoint_guard.as_ref() {
+            // Check if we have a relay URL (indicates relay connection)
+            endpoint.home_relay().get().ok().flatten().is_some()
+        } else {
+            false
+        };
+        drop(endpoint_guard);
+
+        // Check gossip exists
+        let gossip_guard = self.gossip.lock().await;
+        let has_gossip = gossip_guard.is_some();
+        drop(gossip_guard);
+
+        // Check topic subscription
+        let topics_guard = self.topics.lock().await;
+        let has_content_topic = topics_guard.contains_key(CONTENT_TOPIC);
+        drop(topics_guard);
+
+        // Check last successful presence
+        let presence_guard = self.last_presence_success.lock().await;
+        let presence_stale = match *presence_guard {
+            Some(last) => now.duration_since(last) > max_stale_time,
+            None => true, // Never succeeded
+        };
+        let presence_age_secs = presence_guard.map(|t| now.duration_since(t).as_secs());
+        drop(presence_guard);
+
+        // Check last successful heartbeat
+        let heartbeat_guard = self.last_heartbeat_success.lock().await;
+        let heartbeat_stale = match *heartbeat_guard {
+            Some(last) => now.duration_since(last) > max_stale_time,
+            None => true, // Never succeeded
+        };
+        let heartbeat_age_secs = heartbeat_guard.map(|t| now.duration_since(t).as_secs());
+        drop(heartbeat_guard);
+
+        // Determine health
+        let is_healthy = has_endpoint && has_gossip && has_content_topic && relay_connected && !presence_stale && !heartbeat_stale;
+        let needs_reconnect = !has_endpoint || !has_gossip || !has_content_topic || !relay_connected;
+
+        let status = serde_json::json!({
+            "healthy": is_healthy,
+            "needs_reconnect": needs_reconnect,
+            "has_endpoint": has_endpoint,
+            "relay_connected": relay_connected,
+            "has_gossip": has_gossip,
+            "has_content_topic": has_content_topic,
+            "presence_stale": presence_stale,
+            "presence_age_secs": presence_age_secs,
+            "heartbeat_stale": heartbeat_stale,
+            "heartbeat_age_secs": heartbeat_age_secs,
+        });
+
+        println!("[IROH-HEALTH] Health check: healthy={}, needs_reconnect={}", is_healthy, needs_reconnect);
+        if !is_healthy {
+            println!("[IROH-HEALTH] Details: {:?}", status);
+        }
+
+        (is_healthy, needs_reconnect, status)
+    }
+
+    /// Recover network connectivity without full reinitialization
+    /// This is faster than full shutdown+init and preserves NAT traversal state
+    pub async fn recover(&self) -> Result<(), String> {
+        println!("[IROH-RECOVER] Starting network recovery...");
+
+        // Reset shutdown flag to allow new background loops
+        self.shutdown_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // Check if we need to re-subscribe to the content topic
+        let topics_guard = self.topics.lock().await;
+        let has_content_topic = topics_guard.contains_key(CONTENT_TOPIC);
+        drop(topics_guard);
+
+        if !has_content_topic {
+            println!("[IROH-RECOVER] Content topic missing, re-subscribing...");
+            self.subscribe_topic(CONTENT_TOPIC).await?;
+        }
+
+        // Restart background loops (they check shutdown_flag and will start fresh)
+        println!("[IROH-RECOVER] Restarting background loops...");
+        self.start_presence_loop();
+        self.start_heartbeat_sender();
+        self.start_heartbeat_monitor();
+
+        // Announce presence immediately
+        if let Err(e) = self.announce_presence().await {
+            println!("[IROH-RECOVER] Warning: Initial presence announcement failed: {}", e);
+            // Don't fail recovery for this - background loop will retry
+        } else {
+            println!("[IROH-RECOVER] [OK] Initial presence announced");
+        }
+
+        // Try to reconnect to known peers
+        self.start_active_peer_discovery();
+
+        println!("[IROH-RECOVER] Recovery complete");
+        Ok(())
+    }
+
     /// Shutdown the network
     pub async fn shutdown(&self) -> Result<(), String> {
         println!("[IROH] Shutting down Iroh network...");
+
+        // Signal background loops to stop
+        self.shutdown_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Give background loops a moment to notice the flag
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Close all topic subscriptions
         self.topics.lock().await.clear();

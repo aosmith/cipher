@@ -3981,29 +3981,64 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         });
 
-        // Handle app coming back from background - check P2P health and announce presence
+        // Handle app going to background - signal to pause P2P operations
+        // This prevents the race condition crash during app termination
         document.addEventListener('visibilitychange', async () => {
-            if (!document.hidden && P2P.initialized) {
-                console.log('App became visible, checking P2P health and announcing presence...');
+            if (document.hidden) {
+                // App going to background - signal to pause operations
+                console.log('App entering background, signaling P2P to pause...');
                 try {
-                    // Ensure Rust-side P2P is still initialized (may have been reset on mobile)
-                    await P2P.ensureInitialized();
-                    await P2P.announcePresence();
+                    await TauriAPI.invoke('iroh_enter_background');
                 } catch (error) {
-                    console.error('Failed to restore P2P or announce presence:', error);
+                    // Don't log errors here - app might be terminating
                 }
+            } else if (P2P.initialized) {
+                // App coming back to foreground
+                console.log('App became visible, resuming P2P and running health check...');
+                try {
+                    // Signal foreground first to reset shutdown flag
+                    await TauriAPI.invoke('iroh_enter_foreground');
+
+                    // Then run comprehensive health check and recovery
+                    const recovered = await P2P.healthCheckAndRecover();
+                    if (recovered) {
+                        console.log('P2P health check passed or recovery successful');
+                    } else {
+                        console.warn('P2P health check/recovery had issues, will retry on next poll');
+                    }
+                } catch (error) {
+                    console.error('Failed to resume/restore P2P:', error);
+                }
+            }
+        });
+
+        // Handle page hide event (more reliable for iOS termination)
+        window.addEventListener('pagehide', async () => {
+            console.log('Page hide event - signaling P2P to pause...');
+            try {
+                await TauriAPI.invoke('iroh_enter_background');
+            } catch (error) {
+                // Ignore - app might be terminating
             }
         });
 
         // Handle page focus (additional safeguard for mobile)
         window.addEventListener('focus', async () => {
             if (P2P.initialized && currentUser) {
-                console.log('Window focused, checking P2P health and announcing presence...');
+                console.log('Window focused, resuming P2P and running health check...');
                 try {
-                    await P2P.ensureInitialized();
-                    await P2P.announcePresence();
+                    // Signal foreground first
+                    await TauriAPI.invoke('iroh_enter_foreground');
+
+                    // Then run health check
+                    const recovered = await P2P.healthCheckAndRecover();
+                    if (recovered) {
+                        console.log('P2P health check passed or recovery successful');
+                    } else {
+                        console.warn('P2P health check/recovery had issues, will retry on next poll');
+                    }
                 } catch (error) {
-                    console.error('Failed to restore P2P or announce presence:', error);
+                    console.error('Failed to resume/restore P2P:', error);
                 }
             }
         });

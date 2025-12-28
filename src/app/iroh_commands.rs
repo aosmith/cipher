@@ -5,6 +5,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, State};
 
 use super::iroh_network::{IrohNetwork, P2PMessage, CONTENT_TOPIC};
@@ -14,6 +15,61 @@ use super::Database;
 lazy_static! {
     /// Global Iroh network instance
     pub static ref IROH_NETWORK: StdMutex<Option<Arc<IrohNetwork>>> = StdMutex::new(None);
+}
+
+/// Global flag to signal app is shutting down
+/// All async commands should check this before doing work or responding
+static APP_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Default timeout for P2P operations (5 seconds)
+const P2P_OPERATION_TIMEOUT_SECS: u64 = 5;
+
+/// Check if app is shutting down
+pub fn is_app_shutting_down() -> bool {
+    APP_SHUTTING_DOWN.load(Ordering::Relaxed)
+}
+
+/// Signal that app is shutting down - call this early in termination
+pub fn signal_app_shutdown() {
+    println!("[IROH] App shutdown signaled - cancelling pending operations");
+    APP_SHUTTING_DOWN.store(true, Ordering::Relaxed);
+
+    // Also signal the network's shutdown flag if it exists
+    if let Ok(guard) = IROH_NETWORK.lock() {
+        if let Some(network) = guard.as_ref() {
+            network.shutdown_flag.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Reset shutdown flag (for app restart scenarios)
+pub fn reset_app_shutdown() {
+    APP_SHUTTING_DOWN.store(false, Ordering::Relaxed);
+}
+
+/// Helper macro to wrap async operations with timeout and shutdown check
+/// Returns early with error if app is shutting down or operation times out
+macro_rules! with_timeout {
+    ($timeout_secs:expr, $operation:expr) => {{
+        if is_app_shutting_down() {
+            return Err("App is shutting down".to_string());
+        }
+
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs($timeout_secs),
+            $operation
+        ).await {
+            Ok(result) => {
+                if is_app_shutting_down() {
+                    return Err("App shutdown during operation".to_string());
+                }
+                result
+            }
+            Err(_) => {
+                Err("Operation timed out".to_string())
+            }
+        }
+    }};
 }
 
 /// Initialize Iroh network
@@ -158,6 +214,10 @@ pub async fn iroh_send_message(
     _to_public_key: String, // Not used in global mesh - filtering by to_user_id
     encrypted_content: String,
 ) -> Result<String, String> {
+    if is_app_shutting_down() {
+        return Err("App is shutting down".to_string());
+    }
+
     let network = IROH_NETWORK
         .lock()
         .unwrap()
@@ -177,7 +237,7 @@ pub async fn iroh_send_message(
     };
 
     // GLOBAL MESH: Broadcast to all nodes, recipient filters by to_user_id
-    network.publish_message(CONTENT_TOPIC, message).await?;
+    with_timeout!(P2P_OPERATION_TIMEOUT_SECS, network.publish_message(CONTENT_TOPIC, message))?;
 
     Ok(message_id)
 }
@@ -190,6 +250,10 @@ pub async fn iroh_publish_post(
     post_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<String, String> {
+    if is_app_shutting_down() {
+        return Err("App is shutting down".to_string());
+    }
+
     let network = IROH_NETWORK
         .lock()
         .unwrap()
@@ -336,6 +400,14 @@ pub async fn iroh_publish_post(
 /// Get connection status
 #[tauri::command]
 pub async fn iroh_get_connection_status() -> Result<serde_json::Value, String> {
+    if is_app_shutting_down() {
+        return Ok(serde_json::json!({
+            "listening": false,
+            "connected_peers": 0,
+            "shutting_down": true
+        }));
+    }
+
     let network_opt = IROH_NETWORK.lock().unwrap().clone();
 
     if network_opt.is_none() {
@@ -346,16 +418,40 @@ pub async fn iroh_get_connection_status() -> Result<serde_json::Value, String> {
     }
 
     let network = network_opt.unwrap();
-    network.get_connection_status().await
+
+    // Use timeout for status check
+    match tokio::time::timeout(
+        tokio::time::Duration::from_secs(P2P_OPERATION_TIMEOUT_SECS),
+        network.get_connection_status()
+    ).await {
+        Ok(result) => result,
+        Err(_) => Ok(serde_json::json!({
+            "listening": false,
+            "connected_peers": 0,
+            "error": "Status check timed out"
+        }))
+    }
 }
 
-/// Shutdown Iroh network
+/// Shutdown Iroh network - signals all background operations to stop
 #[tauri::command]
 pub async fn iroh_shutdown() -> Result<String, String> {
+    // Signal shutdown first to stop background loops and pending operations
+    signal_app_shutdown();
+
     let network_opt = IROH_NETWORK.lock().unwrap().take();
 
     if let Some(network) = network_opt {
-        network.shutdown().await?;
+        // Give a short timeout for shutdown - don't wait forever
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(2),
+            network.shutdown()
+        ).await {
+            Ok(result) => result?,
+            Err(_) => {
+                println!("[IROH] Shutdown timed out, forcing close");
+            }
+        }
     }
 
     Ok("Iroh shut down".to_string())
@@ -364,6 +460,10 @@ pub async fn iroh_shutdown() -> Result<String, String> {
 /// Re-announce presence to the network
 #[tauri::command]
 pub async fn iroh_announce_presence() -> Result<String, String> {
+    if is_app_shutting_down() {
+        return Err("App is shutting down".to_string());
+    }
+
     let network = IROH_NETWORK
         .lock()
         .unwrap()
@@ -371,9 +471,79 @@ pub async fn iroh_announce_presence() -> Result<String, String> {
         .ok_or("Iroh not initialized")?
         .clone();
 
-    network.announce_presence().await?;
+    with_timeout!(P2P_OPERATION_TIMEOUT_SECS, network.announce_presence())?;
 
     Ok("Presence announced".to_string())
+}
+
+/// Check network health - returns detailed status
+/// Use this to determine if reconnection is needed after app resume
+#[tauri::command]
+pub async fn iroh_health_check() -> Result<serde_json::Value, String> {
+    if is_app_shutting_down() {
+        return Ok(serde_json::json!({
+            "healthy": false,
+            "needs_reconnect": false,
+            "error": "App is shutting down"
+        }));
+    }
+
+    let network_opt = IROH_NETWORK.lock().unwrap().clone();
+
+    if network_opt.is_none() {
+        return Ok(serde_json::json!({
+            "healthy": false,
+            "needs_reconnect": true,
+            "has_endpoint": false,
+            "error": "Iroh not initialized"
+        }));
+    }
+
+    let network = network_opt.unwrap();
+
+    // Use timeout for health check
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(P2P_OPERATION_TIMEOUT_SECS),
+        network.health_check()
+    ).await;
+
+    match result {
+        Ok((is_healthy, needs_reconnect, status)) => {
+            Ok(serde_json::json!({
+                "healthy": is_healthy,
+                "needs_reconnect": needs_reconnect,
+                "details": status
+            }))
+        }
+        Err(_) => {
+            Ok(serde_json::json!({
+                "healthy": false,
+                "needs_reconnect": true,
+                "error": "Health check timed out"
+            }))
+        }
+    }
+}
+
+/// Recover network connectivity without full reinitialization
+/// Call this when health_check indicates issues but endpoint still exists
+#[tauri::command]
+pub async fn iroh_recover() -> Result<String, String> {
+    if is_app_shutting_down() {
+        return Err("App is shutting down".to_string());
+    }
+
+    let network = IROH_NETWORK
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("Iroh not initialized - use iroh_initialize instead")?
+        .clone();
+
+    // Recovery can take longer, give it 10 seconds
+    with_timeout!(10, network.recover())?;
+
+    Ok("Network recovery complete".to_string())
 }
 
 /// Generate a friend request QR code
@@ -966,4 +1136,44 @@ pub async fn iroh_read_blob(blob_hash: String) -> Result<String, String> {
     });
 
     rx.await.map_err(|_| "Blob read task failed".to_string())?
+}
+
+/// Signal app entering background - pauses P2P operations to prevent crashes during termination
+/// Call this when visibilitychange fires with hidden=true or on pagehide
+#[tauri::command]
+pub async fn iroh_enter_background() -> Result<String, String> {
+    println!("[IROH] App entering background - pausing operations");
+
+    // Signal shutdown to prevent new operations from starting
+    // This helps avoid the race condition where async IPC responses
+    // try to write to a destroyed WebView during termination
+    signal_app_shutdown();
+
+    Ok("Background mode entered".to_string())
+}
+
+/// Signal app returning to foreground - resumes P2P operations
+/// Call this when visibilitychange fires with hidden=false or on pageshow
+#[tauri::command]
+pub async fn iroh_enter_foreground() -> Result<String, String> {
+    println!("[IROH] App entering foreground - resuming operations");
+
+    // Reset shutdown flag to allow operations again
+    reset_app_shutdown();
+
+    // Try to recover network if it was paused
+    let network_opt = IROH_NETWORK.lock().unwrap().clone();
+    if let Some(network) = network_opt {
+        // Also reset the network's shutdown flag
+        network.shutdown_flag.store(false, Ordering::Relaxed);
+
+        // Don't wait for recovery - let it happen in background
+        // Just trigger it if we can
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_secs(1),
+            network.announce_presence()
+        ).await;
+    }
+
+    Ok("Foreground mode entered".to_string())
 }

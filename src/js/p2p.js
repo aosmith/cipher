@@ -563,7 +563,7 @@ const P2P = {
         }, delay);
     },
 
-    // Ensure P2P is initialized on Rust side (handles resume/state mismatch)
+    // Ensure P2P is initialized and healthy (handles resume/state mismatch)
     async ensureInitialized(retryCount = 0) {
         const maxRetries = 10;
         const retryDelay = 500; // 500ms between retries
@@ -634,6 +634,75 @@ const P2P = {
                 // Re-throw the error so caller knows P2P isn't ready
                 throw error;
             }
+        }
+    },
+
+    // Comprehensive health check and recovery for app resume
+    // This is more thorough than ensureInitialized - it checks actual network health
+    async healthCheckAndRecover() {
+        if (!this.initialized) {
+            console.log('[P2P-HEALTH] Not initialized, skipping health check');
+            return false;
+        }
+
+        try {
+            console.log('[P2P-HEALTH] Running health check...');
+            const health = await TauriAPI.invoke('iroh_health_check');
+
+            console.log('[P2P-HEALTH] Status:', JSON.stringify(health));
+
+            if (health.healthy) {
+                console.log('[P2P-HEALTH] Network is healthy');
+                return true;
+            }
+
+            // Network needs recovery
+            console.log('[P2P-HEALTH] Network unhealthy, attempting recovery...');
+
+            if (health.needs_reconnect) {
+                // Serious issue - try recovery first, then full reinit if that fails
+                try {
+                    await TauriAPI.invoke('iroh_recover');
+                    console.log('[P2P-HEALTH] Recovery successful');
+
+                    // Restart JS-side polling
+                    this.startPeerPolling();
+                    this.startPresencePolling();
+
+                    return true;
+                } catch (recoverError) {
+                    console.error('[P2P-HEALTH] Recovery failed, attempting full reinitialization:', recoverError);
+                    await this.initialize(this.userId, this.displayName, this.publicKey, this.deviceId, true);
+                    return true;
+                }
+            } else {
+                // Less serious - just stale background loops, try recovery
+                try {
+                    await TauriAPI.invoke('iroh_recover');
+                    console.log('[P2P-HEALTH] Background loop recovery successful');
+                    return true;
+                } catch (recoverError) {
+                    console.error('[P2P-HEALTH] Background loop recovery failed:', recoverError);
+                    // Try announcing presence as a fallback
+                    await this.announcePresence();
+                    return false;
+                }
+            }
+        } catch (error) {
+            console.error('[P2P-HEALTH] Health check failed:', error);
+
+            // If health check itself fails, try full reinitialization
+            if (this.userId && this.publicKey) {
+                try {
+                    console.log('[P2P-HEALTH] Attempting full reinitialization...');
+                    await this.initialize(this.userId, this.displayName, this.publicKey, this.deviceId, true);
+                    return true;
+                } catch (reinitError) {
+                    console.error('[P2P-HEALTH] Reinitialization failed:', reinitError);
+                    return false;
+                }
+            }
+            return false;
         }
     },
 
