@@ -11,7 +11,7 @@ Cipher is a Tauri/Rust end-to-end encrypted peer-to-peer social network. Local-f
 - Iroh for P2P networking (DHT discovery, gossip protocol)
 - Glassmorphism UI with dark theme
 
-**Current Version**: 0.0.4
+**Current Version**: 0.1.3
 
 ## Key Commands
 
@@ -129,6 +129,7 @@ magick icons/icon.png -trim icons/icon.png
 - **Quality over speed** - do it right, not fast
 - **Fix root causes** - never remove/comment out tests
 - **Version management** - use sequential semver, update all references
+- **Release process** - When pushing to prod: 1) bump version in Cargo.toml AND tauri.conf.json, 2) rebuild ALL platforms (macOS, iOS, Android), 3) commit and push. Version bump MUST come first.
 - **Build everything** - desktop AND mobile when releasing
 - **Clean up** - kill processes, remove artifacts regularly
 - **Foreground tasks** - run in foreground unless there's a reason
