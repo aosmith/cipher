@@ -192,8 +192,51 @@ impl Database {
     ) -> SqliteResult<P2pConnection> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
-        let connection_id = SqliteUuid::new();
 
+        // Check if there's already a pending request FROM the other user TO us
+        // If so, auto-accept it instead of creating a duplicate
+        let existing_request: Option<SqliteUuid> = conn.query_row(
+            "SELECT id FROM p2p_connections
+             WHERE user_id = ?1 AND friend_user_id = ?2 AND status = 'pending'",
+            params![friend_user_id, user_id],
+            |row| row.get(0),
+        ).optional()?;
+
+        if let Some(existing_id) = existing_request {
+            // Other user already sent us a request - auto-accept it
+            conn.execute(
+                "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1 WHERE id = ?2",
+                params![&now, existing_id],
+            )?;
+
+            return Ok(P2pConnection {
+                id: existing_id,
+                user_id: friend_user_id,  // The original requester
+                friend_user_id: user_id,  // Us
+                status: "accepted".to_string(),
+                initiated_by: friend_user_id,
+                created_at: now.clone(),  // Not accurate but we don't have original
+                updated_at: now,
+            });
+        }
+
+        // Check if we already have a connection with this user (any direction)
+        let existing_any: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM p2p_connections
+             WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+            params![user_id, friend_user_id],
+            |row| row.get(0),
+        )?;
+
+        if existing_any > 0 {
+            // Already have some connection - return error to prevent duplicates
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Connection already exists"),
+            )));
+        }
+
+        // Create new pending request
+        let connection_id = SqliteUuid::new();
         conn.execute(
             "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at)
              VALUES (?1, ?2, ?3, 'pending', ?2, ?4, ?5)",
@@ -264,14 +307,15 @@ impl Database {
         let conn = self.conn.lock().unwrap();
 
         // Find pending requests where:
-        // - user_id = current user (we're the recipient)
-        // - initiated_by = friend_user_id (they initiated it, not us)
+        // - friend_user_id = current user (we're the recipient in the row)
+        // - user_id = the requester (they created the row)
+        // - initiated_by = user_id (they initiated it)
         // - status = 'pending'
         let mut stmt = conn.prepare(
             "SELECT DISTINCT u.id, u.display_name, u.public_key, u.encryption_public_key,
                     u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
              FROM users u
-             INNER JOIN p2p_connections p ON (p.user_id = ?1 AND p.friend_user_id = u.id AND p.initiated_by = u.id)
+             INNER JOIN p2p_connections p ON (p.friend_user_id = ?1 AND p.user_id = u.id AND p.initiated_by = u.id)
              WHERE p.status = 'pending'",
         )?;
 
@@ -333,13 +377,16 @@ impl Database {
         let now = chrono::Utc::now().to_rfc3339();
 
         // Update the pending request to accepted
+        // The row was created by friend_user_id (requester) with:
+        //   user_id = friend_user_id (requester)
+        //   friend_user_id = user_id (accepter/current user)
         let rows_updated = conn.execute(
             "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1
              WHERE user_id = ?2 AND friend_user_id = ?3 AND status = 'pending'",
-            rusqlite::params![&now, user_id, friend_user_id],
+            rusqlite::params![&now, friend_user_id, user_id],
         )?;
 
-        println!("[DB] Tried to update where user_id={} AND friend_user_id={} AND status='pending'", user_id, friend_user_id);
+        println!("[DB] Tried to update where user_id={} AND friend_user_id={} AND status='pending'", friend_user_id, user_id);
         println!("[DB] Updated {} rows to accepted", rows_updated);
         if rows_updated == 0 {
             println!("[DB] WARNING: No rows updated! The pending request may not exist or IDs don't match.");
@@ -352,9 +399,12 @@ impl Database {
         println!("[DB] reject_friend_request: user {} rejecting friend {}", user_id, friend_user_id);
         let conn = self.conn.lock().unwrap();
 
+        // The row was created by friend_user_id (requester) with:
+        //   user_id = friend_user_id (requester)
+        //   friend_user_id = user_id (rejecter/current user)
         conn.execute(
             "DELETE FROM p2p_connections WHERE user_id = ?1 AND friend_user_id = ?2 AND status = 'pending'",
-            rusqlite::params![user_id, friend_user_id],
+            rusqlite::params![friend_user_id, user_id],
         )?;
 
         Ok(())

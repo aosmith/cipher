@@ -128,7 +128,8 @@ magick icons/icon.png -trim icons/icon.png
 - **ANDROID DATA WIPE** - ALWAYS use `adb shell pm clear com.cipher.social` to wipe Android data. NEVER rely on `adb uninstall` - it does NOT clear WebView localStorage. This is the #1 testing mistake.
 - **Quality over speed** - do it right, not fast
 - **Fix root causes** - never remove/comment out tests
-- **Version management** - use sequential semver, update all references
+- **Version management** - use sequential semver, update all references. Use `./scripts/update-release-links.sh <version>` to update ALL version files including iOS.
+- **iOS version sync** - iOS versions are in `gen/apple/project.yml` and `gen/apple/cipher-social_iOS/Info.plist`. These MUST be kept in sync with tauri.conf.json. The update-release-links.sh script handles this automatically.
 - **Release process** - When pushing to prod: 1) bump version in Cargo.toml AND tauri.conf.json, 2) rebuild ALL platforms (macOS, iOS, Android), 3) commit and push. Version bump MUST come first.
 - **Build everything** - desktop AND mobile when releasing
 - **Clean up** - kill processes, remove artifacts regularly

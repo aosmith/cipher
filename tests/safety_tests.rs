@@ -2,6 +2,7 @@
 // Tests blocking, muting, input validation, and security measures
 
 use app::Database;
+use chrono::Utc;
 use tempfile::TempDir;
 
 #[test]
@@ -13,7 +14,7 @@ fn test_block_user() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Alice blocks Bob
-    db.block_user(alice.id, bob.id).unwrap();
+    db.block_user(alice.id, bob.id, None).unwrap();
 
     // Verify block
     let is_blocked = db.is_user_blocked(alice.id, bob.id).unwrap();
@@ -22,7 +23,7 @@ fn test_block_user() {
     // Get blocked users list
     let blocked = db.get_blocked_users(alice.id).unwrap();
     assert_eq!(blocked.len(), 1);
-    assert_eq!(blocked[0].id, bob.id);
+    assert_eq!(blocked[0].blocked_id, bob.id);
 }
 
 #[test]
@@ -34,7 +35,7 @@ fn test_unblock_user() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Block then unblock
-    db.block_user(alice.id, bob.id).unwrap();
+    db.block_user(alice.id, bob.id, None).unwrap();
     db.unblock_user(alice.id, bob.id).unwrap();
 
     // Verify unblock
@@ -51,7 +52,7 @@ fn test_bidirectional_block_check() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Bob blocks Alice
-    db.block_user(bob.id, alice.id).unwrap();
+    db.block_user(bob.id, alice.id, None).unwrap();
 
     // Check if either has blocked the other
     let is_blocked_either_way = db.is_blocked_either_way(alice.id, bob.id).unwrap();
@@ -59,15 +60,16 @@ fn test_bidirectional_block_check() {
 }
 
 #[test]
-fn test_mute_user_temporary() {
+fn test_mute_user() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
-    // Mute Bob for 1 hour
-    db.mute_user(alice.id, bob.id, Some(3600)).unwrap();
+    // Mute Bob (all types, with expiry)
+    let expires_at = Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+    db.mute_user(alice.id, bob.id, true, true, true, expires_at).unwrap();
 
     // Verify mute
     let is_muted = db.is_user_muted(alice.id, bob.id).unwrap();
@@ -87,7 +89,7 @@ fn test_mute_user_permanent() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Mute permanently (no duration)
-    db.mute_user(alice.id, bob.id, None).unwrap();
+    db.mute_user(alice.id, bob.id, true, true, true, None).unwrap();
 
     let is_muted = db.is_user_muted(alice.id, bob.id).unwrap();
     assert!(is_muted, "Bob should be permanently muted");
@@ -102,7 +104,7 @@ fn test_unmute_user() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Mute then unmute
-    db.mute_user(alice.id, bob.id, None).unwrap();
+    db.mute_user(alice.id, bob.id, true, true, true, None).unwrap();
     db.unmute_user(alice.id, bob.id).unwrap();
 
     let is_muted = db.is_user_muted(alice.id, bob.id).unwrap();
@@ -118,7 +120,8 @@ fn test_cleanup_expired_mutes() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Mute for 1 second
-    db.mute_user(alice.id, bob.id, Some(1)).unwrap();
+    let expires_at = Some((Utc::now() + chrono::Duration::seconds(1)).to_rfc3339());
+    db.mute_user(alice.id, bob.id, true, true, true, expires_at).unwrap();
 
     // Wait for expiry
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -140,14 +143,15 @@ fn test_mute_settings() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Mute Bob
-    db.mute_user(alice.id, bob.id, Some(7200)).unwrap();
+    let expires_at = Some((Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
+    db.mute_user(alice.id, bob.id, true, true, true, expires_at).unwrap();
 
     // Get mute settings
     let settings = db.get_mute_settings(alice.id, bob.id).unwrap();
     assert!(settings.is_some());
 
     let mute_info = settings.unwrap();
-    assert_eq!(mute_info.muted_user_id, bob.id);
+    assert_eq!(mute_info.muted_id, bob.id);
 }
 
 #[test]
@@ -159,13 +163,14 @@ fn test_update_mute_settings() {
     let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
 
     // Mute temporarily
-    db.mute_user(alice.id, bob.id, Some(3600)).unwrap();
+    let expires_at = Some((Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+    db.mute_user(alice.id, bob.id, true, true, true, expires_at).unwrap();
 
-    // Update to permanent mute
-    db.update_mute_settings(alice.id, bob.id, None).unwrap();
+    // Update mute settings
+    db.update_mute_settings(alice.id, bob.id, true, true, true).unwrap();
 
     let settings = db.get_mute_settings(alice.id, bob.id).unwrap().unwrap();
-    assert!(settings.duration_seconds.is_none(), "Should be permanently muted");
+    assert!(settings.mute_messages, "Should have messages muted");
 }
 
 #[test]
@@ -211,12 +216,12 @@ fn test_post_content_length() {
     let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
 
     // Normal post
-    let result1 = db.create_post(user.id, "Normal post".to_string());
+    let result1 = db.create_post(user.id, "Normal post", false);
     assert!(result1.is_ok());
 
     // Very long post
     let long_post = "Content ".repeat(1000);
-    let result2 = db.create_post(user.id, long_post);
+    let result2 = db.create_post(user.id, &long_post, false);
     // Should either succeed or fail gracefully
     let _ = result2;
 }
@@ -231,18 +236,17 @@ fn test_sql_injection_prevention() {
 
     // Try SQL injection in message content
     let injection_attempt = "'; DROP TABLE users; --";
-    let result = db.create_post(alice.id, injection_attempt.to_string());
+    let result = db.create_post(alice.id, injection_attempt, false);
 
     // Should succeed (treated as literal string)
     assert!(result.is_ok(), "Prepared statements should prevent SQL injection");
 
     // Verify database still intact
-    let user_check = db.get_user_by_id(alice.id);
+    let user_check = db.find_user_by_id(alice.id);
     assert!(user_check.is_ok(), "Database should not be corrupted");
 }
 
 #[test]
-#[ignore = "Notification API signatures need updating"]
 fn test_notification_creation() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
@@ -252,8 +256,9 @@ fn test_notification_creation() {
     // Create notification
     let notification = db.create_notification(
         user.id,
-        "friend_request".to_string(),
-        "You have a new friend request".to_string(),
+        "friend_request",
+        "New Friend Request",
+        "You have a new friend request",
         None
     ).unwrap();
 
@@ -270,7 +275,6 @@ fn test_notification_creation() {
 }
 
 #[test]
-#[ignore = "Notification API signatures need updating"]
 fn test_mark_notification_as_read() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
@@ -279,13 +283,14 @@ fn test_mark_notification_as_read() {
 
     let notification = db.create_notification(
         user.id,
-        "message".to_string(),
-        "New message".to_string(),
+        "message",
+        "New Message",
+        "New message",
         None
     ).unwrap();
 
     // Mark as read
-    db.mark_notification_read(notification.id).unwrap();
+    db.mark_notification_read(notification.id, user.id).unwrap();
 
     // Verify read status
     let unread_count = db.get_unread_notification_count(user.id).unwrap();
@@ -293,7 +298,6 @@ fn test_mark_notification_as_read() {
 }
 
 #[test]
-#[ignore = "Notification API signatures need updating"]
 fn test_mark_all_notifications_read() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
@@ -304,8 +308,9 @@ fn test_mark_all_notifications_read() {
     for i in 0..5 {
         db.create_notification(
             user.id,
-            "message".to_string(),
-            format!("Message {}", i),
+            "message",
+            &format!("Title {}", i),
+            &format!("Message {}", i),
             None
         ).unwrap();
     }
@@ -319,7 +324,6 @@ fn test_mark_all_notifications_read() {
 }
 
 #[test]
-#[ignore = "Notification API signatures need updating"]
 fn test_delete_notification() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
@@ -328,13 +332,14 @@ fn test_delete_notification() {
 
     let notification = db.create_notification(
         user.id,
-        "test".to_string(),
-        "Test notification".to_string(),
+        "test",
+        "Test Title",
+        "Test notification",
         None
     ).unwrap();
 
     // Delete
-    db.delete_notification(notification.id).unwrap();
+    db.delete_notification(notification.id, user.id).unwrap();
 
     // Verify deletion
     let notifications = db.get_notifications(user.id).unwrap();
@@ -342,7 +347,6 @@ fn test_delete_notification() {
 }
 
 #[test]
-#[ignore = "Notification API signatures need updating"]
 fn test_cleanup_old_notifications() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
@@ -352,8 +356,9 @@ fn test_cleanup_old_notifications() {
     // Create notification
     db.create_notification(
         user.id,
-        "old".to_string(),
-        "Old notification".to_string(),
+        "old",
+        "Old Title",
+        "Old notification",
         None
     ).unwrap();
 
@@ -364,27 +369,18 @@ fn test_cleanup_old_notifications() {
 }
 
 #[test]
-#[ignore = "block_user API signature needs updating"]
-fn test_prevent_self_interaction() {
+fn test_block_self_prevention() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
 
-    // Try to send message to self
-    let result = db.send_encrypted_message(user.id, user.id, "Message to self", None);
-    // Implementation should either allow (for notes) or prevent
-    // Just verify it doesn't crash
-    let _ = result;
-
-    // Try to block self
-    let block_result = db.block_user(user.id, user.id);
-    // Should likely fail or be ignored
-    let _ = block_result;
+    // Try to block self - should fail
+    let result = db.block_user(user.id, user.id, None);
+    assert!(result.is_err(), "Should not be able to block yourself");
 }
 
 #[test]
-#[ignore = "block_user API signature needs updating"]
 fn test_concurrent_block_and_unblock() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
@@ -394,7 +390,7 @@ fn test_concurrent_block_and_unblock() {
 
     // Rapid block/unblock
     for _ in 0..10 {
-        db.block_user(alice.id, bob.id).unwrap();
+        db.block_user(alice.id, bob.id, None).unwrap();
         db.unblock_user(alice.id, bob.id).unwrap();
     }
 

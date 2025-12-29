@@ -23,9 +23,9 @@ fn test_generate_recovery_phrase() {
 fn test_recovery_phrase_deterministic_keys() {
     let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
-    let private_key1 = crypto::derive_private_key_from_recovery_phrase(phrase)
+    let private_key1 = crypto::derive_private_key_from_recovery_phrase(phrase, "testuser")
         .expect("Should derive key");
-    let private_key2 = crypto::derive_private_key_from_recovery_phrase(phrase)
+    let private_key2 = crypto::derive_private_key_from_recovery_phrase(phrase, "testuser")
         .expect("Should derive key");
 
     // Same phrase should produce same key
@@ -37,9 +37,9 @@ fn test_different_phrases_different_keys() {
     let phrase1 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     let phrase2 = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
 
-    let private_key1 = crypto::derive_private_key_from_recovery_phrase(phrase1)
+    let private_key1 = crypto::derive_private_key_from_recovery_phrase(phrase1, "testuser")
         .expect("Should derive key");
-    let private_key2 = crypto::derive_private_key_from_recovery_phrase(phrase2)
+    let private_key2 = crypto::derive_private_key_from_recovery_phrase(phrase2, "testuser")
         .expect("Should derive key");
 
     // Different phrases should produce different keys
@@ -50,7 +50,7 @@ fn test_different_phrases_different_keys() {
 fn test_public_key_derivation() {
     let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
-    let private_key = crypto::derive_private_key_from_recovery_phrase(phrase)
+    let private_key = crypto::derive_private_key_from_recovery_phrase(phrase, "testuser")
         .expect("Should derive key");
     let public_key = crypto::get_public_key_from_private(&private_key);
 
@@ -67,7 +67,7 @@ fn test_public_key_derivation() {
 #[test]
 fn test_sign_and_verify() {
     let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let private_key = crypto::derive_private_key_from_recovery_phrase(phrase)
+    let private_key = crypto::derive_private_key_from_recovery_phrase(phrase, "testuser")
         .expect("Should derive key");
     let public_key = crypto::get_public_key_from_private(&private_key);
 
@@ -88,9 +88,9 @@ fn test_verify_wrong_key_fails() {
     let phrase1 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     let phrase2 = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
 
-    let private_key1 = crypto::derive_private_key_from_recovery_phrase(phrase1)
+    let private_key1 = crypto::derive_private_key_from_recovery_phrase(phrase1, "testuser")
         .expect("Should derive key");
-    let private_key2 = crypto::derive_private_key_from_recovery_phrase(phrase2)
+    let private_key2 = crypto::derive_private_key_from_recovery_phrase(phrase2, "testuser")
         .expect("Should derive key");
     let public_key2 = crypto::get_public_key_from_private(&private_key2);
 
@@ -109,7 +109,7 @@ fn test_verify_wrong_key_fails() {
 #[test]
 fn test_verify_wrong_message_fails() {
     let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let private_key = crypto::derive_private_key_from_recovery_phrase(phrase)
+    let private_key = crypto::derive_private_key_from_recovery_phrase(phrase, "testuser")
         .expect("Should derive key");
     let public_key = crypto::get_public_key_from_private(&private_key);
 

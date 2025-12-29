@@ -17,7 +17,7 @@ fn test_create_user_first_launch() {
     let (user, recovery_phrase) = db.create_user_first_launch("alice".to_string(), device_id)
         .expect("Should create user");
 
-    assert_eq!(user.username, "alice");
+    assert_eq!(user.display_name, "alice");
     assert!(user.public_key.is_some());
     assert!(user.private_key.is_some());
     assert!(user.encryption_public_key.is_some());
@@ -30,7 +30,7 @@ fn test_create_user_first_launch() {
 }
 
 #[test]
-fn test_find_user_by_username() {
+fn test_find_user_by_display_name() {
     let (db, _dir) = create_test_db();
 
     let device_id = Database::generate_device_id();
@@ -38,12 +38,12 @@ fn test_find_user_by_username() {
         .expect("Should create user");
 
     // Find the user
-    let found = db.find_user_by_username("bob")
+    let found = db.find_user_by_display_name("bob")
         .expect("Should query")
         .expect("Should find user");
 
     assert_eq!(found.id, created_user.id);
-    assert_eq!(found.username, "bob");
+    assert_eq!(found.display_name, "bob");
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn test_find_user_by_public_key() {
         .expect("Should find user");
 
     assert_eq!(found.id, created_user.id);
-    assert_eq!(found.username, "charlie");
+    assert_eq!(found.display_name, "charlie");
 }
 
 #[test]
@@ -88,6 +88,7 @@ fn test_update_user_profile() {
     // Update profile
     db.update_user_profile(
         user.id,
+        None, // don't change display_name
         Some("My cool bio".to_string()),
         Some("profile_pic_data".to_string()),
     ).expect("Should update profile");
@@ -352,33 +353,29 @@ fn test_accept_friend_request() {
 
 #[test]
 fn test_pending_friend_request_flow() {
-    // Test the complete P2P friend request flow as it happens in the real app
+    // Test the friend request flow with auto-accept on mutual add
     let (db, _dir) = create_test_db();
     let (alice, _) = create_test_user(&db, "alice_pending");
     let (bob, _) = create_test_user(&db, "bob_pending");
 
-    // In the real app, Bob scans Alice's QR code
-    // This calls add_friend(bob.id, alice.id) - Bob adds Alice
-    let _connection = db.add_friend(bob.id, alice.id).expect("Should add friend");
+    // Bob sends friend request to Alice
+    let connection = db.add_friend(bob.id, alice.id).expect("Should add friend");
+    assert_eq!(connection.status, "pending");
 
-    // Then P2P sends FriendRequest message to Alice
-    // Alice's app receives it and calls add_friend(alice.id, bob.id)
-    // This creates the reciprocal pending connection
-    let _connection2 = db.add_friend(alice.id, bob.id).expect("Should add reciprocal");
-
-    // Now Alice should see Bob in her pending requests
+    // Alice should see Bob in her pending requests
     let alice_pending = db.get_pending_friend_requests(alice.id).expect("Should get pending");
     assert_eq!(alice_pending.len(), 1, "Alice should see 1 pending request");
     assert_eq!(alice_pending[0].id, bob.id, "The pending request should be from Bob");
 
-    // Alice accepts the friend request
-    db.accept_friend_request(alice.id, bob.id).expect("Should accept");
+    // When Alice adds Bob back, it auto-accepts (mutual friend request)
+    let connection2 = db.add_friend(alice.id, bob.id).expect("Should add reciprocal");
+    assert_eq!(connection2.status, "accepted", "Mutual add should auto-accept");
 
-    // Now they should be friends
+    // Now they should be friends (no manual accept needed)
     let are_friends = db.are_friends(alice.id, bob.id).expect("Should check");
-    assert!(are_friends, "Should be friends after accept");
+    assert!(are_friends, "Should be friends after mutual add");
 
-    // Pending list should be empty
+    // Pending list should be empty (auto-accepted)
     let alice_pending_after = db.get_pending_friend_requests(alice.id).expect("Should get pending");
     assert_eq!(alice_pending_after.len(), 0, "No more pending requests");
 
@@ -587,7 +584,7 @@ fn test_sync_peer_user() {
     let peer = db.sync_peer_user(peer_username, peer_public_key, peer_enc_public_key)
         .expect("Should sync peer");
 
-    assert_eq!(peer.username, peer_username);
+    assert_eq!(peer.display_name, peer_username);
     assert_eq!(peer.public_key.as_ref().unwrap(), peer_public_key);
     assert_eq!(peer.encryption_public_key.as_ref().unwrap(), peer_enc_public_key);
     // Peer should NOT have private keys

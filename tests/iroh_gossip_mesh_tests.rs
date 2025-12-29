@@ -29,8 +29,7 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
     let alice_gossip = Gossip::builder().spawn(alice_endpoint.clone()).await?;
     let alice_router = iroh::protocol::Router::builder(alice_endpoint.clone())
         .accept(GOSSIP_ALPN, alice_gossip.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     // Alice subscribes with subscribe() (root node, empty bootstrap)
     println!("\nAlice: Calling gossip.subscribe() with empty bootstrap...");
@@ -85,7 +84,6 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
     match bob_endpoint.connect(alice_node_id, &GOSSIP_ALPN).await {
         Ok(conn) => {
             println!("Bob: ✓ QUIC connection established");
-            println!("Bob:   Remote: {:?}", conn.remote_address());
             drop(conn);
         }
         Err(e) => {
@@ -98,8 +96,7 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
     let bob_gossip = Gossip::builder().spawn(bob_endpoint.clone()).await?;
     let bob_router = iroh::protocol::Router::builder(bob_endpoint.clone())
         .accept(GOSSIP_ALPN, bob_gossip.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     // Bob tries to join Alice with subscribe_and_join()
     println!("\nBob: Calling gossip.subscribe_and_join() with Alice as bootstrap...");
@@ -192,8 +189,7 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
     let alice_gossip = Gossip::builder().spawn(alice_endpoint.clone()).await?;
     let alice_router = iroh::protocol::Router::builder(alice_endpoint.clone())
         .accept(GOSSIP_ALPN, alice_gossip.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     // Create Bob's endpoint
     println!("Creating Bob's endpoint...");
@@ -214,8 +210,7 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
     let bob_gossip = Gossip::builder().spawn(bob_endpoint.clone()).await?;
     let bob_router = iroh::protocol::Router::builder(bob_endpoint.clone())
         .accept(GOSSIP_ALPN, bob_gossip.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     // Spawn both subscribe_and_join() calls concurrently (like chat example)
     println!("\nSpawning both subscribe_and_join() calls concurrently...");
@@ -315,8 +310,7 @@ async fn test_resubscribe_after_qr_scan() -> anyhow::Result<()> {
     let alice_gossip = Gossip::builder().spawn(alice_endpoint.clone()).await?;
     let alice_router = iroh::protocol::Router::builder(alice_endpoint.clone())
         .accept(GOSSIP_ALPN, alice_gossip.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     // Alice subscribes as root (no bootstrap)
     println!("Alice: Subscribing as root (empty bootstrap)...");
@@ -356,8 +350,7 @@ async fn test_resubscribe_after_qr_scan() -> anyhow::Result<()> {
     let bob_gossip = Gossip::builder().spawn(bob_endpoint.clone()).await?;
     let bob_router = iroh::protocol::Router::builder(bob_endpoint.clone())
         .accept(GOSSIP_ALPN, bob_gossip.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     // Bob subscribes as root (no bootstrap)
     println!("Bob: Subscribing as root (empty bootstrap)...");

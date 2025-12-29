@@ -39,6 +39,15 @@ sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" tauri.mobile.conf.j
 echo "Updating releases/README.md..."
 sed -i '' "s/Current version: v[0-9]*\.[0-9]*\.[0-9]*/Current version: v$VERSION/" releases/README.md
 
+# Update iOS project.yml (XcodeGen config)
+echo "Updating gen/apple/project.yml..."
+sed -i '' "s/CFBundleShortVersionString: [0-9]*\.[0-9]*\.[0-9]*/CFBundleShortVersionString: $VERSION/" gen/apple/project.yml
+sed -i '' "s/CFBundleVersion: \"[0-9]*\.[0-9]*\.[0-9]*\"/CFBundleVersion: \"$VERSION\"/" gen/apple/project.yml
+
+# Update iOS Info.plist
+echo "Updating gen/apple/cipher-social_iOS/Info.plist..."
+sed -i '' "s/<string>[0-9]*\.[0-9]*\.[0-9]*<\/string>/<string>$VERSION<\/string>/g" gen/apple/cipher-social_iOS/Info.plist
+
 echo "✅ Version updated to $VERSION in all files"
 echo ""
 echo "Files updated:"
@@ -48,3 +57,5 @@ echo "  - tauri.android.conf.json"
 echo "  - tauri.ios.conf.json"
 echo "  - tauri.mobile.conf.json"
 echo "  - releases/README.md"
+echo "  - gen/apple/project.yml"
+echo "  - gen/apple/cipher-social_iOS/Info.plist"

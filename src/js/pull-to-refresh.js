@@ -4,14 +4,19 @@
  */
 
 const PullToRefresh = {
-    // Configuration
-    threshold: 80, // Pixels to pull before triggering refresh
-    maxPull: 120, // Maximum pull distance
-    deadZone: 15, // Minimum pull before engaging (prevents accidental triggers)
+    // Configuration - values tuned to prevent accidental triggers on Android
+    threshold: 100, // Pixels to pull before triggering refresh (increased for Android)
+    maxPull: 150, // Maximum pull distance
+    deadZone: 40, // Minimum pull before engaging (increased to prevent accidental triggers on Android)
+    horizontalTolerance: 50, // Max horizontal movement allowed (prevents diagonal swipes)
+    minPullDuration: 150, // Minimum ms the pull must take (prevents fast flicks)
 
     // State
     startY: 0,
+    startX: 0,
     currentY: 0,
+    currentX: 0,
+    startTime: 0,
     pulling: false,
     canPull: false,
     engaged: false, // Whether pull-to-refresh has actually engaged (past dead zone)
@@ -84,6 +89,8 @@ const PullToRefresh = {
         if (this.isAtTop(container)) {
             this.canPull = true;
             this.startY = e.touches[0].clientY;
+            this.startX = e.touches[0].clientX;
+            this.startTime = Date.now();
             this.activeContainer = container;
         }
     },
@@ -92,12 +99,22 @@ const PullToRefresh = {
         if (!this.canPull) return;
 
         this.currentY = e.touches[0].clientY;
+        this.currentX = e.touches[0].clientX;
         const pullDistance = this.currentY - this.startY;
+        const horizontalDistance = Math.abs(this.currentX - this.startX);
 
         // If user scrolls up (negative pull), disable pull-to-refresh for this touch
         if (pullDistance < -5) {
             this.canPull = false;
             this.engaged = false;
+            return;
+        }
+
+        // If horizontal movement exceeds tolerance, this is a swipe not a pull
+        if (horizontalDistance > this.horizontalTolerance) {
+            this.canPull = false;
+            this.engaged = false;
+            this.resetIndicator();
             return;
         }
 
@@ -139,8 +156,10 @@ const PullToRefresh = {
 
         const pullDistance = this.currentY - this.startY;
         const effectiveDistance = pullDistance - this.deadZone;
+        const pullDuration = Date.now() - this.startTime;
 
-        if (effectiveDistance >= this.threshold) {
+        // Only trigger if pull was deliberate (not too fast) and far enough
+        if (effectiveDistance >= this.threshold && pullDuration >= this.minPullDuration) {
             // Trigger refresh
             this.triggerSync();
         } else {

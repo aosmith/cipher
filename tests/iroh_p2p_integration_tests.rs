@@ -63,7 +63,7 @@ fn test_first_degree_peer_connection() {
         .unwrap();
 
     // Verify Bob has Alice's public keys but NOT private keys
-    assert_eq!(alice_on_bob_device.username, "alice");
+    assert_eq!(alice_on_bob_device.display_name, "alice");
     assert_eq!(alice_on_bob_device.public_key, alice.public_key);
     assert_eq!(
         alice_on_bob_device.encryption_public_key,
@@ -141,7 +141,7 @@ fn test_second_degree_peer_discovery() {
         "Alice should see Charlie as 2nd degree"
     );
     assert_eq!(second_degree[0].id, charlie.id);
-    assert_eq!(second_degree[0].username, "charlie");
+    assert_eq!(second_degree[0].display_name, "charlie");
 }
 
 #[test]

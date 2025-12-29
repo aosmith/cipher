@@ -13,7 +13,7 @@ fn test_create_user_first_launch_success() {
     assert!(result.is_ok(), "User creation should succeed");
     let (user, recovery_phrase) = result.unwrap();
 
-    assert_eq!(user.username, "testuser");
+    assert_eq!(user.display_name, "testuser");
     assert!(user.public_key.is_some(), "Public key should be generated");
     assert!(
         user.private_key.is_some(),
@@ -81,7 +81,7 @@ fn test_restore_from_recovery_phrase() {
 }
 
 #[test]
-fn test_find_user_by_username() {
+fn test_find_user_by_display_name() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(&db_path.to_string_lossy()).unwrap();
@@ -90,14 +90,14 @@ fn test_find_user_by_username() {
         .create_user_first_launch("findme".to_string(), Database::generate_device_id())
         .unwrap();
 
-    let found = db.find_user_by_username("findme").unwrap();
+    let found = db.find_user_by_display_name("findme").unwrap();
     assert!(found.is_some(), "User should be found");
 
     let user = found.unwrap();
     assert_eq!(user.id, created_user.id);
-    assert_eq!(user.username, "findme");
+    assert_eq!(user.display_name, "findme");
 
-    let not_found = db.find_user_by_username("nonexistent").unwrap();
+    let not_found = db.find_user_by_display_name("nonexistent").unwrap();
     assert!(not_found.is_none(), "Non-existent user should return None");
 }
 
@@ -116,7 +116,7 @@ fn test_find_user_by_public_key() {
 
     assert!(found.is_some(), "User should be found by public key");
     let user = found.unwrap();
-    assert_eq!(user.username, "pubkeytest");
+    assert_eq!(user.display_name, "pubkeytest");
     assert_eq!(user.public_key, Some(public_key));
 
     // Private keys should not be exposed when looking up other users
@@ -208,7 +208,7 @@ fn test_uuid_storage_as_blob() {
         .unwrap();
 
     // UUID should be stored and retrievable
-    let found = db.find_user_by_username("uuidtest").unwrap().unwrap();
+    let found = db.find_user_by_display_name("uuidtest").unwrap().unwrap();
     assert_eq!(
         user.id, found.id,
         "UUID should be stored and retrieved correctly"
@@ -227,6 +227,7 @@ fn test_update_user_profile() {
 
     let updated = db.update_user_profile(
         user.id,
+        None, // don't change display_name
         Some("Test bio".to_string()),
         Some("profile.jpg".to_string()),
     );
@@ -274,7 +275,7 @@ fn test_recovery_phrase_not_stored_in_plaintext() {
         "Recovery phrase should not be stored in plaintext"
     );
     assert!(
-        hash.starts_with("$2"),
-        "Recovery phrase should be bcrypt hashed"
+        hash.starts_with("$argon2id$"),
+        "Recovery phrase should be Argon2id hashed"
     );
 }

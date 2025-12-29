@@ -27,16 +27,17 @@ fn test_user_crud_operations() {
         Database::generate_device_id()
     ).unwrap();
 
-    assert_eq!(user.username, "testuser");
+    assert_eq!(user.display_name, "testuser");
     assert!(user.public_key.is_some());
 
     // Read
     let found = db.find_user_by_id(user.id).unwrap().unwrap();
-    assert_eq!(found.username, "testuser");
+    assert_eq!(found.display_name, "testuser");
 
     // Update
     let updated = db.update_user_profile(
         user.id,
+        None, // don't change display_name
         Some("Test bio".to_string()),
         Some("avatar.jpg".to_string())
     ).unwrap();
@@ -181,7 +182,7 @@ fn test_sync_peer_user() {
         alice_original.encryption_public_key.as_ref().unwrap()
     ).unwrap();
 
-    assert_eq!(alice_on_bob_device.username, "alice");
+    assert_eq!(alice_on_bob_device.display_name, "alice");
     assert_eq!(alice_on_bob_device.public_key, alice_original.public_key);
 
     // Private keys should NOT be synced

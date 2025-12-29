@@ -36,7 +36,7 @@ mod test_suite_tests {
         let (db, _dir) = create_test_db();
         let (user, recovery_phrase) = create_test_user(&db, "alice");
 
-        assert_eq!(user.username, "alice");
+        assert_eq!(user.display_name, "alice");
         assert!(!recovery_phrase.is_empty());
         assert!(user.public_key.is_some());
         assert!(user.private_key.is_some());

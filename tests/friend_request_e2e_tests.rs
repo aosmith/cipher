@@ -39,7 +39,7 @@ fn test_e2e_friend_request_send_and_accept() {
 
     // === STEP 1: Bob scans Alice's QR code (or gets her public key) ===
     let alice_in_bob_db = bob_db.sync_peer_user(
-        &alice.username,
+        &alice.display_name,
         alice.public_key.as_ref().unwrap(),
         alice.encryption_public_key.as_ref().unwrap(),
     ).expect("Should sync Alice to Bob's database");
@@ -74,7 +74,7 @@ fn test_e2e_friend_request_send_and_accept() {
 
     // === STEP 3: Simulate P2P message delivery ===
     let bob_in_alice_db = alice_db.sync_peer_user(
-        &bob.username,
+        &bob.display_name,
         bob.public_key.as_ref().unwrap(),
         bob.encryption_public_key.as_ref().unwrap(),
     ).expect("Should sync Bob to Alice's database");
@@ -101,7 +101,7 @@ fn test_e2e_friend_request_send_and_accept() {
 
     assert_eq!(alice_pending.len(), 1, "Alice should see 1 pending request");
     assert_eq!(alice_pending[0].id, bob_in_alice_db.id, "Pending request should be from Bob");
-    assert_eq!(alice_pending[0].username, "bob", "Should show Bob's username");
+    assert_eq!(alice_pending[0].display_name, "bob", "Should show Bob's username");
 
     // Alice should NOT have any outgoing requests
     let alice_outgoing = alice_db.get_outgoing_friend_requests(alice.id)
@@ -160,7 +160,7 @@ fn test_e2e_friend_request_reject() {
 
     // Bob scans Alice's QR and sends friend request
     let alice_in_bob_db = bob_db.sync_peer_user(
-        &alice.username,
+        &alice.display_name,
         alice.public_key.as_ref().unwrap(),
         alice.encryption_public_key.as_ref().unwrap(),
     ).unwrap();
@@ -169,7 +169,7 @@ fn test_e2e_friend_request_reject() {
 
     // Simulate P2P delivery to Alice
     let bob_in_alice_db = alice_db.sync_peer_user(
-        &bob.username,
+        &bob.display_name,
         bob.public_key.as_ref().unwrap(),
         bob.encryption_public_key.as_ref().unwrap(),
     ).unwrap();
@@ -213,7 +213,7 @@ fn test_e2e_friend_request_cancel() {
 
     // Bob scans Alice's QR and sends friend request
     let alice_in_bob_db = bob_db.sync_peer_user(
-        &alice.username,
+        &alice.display_name,
         alice.public_key.as_ref().unwrap(),
         alice.encryption_public_key.as_ref().unwrap(),
     ).unwrap();
@@ -275,7 +275,7 @@ fn test_e2e_friend_invite_code() {
 
     println!("=== Alice created invite code: {} ===", invite.invite_code);
     println!("  public_key: {}", invite.public_key);
-    println!("  username: {}", invite.username);
+    println!("  username: {}", invite.display_name);
 
     // Bob uses the invite code - this creates an accepted friendship directly
     let friend = db.use_friend_invite(bob.id, invite.invite_code.clone())
@@ -469,8 +469,8 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
     let (bob_user, _) = create_test_user(&bob_db, "bob_e2e");
 
     println!("Created users:");
-    println!("  Alice: {} ({})", alice_user.username, alice_user.id);
-    println!("  Bob: {} ({})", bob_user.username, bob_user.id);
+    println!("  Alice: {} ({})", alice_user.display_name, alice_user.id);
+    println!("  Bob: {} ({})", bob_user.display_name, bob_user.id);
 
     // Create network nodes
     let alice_node = TestNode::new("alice_node").await?;
@@ -495,7 +495,7 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
 
     // Bob syncs Alice's info to his database (from QR code data)
     let alice_in_bob = bob_db.sync_peer_user(
-        &alice_user.username,
+        &alice_user.display_name,
         alice_user.public_key.as_ref().unwrap(),
         alice_user.encryption_public_key.as_ref().unwrap(),
     )?;
@@ -507,7 +507,7 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
     let request_msg = serde_json::json!({
         "type": "FriendRequest",
         "from_public_key": bob_user.public_key,
-        "from_username": bob_user.username,
+        "from_username": bob_user.display_name,
         "from_encryption_public_key": bob_user.encryption_public_key
     });
     bob_node.broadcast(&alice_topic, &serde_json::to_vec(&request_msg)?).await?;
@@ -542,7 +542,7 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
         // Verify Alice sees pending request
         let alice_pending = alice_db.get_pending_friend_requests(alice_user.id)?;
         assert_eq!(alice_pending.len(), 1, "Alice should have 1 pending request");
-        assert_eq!(alice_pending[0].username, "bob_e2e");
+        assert_eq!(alice_pending[0].display_name, "bob_e2e");
 
         println!("\n=== Step 3: Alice accepts friend request ===");
 
@@ -559,7 +559,7 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
         let accept_msg = serde_json::json!({
             "type": "FriendAccept",
             "from_public_key": alice_user.public_key,
-            "from_username": alice_user.username
+            "from_username": alice_user.display_name
         });
         alice_node.broadcast(&alice_topic, &serde_json::to_vec(&accept_msg)?).await?;
         println!("Alice: Sent friend accept over P2P");

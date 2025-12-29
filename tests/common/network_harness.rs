@@ -50,8 +50,7 @@ impl TestNode {
         let gossip = Gossip::builder().spawn(endpoint.clone()).await?;
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(GOSSIP_ALPN, gossip.clone())
-            .spawn()
-            .await?;
+            .spawn();
 
         Ok(Self {
             name: name.to_string(),
