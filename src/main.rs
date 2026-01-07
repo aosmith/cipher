@@ -3,6 +3,7 @@
 
 mod app;
 
+use tauri::Emitter;
 use app::{
     accept_friend_request, add_friend, add_message_reaction, add_post_comment, add_post_reaction,
     block_user, cancel_friend_request, cleanup_expired_messages, cleanup_expired_mutes,
@@ -102,7 +103,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init::<tauri::Wry>())
         .setup(setup_app)
         .invoke_handler(tauri::generate_handler![
@@ -254,6 +255,46 @@ fn main() {
             publish_community_post,
             announce_community_member
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Run with lifecycle event handling
+    app.run(|app_handle, event| {
+        match event {
+            tauri::RunEvent::Resumed => {
+                // Desktop app resumed (rare on desktop, but can happen)
+                println!("[LIFECYCLE] App resumed - triggering foreground handler");
+
+                // Emit event to frontend so it can call iroh_enter_foreground
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.emit("app-resumed", ());
+                }
+            }
+            tauri::RunEvent::Ready => {
+                println!("[LIFECYCLE] App ready");
+            }
+            tauri::RunEvent::WindowEvent { label, event, .. } => {
+                if let tauri::WindowEvent::Focused(focused) = event {
+                    if focused {
+                        println!("[LIFECYCLE] Window focused - app in foreground");
+                        if let Some(window) = app_handle.get_webview_window(&label) {
+                            let _ = window.emit("app-resumed", ());
+                        }
+                    } else {
+                        println!("[LIFECYCLE] Window lost focus - app may be backgrounding");
+                    }
+                }
+            }
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                println!("[LIFECYCLE] App exit requested - triggering background handler");
+                // Emit event to frontend so it can call iroh_enter_background
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.emit("app-backgrounding", ());
+                }
+                // Don't prevent exit on desktop
+                api.prevent_exit();
+            }
+            _ => {}
+        }
+    });
 }

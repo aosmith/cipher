@@ -3046,6 +3046,36 @@ function setupTauriEventListeners() {
         }
     });
 
+    // Listen for native app lifecycle events (from Rust lifecycle hooks)
+    listen('app-resumed', async (event) => {
+        console.log('[LIFECYCLE] Native app-resumed event received');
+        if (P2P.initialized && currentUser) {
+            try {
+                // Signal foreground first to reset shutdown flag
+                await TauriAPI.invoke('iroh_enter_foreground');
+
+                // Then run comprehensive health check and recovery
+                const recovered = await P2P.healthCheckAndRecover();
+                if (recovered) {
+                    console.log('[LIFECYCLE] P2P health check passed or recovery successful');
+                } else {
+                    console.warn('[LIFECYCLE] P2P health check/recovery had issues, will retry on next poll');
+                }
+            } catch (error) {
+                console.error('[LIFECYCLE] Failed to resume/restore P2P:', error);
+            }
+        }
+    });
+
+    listen('app-backgrounding', async (event) => {
+        console.log('[LIFECYCLE] Native app-backgrounding event received');
+        try {
+            await TauriAPI.invoke('iroh_enter_background');
+        } catch (error) {
+            // Don't log errors - app might be terminating
+        }
+    });
+
     console.log('[EVENTS] Tauri event listeners registered');
 }
 
