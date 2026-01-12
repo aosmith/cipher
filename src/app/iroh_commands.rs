@@ -21,6 +21,9 @@ lazy_static! {
 /// All async commands should check this before doing work or responding
 static APP_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
+/// Flag to track if app is in foreground (prevents duplicate calls)
+static APP_IN_FOREGROUND: AtomicBool = AtomicBool::new(true);
+
 /// Default timeout for P2P operations (5 seconds)
 const P2P_OPERATION_TIMEOUT_SECS: u64 = 5;
 
@@ -250,41 +253,56 @@ pub async fn iroh_publish_post(
     post_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<String, String> {
+    println!("[PUBLISH-POST] === START iroh_publish_post for post_id: {} ===", post_id);
+
     if is_app_shutting_down() {
+        println!("[PUBLISH-POST] App is shutting down, skipping");
         return Err("App is shutting down".to_string());
     }
 
+    println!("[PUBLISH-POST] Step 1: Acquiring IROH_NETWORK lock...");
     let network = IROH_NETWORK
         .lock()
         .unwrap()
         .as_ref()
         .ok_or("Iroh not initialized")?
         .clone();
+    println!("[PUBLISH-POST] Step 1: DONE - Got network");
 
     // Get post attachments from database
+    println!("[PUBLISH-POST] Step 2: Getting post attachments from DB...");
     let attachments = db.get_post_media(post_id).ok();
+    println!("[PUBLISH-POST] Step 2: DONE - Got {} attachments", attachments.as_ref().map(|a| a.len()).unwrap_or(0));
 
     // Get our encryption keys
+    println!("[PUBLISH-POST] Step 3: Getting encryption public key from DB...");
     let our_encryption_public_key = db
         .get_user_encryption_public_key(network.user_id)
         .map_err(|e| format!("Failed to get encryption public key: {}", e))?
         .ok_or("No encryption public key found")?;
+    println!("[PUBLISH-POST] Step 3: DONE - Got encryption public key");
 
+    println!("[PUBLISH-POST] Step 4: Getting encryption private key from DB...");
     let our_encryption_private_key = db
         .get_user_encryption_private_key(network.user_id)
         .map_err(|e| format!("Failed to get encryption private key: {}", e))?
         .ok_or("No encryption private key found")?;
+    println!("[PUBLISH-POST] Step 4: DONE - Got encryption private key");
 
     // Get friend encryption public keys
+    println!("[PUBLISH-POST] Step 5: Getting friend encryption keys...");
     let friend_encryption_keys = network.get_friend_encryption_public_keys();
+    println!("[PUBLISH-POST] Step 5: DONE - Got {} friend encryption keys", friend_encryption_keys.len());
 
     if friend_encryption_keys.is_empty() {
         // No friends with encryption keys yet - use PostWithBlobs via gossip
         // ALL posts use iroh-blobs connection for NAT hole-punching benefit
-        println!("[IROH] No friends with encryption keys - broadcasting PostWithBlobs to gossip mesh");
+        println!("[PUBLISH-POST] No friends with encryption keys - using PostWithBlobs path");
 
         // Get our node ID for blob fetching
+        println!("[PUBLISH-POST] Step 6: Getting node_id (calling get_node_id().await)...");
         let node_id = network.get_node_id().await;
+        println!("[PUBLISH-POST] Step 6: DONE - Got node_id: {}", &node_id[..8.min(node_id.len())]);
 
         // Store each attachment as a blob and create references
         let mut blob_refs = Vec::new();
@@ -358,6 +376,7 @@ pub async fn iroh_publish_post(
         }
 
         // Always use PostWithBlobs - iroh connection handles hole-punching
+        println!("[PUBLISH-POST] Step 7: Creating PostWithBlobs message...");
         let message = P2PMessage::PostWithBlobs {
             user_id: network.user_id,
             public_key: network.public_key.clone(),
@@ -367,13 +386,17 @@ pub async fn iroh_publish_post(
             device_id: network.device_id.clone(),
             blob_refs,
         };
+        println!("[PUBLISH-POST] Step 7: DONE - Message created");
 
+        println!("[PUBLISH-POST] Step 8: Calling publish_message().await...");
         network.publish_message(CONTENT_TOPIC, message).await?;
+        println!("[PUBLISH-POST] Step 8: DONE - Message published");
+        println!("[PUBLISH-POST] === END iroh_publish_post SUCCESS ===");
         return Ok("Post published (PostWithBlobs)".to_string());
     }
 
     // PHASE 2: Create sealed envelope with boxes for each friend
-    println!("[IROH] Creating sealed envelope for {} friends", friend_encryption_keys.len());
+    println!("[PUBLISH-POST] Step 6 (PHASE 2): Creating sealed envelope for {} friends...", friend_encryption_keys.len());
 
     let envelope = crate::app::crypto::GossipEnvelope::new_post(
         &our_encryption_public_key,
@@ -382,18 +405,23 @@ pub async fn iroh_publish_post(
         &friend_encryption_keys,
         &our_encryption_private_key,
     ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
+    println!("[PUBLISH-POST] Step 6 (PHASE 2): DONE - Envelope created");
 
     // Serialize envelope to JSON
+    println!("[PUBLISH-POST] Step 7 (PHASE 2): Serializing envelope to JSON...");
     let envelope_json = serde_json::to_string(&envelope)
         .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
+    println!("[PUBLISH-POST] Step 7 (PHASE 2): DONE - Serialized ({} bytes)", envelope_json.len());
 
     // Create SealedEnvelope message
     let message = P2PMessage::SealedEnvelope { envelope_json };
 
     // Broadcast to global mesh
+    println!("[PUBLISH-POST] Step 8 (PHASE 2): Calling publish_message().await...");
     network.publish_message(CONTENT_TOPIC, message).await?;
+    println!("[PUBLISH-POST] Step 8 (PHASE 2): DONE - Message published");
 
-    println!("[IROH] ✓ Sealed post published to {} friends", friend_encryption_keys.len());
+    println!("[PUBLISH-POST] === END iroh_publish_post SUCCESS (sealed) ===");
     Ok("Post published (sealed)".to_string())
 }
 
@@ -547,13 +575,11 @@ pub async fn iroh_recover() -> Result<String, String> {
 }
 
 /// Generate a friend request QR code
-/// Returns a cipher:// URI with compact addressing info (public key, NodeId, relay)
-/// Includes signed display name for verified identity
+/// Returns a cipher:// URI with ultra-minimal addressing info (public key + NodeId only)
+/// ~97 characters - relay discovered via DHT, name/signature sent via FriendRequest
 /// GLOBAL MESH: All nodes on cipher/content/v1 - just share connection info
 #[tauri::command]
-pub async fn iroh_generate_invite(
-    db: State<'_, Database>,
-) -> Result<String, String> {
+pub async fn iroh_generate_invite() -> Result<String, String> {
     println!("[IROH] Generating friend request QR code...");
 
     let network = IROH_NETWORK
@@ -568,8 +594,9 @@ pub async fn iroh_generate_invite(
     println!("[IROH] Generating invite - node already on global mesh");
 
     // Get current NodeAddr from endpoint
-    let endpoint_guard = network.endpoint.lock().await;
-    let node_addr = if let Some(endpoint) = endpoint_guard.as_ref() {
+    // Clone endpoint to avoid holding lock during await
+    let endpoint_clone = network.endpoint.lock().await.clone();
+    let node_addr = if let Some(endpoint) = endpoint_clone.as_ref() {
         endpoint
             .node_addr()
             .await
@@ -577,60 +604,39 @@ pub async fn iroh_generate_invite(
     } else {
         return Err("Endpoint not initialized".to_string());
     };
-    drop(endpoint_guard);
 
-    // Extract NodeId only - relay will be discovered via DHT/DNS
+    // Extract NodeId and relay URL for logging (relay discovered via DHT, not in invite)
     let node_id = node_addr.node_id.to_string();
+    let relay_url = node_addr.relay_url().map(|url| url.to_string());
 
-    // Get signing private key for signing the display name
-    let (signing_private_key, _encryption_private_key) = db.get_user_keys(network.user_id)
-        .map_err(|e| format!("Failed to get user keys: {}", e))?;
-
-    // Sign: "cipher-name:{display_name}" - shorter message, pubkey implicit
-    let sign_message = format!("cipher-name:{}", network.display_name);
-    let signature = Database::sign_message(&sign_message, &signing_private_key)
-        .map_err(|e| format!("Failed to sign display name: {}", e))?;
-
-    // V2 format with signature: [32 pubkey][32 node][1 name_len][name][64 sig]
-    // No relay (discovered via DHT/DNS)
-    // No compression - random signature data gets LARGER with DEFLATE
+    // V2 ultra-minimal format: [32 pubkey][32 node] = 64 bytes = 97 chars
+    // No relay (DHT discovery), no name (comes via Presence/FriendRequest gossip)
+    // Guaranteed to fit in SMS (160 char limit)
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
 
     // Decode keys to binary
-    use base64::engine::general_purpose::STANDARD;
     let pubkey_bytes = STANDARD.decode(&network.public_key)
         .map_err(|e| format!("Invalid public key base64: {}", e))?;
     let node_bytes = hex::decode(&node_id)
         .map_err(|e| format!("Invalid node id hex: {}", e))?;
-    let sig_bytes = STANDARD.decode(&signature)
-        .map_err(|e| format!("Invalid signature base64: {}", e))?;
 
-    // Build binary payload
+    // Build ultra-minimal binary payload
     let mut payload = Vec::new();
     payload.extend_from_slice(&pubkey_bytes);  // 32 bytes
     payload.extend_from_slice(&node_bytes);     // 32 bytes
 
-    // Display name (length-prefixed, max 255)
-    let name_bytes = network.display_name.as_bytes();
-    payload.push(name_bytes.len() as u8);
-    payload.extend_from_slice(name_bytes);
-
-    // Signature (64 bytes)
-    payload.extend_from_slice(&sig_bytes);
-
-    // Encode as base64url directly (no compression - random data expands with DEFLATE)
+    // Encode as base64url
     let encoded = URL_SAFE_NO_PAD.encode(&payload);
 
-    // Create compact URI
+    // Create ultra-minimal URI
     let qr_code = format!("cipher://i/{}", encoded);
 
-    println!("[IROH] ✓ QR code generated successfully!");
+    println!("[IROH] ✓ QR code generated (ultra-minimal, 97 chars)");
     println!("[IROH]   Public Key: {}", network.public_key);
-    println!("[IROH]   Display Name: {} (signed)", network.display_name);
     println!("[IROH]   NodeId: {}", node_id);
-    println!("[IROH]   Payload: {} bytes", payload.len());
-    println!("[IROH]   QR code length: {} chars", qr_code.len());
+    println!("[IROH]   Display name will come via gossip");
 
     Ok(qr_code)
 }
@@ -669,7 +675,8 @@ pub fn parse_invite_code(invite_code: String) -> Result<ParsedInvite, String> {
 }
 
 /// Parse V2 format: cipher://i/{base64url_data}
-/// Format: [32 pubkey][32 node][1 name_len][name][64 sig]
+/// Ultra-minimal: [32 pubkey][32 node] = 64 bytes only
+/// Optional legacy: [32 pubkey][32 node][1 name_len][name][64 sig]
 /// No relay (discovered via DHT/DNS), no compression
 fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
     use base64::engine::general_purpose::{URL_SAFE_NO_PAD, STANDARD};
@@ -683,9 +690,9 @@ fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
     let payload = URL_SAFE_NO_PAD.decode(encoded)
         .map_err(|e| format!("Failed to decode base64url: {}", e))?;
 
-    // Minimum size: 32 + 32 + 1 + 64 = 129 bytes (with 0-length name)
-    if payload.len() < 129 {
-        return Err(format!("Payload too short: {} bytes", payload.len()));
+    // Minimum size: 32 + 32 = 64 bytes (ultra-minimal)
+    if payload.len() < 64 {
+        return Err(format!("Payload too short: {} bytes (need at least 64)", payload.len()));
     }
 
     let mut pos = 0;
@@ -700,19 +707,23 @@ fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
     let node_id = hex::encode(node_bytes);
     pos += 32;
 
-    // Read display name (length-prefixed)
-    let name_len = payload[pos] as usize;
-    pos += 1;
-    let display_name = if name_len > 0 && pos + name_len <= payload.len() {
-        let name = String::from_utf8(payload[pos..pos + name_len].to_vec())
-            .map_err(|_| "Invalid display name encoding")?;
-        pos += name_len;
-        Some(name)
+    // Optional: Read display name (length-prefixed) - only if payload is longer
+    let display_name = if pos < payload.len() {
+        let name_len = payload[pos] as usize;
+        pos += 1;
+        if name_len > 0 && pos + name_len <= payload.len() {
+            let name = String::from_utf8(payload[pos..pos + name_len].to_vec())
+                .map_err(|_| "Invalid display name encoding")?;
+            pos += name_len;
+            Some(name)
+        } else {
+            None
+        }
     } else {
         None
     };
 
-    // Read signature (64 bytes)
+    // Optional: Read signature (64 bytes) - only if payload is longer
     let signature = if pos + 64 <= payload.len() {
         let sig_bytes = &payload[pos..pos + 64];
         Some(STANDARD.encode(sig_bytes))
@@ -720,11 +731,11 @@ fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
         None
     };
 
-    println!("[IROH] ✓ Parsed v2 invite:");
+    println!("[IROH] ✓ Parsed v2 invite (ultra-minimal):");
     println!("[IROH]   Public Key: {}", public_key);
     println!("[IROH]   Node ID: {}", node_id);
-    println!("[IROH]   Display Name: {:?}", display_name);
-    println!("[IROH]   Signature: {}", if signature.is_some() { "present" } else { "none" });
+    println!("[IROH]   Display Name: {:?} (from FriendRequest if None)", display_name);
+    println!("[IROH]   Signature: {}", if signature.is_some() { "present" } else { "from FriendRequest" });
 
     Ok(ParsedInvite {
         public_key,
@@ -883,6 +894,8 @@ pub async fn iroh_add_friend_by_public_key(
     db: State<'_, Database>,
 ) -> Result<String, String> {
     println!("[IROH] Adding friend by public key: {} (global mesh)", friend_public_key);
+    println!("[IROH] Parameters: node_id={:?}, relay_url={:?}, display_name={:?}, signature={:?}",
+        node_id, relay_url, display_name, signature.as_ref().map(|s| &s[..20.min(s.len())]));
 
     let network = IROH_NETWORK
         .lock()
@@ -957,68 +970,70 @@ pub async fn iroh_add_friend_by_public_key(
         ],
     ).map_err(|e| format!("Failed to create friend request: {}", e))?;
 
-    // 3. If node info provided, add peer to endpoint for better connectivity
-    if let (Some(node_id_str), Some(relay_url_str)) = (&node_id, &relay_url) {
-        println!("[IROH] Node info provided - adding to endpoint...");
+    // 3. If node_id provided, add peer to endpoint for connectivity
+    // Relay URL is optional - DHT discovery can find the peer without it
+    if let Some(node_id_str) = &node_id {
+        println!("[IROH] Node ID provided - adding to endpoint...");
 
         // Parse NodeId
         if let Ok(peer_node_id) = node_id_str.parse::<iroh::NodeId>() {
-            // Parse relay URL
-            if let Ok(relay_url_parsed) = relay_url_str.parse::<url::Url>() {
-                // Construct minimal NodeAddr with just NodeId and relay
-                let node_addr = iroh::NodeAddr::from_parts(
-                    peer_node_id,
-                    Some(relay_url_parsed.into()),
-                    vec![],
-                );
+            // Parse relay URL if provided (optional)
+            let relay_url_parsed = relay_url.as_ref().and_then(|url| url.parse::<url::Url>().ok());
 
-                // Add NodeAddr to endpoint - this enables gossip to find the peer
-                let endpoint_guard = network.endpoint.lock().await;
-                if let Some(endpoint) = endpoint_guard.as_ref() {
-                    if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
-                        println!("[IROH] Warning: Failed to add node address: {}", e);
-                    } else {
-                        println!("[IROH] ✓ Node address added to endpoint");
-                    }
-                }
-                drop(endpoint_guard);
+            // Construct NodeAddr - relay is optional, DHT will discover it
+            let node_addr = iroh::NodeAddr::from_parts(
+                peer_node_id,
+                relay_url_parsed.map(|u| u.into()),
+                vec![],
+            );
 
-                // CRITICAL: Join the gossip mesh with the new friend as bootstrap
-                // This is the INITIATING device (scanning QR code), so we need to actively
-                // join the peer's gossip mesh via subscribe_and_join().
-                // Simply calling endpoint.connect() doesn't establish gossip neighbor relationship!
-                println!("[IROH] Joining gossip mesh with new friend as bootstrap...");
-                match network.join_gossip_mesh_with_peer(peer_node_id).await {
-                    Ok(_) => {
-                        println!("[IROH] ✓ Successfully joined gossip mesh with friend!");
-                    }
-                    Err(e) => {
-                        println!("[IROH] Warning: Failed to join gossip mesh: {}", e);
-                        println!("[IROH]   Friend may not be online, will retry via discovery loop");
-                    }
-                }
-
-                // Save peer address for persistent reconnection
-                if let Err(e) = db.save_friend_peer_address(
-                    network.user_id,
-                    friend_user_id,
-                    node_id_str,
-                    relay_url_str,
-                ) {
-                    println!("[IROH] Warning: Failed to save friend peer address: {}", e);
+            // Add NodeAddr to endpoint - this enables gossip to find the peer
+            let endpoint_guard = network.endpoint.lock().await;
+            if let Some(endpoint) = endpoint_guard.as_ref() {
+                if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
+                    println!("[IROH] Warning: Failed to add node address: {}", e);
                 } else {
-                    println!("[IROH] ✓ Friend peer address saved");
+                    println!("[IROH] ✓ Node address added to endpoint (relay: {})",
+                        relay_url.as_ref().map(|_| "provided").unwrap_or("DHT discovery"));
                 }
+            }
+            drop(endpoint_guard);
+
+            // CRITICAL: Join the gossip mesh with the new friend as bootstrap
+            // This is the INITIATING device (scanning QR code), so we need to actively
+            // join the peer's gossip mesh via subscribe_and_join().
+            // Simply calling endpoint.connect() doesn't establish gossip neighbor relationship!
+            println!("[IROH] Joining gossip mesh with new friend as bootstrap...");
+            match network.join_gossip_mesh_with_peer(peer_node_id).await {
+                Ok(_) => {
+                    println!("[IROH] ✓ Successfully joined gossip mesh with friend!");
+                }
+                Err(e) => {
+                    println!("[IROH] Warning: Failed to join gossip mesh: {}", e);
+                    println!("[IROH]   Friend may not be online, will retry via discovery loop");
+                }
+            }
+
+            // Save peer address for persistent reconnection (node_id always, relay if available)
+            if let Err(e) = db.save_friend_peer_address(
+                network.user_id,
+                friend_user_id,
+                node_id_str,
+                relay_url.as_ref().map(|s| s.as_str()).unwrap_or(""),
+            ) {
+                println!("[IROH] Warning: Failed to save friend peer address: {}", e);
+            } else {
+                println!("[IROH] ✓ Friend peer address saved");
             }
         }
     }
 
     // 4. GLOBAL MESH: Send FriendRequest via global content topic
     println!("[IROH] Sending FriendRequest via global mesh...");
-    let endpoint_guard = network.endpoint.lock().await;
-    if let Some(endpoint) = endpoint_guard.as_ref() {
+    // Clone endpoint to avoid holding lock during await
+    let endpoint_clone = network.endpoint.lock().await.clone();
+    if let Some(endpoint) = endpoint_clone.as_ref() {
         if let Ok(our_node_addr) = endpoint.node_addr().await {
-            drop(endpoint_guard);
 
             let friend_request = P2PMessage::FriendRequest {
                 from_public_key: network.public_key.clone(),
@@ -1043,11 +1058,7 @@ pub async fn iroh_add_friend_by_public_key(
                     println!("[IROH] Warning: Failed to send FriendRequest: {}", e);
                 }
             }
-        } else {
-            drop(endpoint_guard);
         }
-    } else {
-        drop(endpoint_guard);
     }
 
     println!("[IROH] ✓ Friend request sent successfully!");
@@ -1144,6 +1155,9 @@ pub async fn iroh_read_blob(blob_hash: String) -> Result<String, String> {
 pub async fn iroh_enter_background() -> Result<String, String> {
     println!("[IROH] App entering background - pausing operations");
 
+    // Mark as not in foreground (enables next foreground call)
+    APP_IN_FOREGROUND.store(false, Ordering::Relaxed);
+
     // Signal shutdown to prevent new operations from starting
     // This helps avoid the race condition where async IPC responses
     // try to write to a destroyed WebView during termination
@@ -1156,6 +1170,12 @@ pub async fn iroh_enter_background() -> Result<String, String> {
 /// Call this when visibilitychange fires with hidden=false or on pageshow
 #[tauri::command]
 pub async fn iroh_enter_foreground() -> Result<String, String> {
+    // Debounce: skip if already in foreground
+    if APP_IN_FOREGROUND.swap(true, Ordering::Relaxed) {
+        println!("[IROH] App already in foreground - skipping duplicate call");
+        return Ok("Already in foreground".to_string());
+    }
+
     println!("[IROH] App entering foreground - resuming operations");
 
     // Reset shutdown flag to allow operations again

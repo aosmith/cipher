@@ -8,6 +8,22 @@ let tauriInvoke = null;
 let allFriends = [];
 let selectedRecipients = [];
 
+// Format display name with public key fingerprint to prevent spoofing
+// Shows: "Alice Smith (V9aoz4oS)" or "User_V9aoz4oS"
+function formatNameWithFingerprint(displayName, publicKey) {
+    if (!publicKey) return displayName || 'Unknown';
+
+    const fingerprint = publicKey.substring(0, 8);
+
+    // If name starts with "User_", it's unverified - just show as-is
+    if (!displayName || displayName.startsWith('User_')) {
+        return `User_${fingerprint}`;
+    }
+
+    // Verified name: show name + fingerprint for anti-spoofing
+    return `${displayName} (${fingerprint})`;
+}
+
 // Helper function to get display name for a user ID
 function getDisplayName(userId) {
     if (!userId) return 'Unknown';
@@ -15,8 +31,8 @@ function getDisplayName(userId) {
 
     // Look up friend by ID
     const friend = allFriends.find(f => f.id === userId);
-    if (friend && friend.displayName) {
-        return friend.displayName;
+    if (friend) {
+        return formatNameWithFingerprint(friend.displayName, friend.publicKey);
     }
 
     // Fallback: show truncated ID
@@ -2744,11 +2760,8 @@ async function loadFriends() {
                 return `
                 <div class="friend-request-card">
                     <div class="friend-request-badge">Friend Request</div>
-                    <div class="friend-request-username">${Utils.escapeHtml(request.displayName || 'Unknown User')}</div>
+                    <div class="friend-request-username">${Utils.escapeHtml(formatNameWithFingerprint(request.displayName, request.publicKey))}</div>
                     <div class="friend-request-message">wants to connect with you</div>
-                    <div class="public-key-display">
-                        ${request.publicKey ? request.publicKey.substring(0, 32) + '...' : 'No public key'}
-                    </div>
                     <div class="friend-request-actions">
                         <button class="btn btn-accept" data-accept-friend="${request.id}">Accept</button>
                         <button class="btn btn-reject" data-reject-friend="${request.id}">Decline</button>
@@ -2768,11 +2781,8 @@ async function loadFriends() {
                 return `
                 <div class="friend-request-card outgoing">
                     <div class="friend-request-badge pending-badge">Pending</div>
-                    <div class="friend-request-username">${Utils.escapeHtml(request.displayName || 'Unknown User')}</div>
+                    <div class="friend-request-username">${Utils.escapeHtml(formatNameWithFingerprint(request.displayName, request.publicKey))}</div>
                     <div class="friend-request-message">waiting for response</div>
-                    <div class="public-key-display">
-                        ${request.publicKey ? request.publicKey.substring(0, 32) + '...' : 'No public key'}
-                    </div>
                     <div class="friend-request-actions">
                         <button class="btn btn-reject" data-cancel-friend="${request.id}">Cancel</button>
                     </div>
@@ -2795,16 +2805,14 @@ async function loadFriends() {
         } else if (friends.length > 0) {
             html += '<div class="friends-section"><h3>Friends</h3>';
             html += friends.map(friend => {
+                const displayName = formatNameWithFingerprint(friend.displayName, friend.publicKey);
                 const initial = (friend.displayName || 'U').charAt(0).toUpperCase();
                 return `
                 <div class="friend-card">
                     <div class="friend-avatar">${initial}</div>
                     <div class="friend-info">
-                        <div class="friend-name">${Utils.escapeHtml(friend.displayName || 'Unknown')}</div>
+                        <div class="friend-name">${Utils.escapeHtml(displayName)}</div>
                         <div class="friend-meta">Added ${friend.createdAt ? new Date(friend.createdAt).toLocaleDateString() : 'Unknown'}</div>
-                        <div class="public-key-display" style="margin-top: var(--spacing-xs);">
-                            ${friend.publicKey ? friend.publicKey.substring(0, 24) + '...' : 'No public key'}
-                        </div>
                     </div>
                 </div>`;
             }).join('');

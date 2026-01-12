@@ -51,8 +51,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.1.4
-        CFBundleVersion: "0.1.4"
+        CFBundleShortVersionString: 0.1.6
+        CFBundleVersion: "0.1.6"
         NSCameraUsageDescription: "Cipher needs camera access to take photos for posts and profile pictures."
         NSPhotoLibraryUsageDescription: "Cipher needs photo library access to share images in posts."
         NSPhotoLibraryAddUsageDescription: "Cipher needs permission to save images to your photo library."

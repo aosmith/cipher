@@ -58,12 +58,18 @@ adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-d
 # Step 1: Build
 cargo tauri build --debug
 
-# Step 2: Wipe app data (ALWAYS do this before launch)
-rm -rf ~/Library/Application\ Support/com.cipher.social
-rm -rf ~/Library/WebKit/com.cipher.social
-rm -rf ~/Library/Caches/com.cipher.social
+# Step 2: Kill all running instances (CRITICAL - prevents old data from persisting)
+pkill -9 Cipher
 
-# Step 3: Launch
+# Step 3: Wipe app data (ALWAYS do this before launch)
+# Note: Must wipe BOTH com.cipher.social AND cipher-social (two different locations)
+rm -rf ~/Library/Application\ Support/com.cipher.social \
+       ~/Library/WebKit/com.cipher.social \
+       ~/Library/WebKit/cipher-social \
+       ~/Library/Caches/com.cipher.social \
+       ~/Library/Caches/cipher-social
+
+# Step 4: Launch
 open target/debug/bundle/macos/Cipher.app
 ```
 
@@ -72,6 +78,8 @@ open target/debug/bundle/macos/Cipher.app
 - Stale data causes hard-to-debug issues
 - P2P keypairs must match fresh state
 - WebView localStorage persists even after uninstall
+- **macOS stores data in MULTIPLE locations** (both `com.cipher.social` and `cipher-social`)
+- **Running instances hold old data in memory** - must kill processes before wiping
 
 **Full Rebuild (when code changes aren't picked up):**
 ```bash
