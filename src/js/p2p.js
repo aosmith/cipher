@@ -285,9 +285,9 @@ const P2P = {
                 const { peer_id, message } = event.payload;
 
                 // Handle different message types
+                // NOTE: Posts now use SealedEnvelope (encrypted) - legacy Post type kept for backwards compat
                 const msgType = message.DirectMessage ? 'DirectMessage'
                     : message.Post ? 'Post'
-                    : message.PostWithBlobs ? 'PostWithBlobs'
                     : message.Presence ? 'Presence'
                     : null;
 
@@ -296,10 +296,8 @@ const P2P = {
                         this.handleIncomingMessage(message.DirectMessage);
                         break;
                     case 'Post':
-                        this.handleIncomingPost(message.Post);
-                        break;
-                    case 'PostWithBlobs':
-                        this.handleIncomingPostWithBlobs(message.PostWithBlobs);
+                        // Legacy unencrypted post - should not be used
+                        console.warn('[P2P] Received legacy unencrypted Post - ignoring');
                         break;
                     case 'Presence':
                         this.handlePresenceUpdate(message.Presence);
@@ -316,109 +314,8 @@ const P2P = {
         // This will be integrated with existing message handling
     },
 
-    // Handle incoming post
-    async handleIncomingPost(post) {
-        console.log('Handling incoming P2P post:', post);
-
-        try {
-            // Save the post to database (it will be created if it doesn't exist)
-            const savedPost = await TauriAPI.invoke('create_post', {
-                userId: post.user_id,
-                content: post.content,
-                attachments: null
-            });
-
-            console.log('Post saved to database:', savedPost);
-
-            // If the post has attachments, save them too
-            if (post.attachments && post.attachments.length > 0) {
-                console.log(`Saving ${post.attachments.length} attachments for post ${savedPost.id}`);
-
-                for (const attachment of post.attachments) {
-                    await TauriAPI.invoke('upload_media_file', {
-                        fileData: attachment.data,
-                        filename: 'synced_file',
-                        fileType: attachment.file_type,
-                        fileSize: attachment.file_size,
-                        postId: savedPost.id
-                    });
-                }
-
-                console.log('All attachments saved');
-            }
-
-            // Reload posts to show the new content
-            if (typeof loadPosts === 'function') {
-                await loadPosts();
-            }
-        } catch (error) {
-            console.error('Error handling incoming post:', error);
-        }
-    },
-
-    // Handle incoming post with blob references (large attachments)
-    async handleIncomingPostWithBlobs(post) {
-        console.log('Handling incoming P2P post with blobs:', post);
-
-        try {
-            // Save the post to database first (without attachments)
-            const savedPost = await TauriAPI.invoke('create_post', {
-                userId: post.user_id,
-                content: post.content,
-                attachments: null
-            });
-
-            console.log('Post saved to database:', savedPost);
-
-            // Fetch blob data for each downloaded attachment and save to database
-            if (post.blob_refs && post.blob_refs.length > 0) {
-                const downloadedBlobs = post.blob_refs.filter(b => b.downloaded);
-                console.log(`Processing ${downloadedBlobs.length}/${post.blob_refs.length} downloaded blob attachments for post ${savedPost.id}`);
-
-                for (const blobRef of downloadedBlobs) {
-                    try {
-                        // BlobReference uses camelCase due to serde rename_all
-                        console.log(`Fetching blob ${blobRef.blobHash} (${blobRef.fileSize} bytes) from local store`);
-
-                        // Fetch the blob data from local store (already downloaded by backend)
-                        const blobData = await TauriAPI.invoke('iroh_read_blob', {
-                            blobHash: blobRef.blobHash
-                        });
-
-                        console.log(`Blob ${blobRef.blobHash} fetched, saving as attachment`);
-
-                        // Save as attachment
-                        await TauriAPI.invoke('upload_media_file', {
-                            fileData: blobData,
-                            filename: 'synced_blob',
-                            fileType: blobRef.fileType,
-                            fileSize: blobRef.fileSize,
-                            postId: savedPost.id
-                        });
-
-                        console.log(`Attachment saved for blob ${blobRef.blobHash}`);
-                    } catch (blobError) {
-                        console.error(`Failed to fetch/save blob ${blobRef.blobHash}:`, blobError);
-                    }
-                }
-
-                // Log any blobs that failed to download
-                const failedBlobs = post.blob_refs.filter(b => !b.downloaded);
-                if (failedBlobs.length > 0) {
-                    console.warn(`${failedBlobs.length} blob(s) failed to download:`, failedBlobs.map(b => b.blobHash));
-                }
-
-                console.log('All blob attachments processed');
-            }
-
-            // Reload posts to show the new content
-            if (typeof loadPosts === 'function') {
-                await loadPosts();
-            }
-        } catch (error) {
-            console.error('Error handling incoming post with blobs:', error);
-        }
-    },
+    // Legacy post handlers removed - all posts use SealedEnvelope (encrypted)
+    // Post handling is done via 'sealed-post-received' event in main.js
 
     // Handle presence update
     async handlePresenceUpdate(presence) {
@@ -503,6 +400,41 @@ const P2P = {
             return true;
         } catch (error) {
             console.error('Failed to publish post:', error);
+            throw error;
+        }
+    },
+
+    // Publish a comment to friends (encrypted)
+    async publishComment(commentId, postId, content, parentCommentId = null) {
+        console.log('[P2P] publishComment called:', { commentId, postId, contentLength: content?.length, parentCommentId });
+        try {
+            await TauriAPI.invoke('iroh_publish_post_comment', {
+                commentId: commentId,
+                postId: postId,
+                content: content,
+                parentCommentId: parentCommentId
+            });
+            console.log('[P2P] Comment published via Iroh');
+            return true;
+        } catch (error) {
+            console.error('[P2P] Failed to publish comment:', error);
+            throw error;
+        }
+    },
+
+    // Publish a reaction to friends (encrypted)
+    async publishReaction(postId, emoji, action) {
+        console.log('[P2P] publishReaction called:', { postId, emoji, action });
+        try {
+            await TauriAPI.invoke('iroh_publish_post_reaction', {
+                postId: postId,
+                emoji: emoji,
+                action: action
+            });
+            console.log('[P2P] Reaction published via Iroh');
+            return true;
+        } catch (error) {
+            console.error('[P2P] Failed to publish reaction:', error);
             throw error;
         }
     },

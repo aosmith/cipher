@@ -1042,7 +1042,13 @@ async function handleLogout() {
 // Posts Management
 const PostManager = {
     async create(content, attachments = null) {
-        console.log('[POST] Creating post:', { userId: currentUser.id, contentLength: content.length, hasAttachments: !!attachments });
+        console.log('[POST] Creating post:', {
+            userId: currentUser.id,
+            contentLength: content.length,
+            attachments: attachments,
+            attachmentsType: attachments ? attachments.constructor.name : 'null',
+            attachmentsLength: attachments ? attachments.length : 0
+        });
 
         try {
             // Validate file sizes before processing
@@ -1072,9 +1078,11 @@ const PostManager = {
             console.log('Post created successfully:', post);
 
             if (attachments && attachments.length > 0) {
-                console.log('Uploading', attachments.length, 'attachments...');
+                console.log('[POST] ====> UPLOADING', attachments.length, 'attachments for post', post.id);
                 await this.uploadAttachments(post.id, attachments);
-                console.log('Attachments uploaded');
+                console.log('[POST] ====> Attachments uploaded');
+            } else {
+                console.log('[POST] ====> NO attachments to upload (attachments:', attachments, ')');
             }
 
             // Publish post to P2P network
@@ -1400,13 +1408,28 @@ const PostInteractions = {
 
         try {
             if (wasSelected) {
-                await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id });
+                await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id, emoji });
+                // Publish to P2P network
+                if (P2P.initialized) {
+                    try {
+                        await P2P.publishReaction(postId, emoji, 'remove');
+                    } catch (e) { console.warn('Failed to publish reaction removal:', e); }
+                }
             } else {
-                // Remove any existing reaction first, then add new one
-                try {
-                    await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id });
-                } catch (e) { /* ignore if no existing reaction */ }
+                // Remove any existing reaction first (get current reaction if any)
+                const currentReaction = await this.getUserReaction(postId);
+                if (currentReaction) {
+                    try {
+                        await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id, emoji: currentReaction });
+                    } catch (e) { /* ignore if no existing reaction */ }
+                }
                 await TauriAPI.invoke('add_post_reaction', { postId, userId: currentUser.id, emoji });
+                // Publish to P2P network
+                if (P2P.initialized) {
+                    try {
+                        await P2P.publishReaction(postId, emoji, 'add');
+                    } catch (e) { console.warn('Failed to publish reaction:', e); }
+                }
             }
             // Refresh the reactions display
             await this.refreshReactions(postId);
@@ -1464,11 +1487,20 @@ const PostInteractions = {
         if (!currentUser) return;
 
         try {
-            // Remove existing reaction first
-            try {
-                await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id });
-            } catch (e) { /* ignore */ }
+            // Remove existing reaction first (get current reaction if any)
+            const currentReaction = await this.getUserReaction(postId);
+            if (currentReaction) {
+                try {
+                    await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id, emoji: currentReaction });
+                } catch (e) { /* ignore */ }
+            }
             await TauriAPI.invoke('add_post_reaction', { postId, userId: currentUser.id, emoji });
+            // Publish to P2P network
+            if (P2P.initialized) {
+                try {
+                    await P2P.publishReaction(postId, emoji, 'add');
+                } catch (e) { console.warn('Failed to publish reaction:', e); }
+            }
             await this.refreshReactions(postId);
         } catch (error) {
             console.error('Failed to add reaction:', error);
@@ -1557,20 +1589,46 @@ const PostInteractions = {
 
     // Submit a new comment
     async submitComment(postId) {
+        console.log('[SUBMIT-COMMENT] Called with postId:', postId);
         const input = document.getElementById(`comment-input-${postId}`);
-        if (!input || !currentUser) return;
+        if (!input || !currentUser) {
+            console.log('[SUBMIT-COMMENT] Early return: input=', !!input, 'currentUser=', !!currentUser);
+            return;
+        }
 
         const content = input.value.trim();
-        if (!content) return;
+        if (!content) {
+            console.log('[SUBMIT-COMMENT] Early return: empty content');
+            return;
+        }
+
+        console.log('[SUBMIT-COMMENT] Content:', content.substring(0, 50));
 
         try {
-            await TauriAPI.invoke('add_post_comment', {
+            console.log('[SUBMIT-COMMENT] Calling add_post_comment...');
+            const comment = await TauriAPI.invoke('add_post_comment', {
                 postId,
                 userId: currentUser.id,
                 content,
-                parentId: null
+                parentCommentId: null
             });
+            console.log('[SUBMIT-COMMENT] Comment created:', comment?.id);
             input.value = '';
+
+            // Publish to P2P network (encrypted for friends)
+            console.log('[SUBMIT-COMMENT] P2P.initialized =', P2P?.initialized, 'P2P exists =', typeof P2P);
+            if (P2P.initialized) {
+                console.log('[SUBMIT-COMMENT] Calling P2P.publishComment...');
+                try {
+                    await P2P.publishComment(comment.id, postId, content, null);
+                    console.log('[SUBMIT-COMMENT] P2P.publishComment succeeded');
+                } catch (e) {
+                    console.warn('[SUBMIT-COMMENT] Failed to publish comment to P2P:', e);
+                }
+            } else {
+                console.log('[SUBMIT-COMMENT] P2P not initialized, skipping publish');
+            }
+
             await this.loadComments(postId);
 
             // Update comment count in button
@@ -1607,14 +1665,24 @@ const PostInteractions = {
         if (!content) return;
 
         try {
-            await TauriAPI.invoke('add_post_comment', {
+            const comment = await TauriAPI.invoke('add_post_comment', {
                 postId,
                 userId: currentUser.id,
                 content,
-                parentId
+                parentCommentId: parentId
             });
             input.value = '';
             wrapper.classList.add('hidden');
+
+            // Publish to P2P network (encrypted for friends)
+            if (P2P.initialized) {
+                try {
+                    await P2P.publishComment(comment.id, postId, content, parentId);
+                } catch (e) {
+                    console.warn('Failed to publish reply to P2P:', e);
+                }
+            }
+
             await this.loadComments(postId);
 
             // Update comment count
@@ -3004,36 +3072,60 @@ function setupTauriEventListeners() {
     });
 
     // Listen for decrypted posts from sealed envelopes (Phase 2 encryption)
+    // All posts use encrypted SealedEnvelope - handles posts with attachments via blobs
+    // Downloads ALL blobs BEFORE saving post - ensures post only shows when complete
     listen('sealed-post-received', async (event) => {
         console.log('[EVENT] Sealed post received:', event.payload);
-        const { user_id, public_key, content, timestamp, attachments } = event.payload;
+        const { post_id, user_id, public_key, node_id, content, timestamp, blob_refs } = event.payload;
 
         try {
-            // Save the post to database
-            const savedPost = await TauriAPI.invoke('create_post', {
+            // Step 1: Download ALL blobs first (before saving post)
+            const downloadedBlobs = [];
+            if (blob_refs && blob_refs.length > 0) {
+                console.log(`[EVENT] Downloading ${blob_refs.length} blobs before saving post...`);
+                for (const blobRef of blob_refs) {
+                    try {
+                        const blobData = await TauriAPI.invoke('iroh_read_blob', {
+                            nodeId: node_id,
+                            blobHash: blobRef.blobHash
+                        });
+                        if (blobData) {
+                            downloadedBlobs.push({ blobRef, blobData });
+                            console.log(`[EVENT] Downloaded blob ${blobRef.blobHash}`);
+                        }
+                    } catch (blobErr) {
+                        console.error(`[EVENT] Failed to download blob ${blobRef.blobHash}:`, blobErr);
+                    }
+                }
+                console.log(`[EVENT] Downloaded ${downloadedBlobs.length}/${blob_refs.length} blobs`);
+            }
+
+            // Step 2: Save the post to database
+            const savedPost = await TauriAPI.invoke('create_post_with_id', {
+                postId: post_id,
                 userId: user_id,
                 content: content,
                 attachments: null
             });
             console.log('[EVENT] Sealed post saved:', savedPost.id);
 
-            // Save attachments if present
-            if (attachments && attachments.length > 0) {
-                for (const attachment of attachments) {
-                    await TauriAPI.invoke('upload_media_file', {
-                        fileData: attachment.data,
-                        filename: 'synced_file',
-                        fileType: attachment.file_type,
-                        fileSize: attachment.file_size,
-                        postId: savedPost.id
-                    });
-                }
+            // Step 3: Save all downloaded blobs as attachments
+            for (const { blobRef, blobData } of downloadedBlobs) {
+                await TauriAPI.invoke('upload_media_file', {
+                    fileData: blobData,
+                    filename: 'synced_file',
+                    fileType: blobRef.fileType,
+                    fileSize: blobRef.fileSize,
+                    postId: savedPost.id
+                });
+                console.log(`[EVENT] Saved blob ${blobRef.blobHash} as attachment`);
             }
 
-            // Refresh posts if on posts tab
+            // Step 4: Refresh posts if on posts tab
             const postsTab = document.getElementById('postsTab');
             if (postsTab && !postsTab.classList.contains('hidden')) {
-                loadPosts();
+                console.log('[EVENT] Refreshing posts...');
+                await loadPosts();
             }
         } catch (error) {
             console.error('[EVENT] Error saving sealed post:', error);
@@ -3133,6 +3225,11 @@ async function createPostFromPage() {
     const content = document.getElementById('createPostTextarea').value.trim();
     const fileInput = document.getElementById('createPostAttachments');
     const hasFiles = fileInput && fileInput.files && fileInput.files.length > 0;
+
+    console.log('[CREATE_POST_PAGE] fileInput:', fileInput);
+    console.log('[CREATE_POST_PAGE] fileInput.files:', fileInput ? fileInput.files : 'N/A');
+    console.log('[CREATE_POST_PAGE] hasFiles:', hasFiles);
+    console.log('[CREATE_POST_PAGE] content:', content);
 
     // Require either text content OR attachments (or both)
     if (!content && !hasFiles) {
@@ -5347,6 +5444,37 @@ if (typeof window.__TAURI__ !== 'undefined') {
                 showCommunitySettings();
             }
         }
+    });
+
+    // Listen for P2P post comments (backend already saved to DB)
+    window.__TAURI__.event.listen('p2p-post-comment', async (event) => {
+        console.log('[P2P] Received post comment:', event.payload);
+        const { postId } = event.payload;
+
+        // Refresh comments if viewing this post
+        const commentsSection = document.getElementById(`comments-section-${postId}`);
+        if (commentsSection && !commentsSection.classList.contains('hidden')) {
+            PostInteractions.loadComments(postId);
+        }
+
+        // Update comment count
+        try {
+            const count = await PostInteractions.getCommentCount(postId);
+            const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+            if (postEl) {
+                const countEl = postEl.querySelector('.action-count');
+                if (countEl) countEl.textContent = count;
+            }
+        } catch (e) { /* ignore */ }
+    });
+
+    // Listen for P2P post reactions (backend already saved to DB)
+    window.__TAURI__.event.listen('p2p-post-reaction', async (event) => {
+        console.log('[P2P] Received post reaction:', event.payload);
+        const { postId } = event.payload;
+
+        // Refresh reactions display for this post
+        PostInteractions.refreshReactions(postId);
     });
 }
 

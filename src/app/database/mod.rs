@@ -14,6 +14,11 @@ impl Database {
     pub fn new(db_path: &str) -> SqliteResult<Self> {
         let conn = Connection::open(db_path)?;
 
+        // Enable WAL mode for better concurrency
+        // WAL allows readers to not block writers and vice versa
+        // This prevents deadlocks between frontend queries and network handler writes
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+
         // Create all tables
         schema::create_tables(&conn)?;
 

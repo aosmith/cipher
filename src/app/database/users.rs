@@ -539,7 +539,8 @@ impl Database {
         Ok(())
     }
 
-    /// Generate a unique device ID
+    /// Generate a unique device ID (used by seed_fixture binary)
+    #[allow(dead_code)]
     pub fn generate_device_id() -> String {
         use rand::Rng;
         let mut rng = rand::thread_rng();
@@ -553,26 +554,15 @@ impl Database {
             .collect::<String>()
     }
 
-    /// Get or create persistent device ID for this physical device
-    /// Device ID is stored in app_data_dir/device_id.txt and persists across logins
-    pub fn get_or_create_device_id(app_data_dir: &std::path::Path) -> Result<String, String> {
-        let device_id_path = app_data_dir.join("device_id.txt");
-
-        // Try to read existing device ID
-        if device_id_path.exists() {
-            std::fs::read_to_string(&device_id_path)
-                .map(|s| s.trim().to_string())
-                .map_err(|e| format!("Failed to read device_id.txt: {}", e))
-        } else {
-            // Generate new device ID
-            let device_id = Self::generate_device_id();
-
-            // Save to file
-            std::fs::write(&device_id_path, &device_id)
-                .map_err(|e| format!("Failed to write device_id.txt: {}", e))?;
-
-            Ok(device_id)
-        }
+    /// Get device ID from database (created during schema init)
+    pub fn get_device_id(&self) -> Result<String, String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM app_settings WHERE key = 'device_id'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to get device_id from database: {}", e))
     }
 
     /// Get user's private keys (signing and encryption)

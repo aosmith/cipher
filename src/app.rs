@@ -38,16 +38,12 @@ pub use database::Database;
 #[tauri::command]
 pub async fn create_new_user(
     display_name: String,
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     db: State<'_, Database>,
 ) -> Result<UserWithRecoveryPhrase, String> {
     println!("Creating new user with display name: {}", display_name);
 
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app_data_dir: {}", e))?;
-    let device_id = Database::get_or_create_device_id(&app_data_dir)?;
+    let device_id = db.get_device_id()?;
     println!("Using device ID: {}", device_id);
 
     match db.create_user_first_launch(display_name, device_id) {
@@ -74,16 +70,12 @@ pub async fn create_new_user(
 pub async fn restore_from_recovery_phrase(
     display_name: String,
     recovery_phrase: String,
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     db: State<'_, Database>,
 ) -> Result<User, String> {
     println!("Restoring user with display name: {}", display_name);
 
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app_data_dir: {}", e))?;
-    let device_id = Database::get_or_create_device_id(&app_data_dir)?;
+    let device_id = db.get_device_id()?;
     println!("Using device ID: {}", device_id);
 
     match db.restore_user_from_recovery_phrase(display_name, recovery_phrase, device_id) {
@@ -172,6 +164,33 @@ pub async fn create_post(
         );
     }
 
+    Ok(post)
+}
+
+/// Create a post with a specific ID (for syncing posts from other devices)
+#[tauri::command]
+pub async fn create_post_with_id(
+    post_id: String,
+    user_id: SqliteUuid,
+    content: String,
+    _attachments: Option<Vec<String>>,
+    db: State<'_, Database>,
+) -> Result<Post, String> {
+    println!("[CREATE_POST_WITH_ID] Command called with post_id: {}, user_id: {}", post_id, user_id);
+
+    // Parse the post_id
+    let parsed_post_id = SqliteUuid::parse_str(&post_id)
+        .map_err(|e| format!("Invalid post_id: {}", e))?;
+
+    // Create the post with the specific ID
+    let post = db
+        .create_post_with_id(parsed_post_id, user_id, &content, false)
+        .map_err(|e| {
+            println!("[CREATE_POST_WITH_ID] Error creating post: {}", e);
+            e.to_string()
+        })?;
+
+    println!("[CREATE_POST_WITH_ID] Post created/updated with id: {}", post.id);
     Ok(post)
 }
 
@@ -271,20 +290,25 @@ pub async fn accept_friend_request(
 
     let network_opt = IROH_NETWORK.lock().unwrap().as_ref().cloned();
     if let Some(network) = network_opt {
-        // Get the friend's public key - also use spawn_blocking for this DB call
+        // Get our encryption key and friend's public key - use spawn_blocking for DB calls
         let db_clone2 = db.inner().clone();
-        let friend_opt = tokio::task::spawn_blocking(move || {
-            db_clone2.find_user_by_id(friend_user_id)
+        let our_user_id = user_id;
+        let (friend_opt, our_enc_key) = tokio::task::spawn_blocking(move || {
+            let friend = db_clone2.find_user_by_id(friend_user_id).ok().flatten();
+            let enc_key = db_clone2.get_user_encryption_public_key(our_user_id)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            (friend, enc_key)
         })
         .await
-        .ok()
-        .and_then(|r| r.ok())
-        .flatten();
+        .unwrap_or((None, String::new()));
 
         if let Some(friend) = friend_opt {
             if let Some(friend_public_key) = friend.public_key {
                 // Spawn P2P notification in background - don't block the accept
                 let friend_key = friend_public_key.clone();
+                let our_encryption_public_key = our_enc_key;
                 tokio::spawn(async move {
                     // Get our node address with a timeout
                     let endpoint_guard = network.endpoint.lock().await;
@@ -312,6 +336,7 @@ pub async fn accept_friend_request(
                     let message = iroh_network::P2PMessage::FriendAccepted {
                         from_user_id: network.user_id,
                         from_public_key: network.public_key.clone(),
+                        from_encryption_public_key: our_encryption_public_key,
                         from_display_name: network.display_name.clone(),
                         from_node_id: node_id_str,
                         from_relay_url: relay_url_str,
@@ -599,10 +624,14 @@ pub async fn upload_media_file(
     post_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<MediaAttachment, String> {
+    println!("[UPLOAD-MEDIA] Uploading media for post_id: {}, type: {}, data_len: {}", post_id, file_type, file_data.len());
+
     // Decode base64 data
     let file_bytes = general_purpose::STANDARD
         .decode(&file_data)
         .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
+
+    println!("[UPLOAD-MEDIA] Decoded {} bytes", file_bytes.len());
 
     // Save attachment with BLOB data directly to database (privacy-focused: no filename, no filesize, no timestamp)
     let conn = db.conn.lock().unwrap();
@@ -614,6 +643,8 @@ pub async fn upload_media_file(
         "INSERT INTO media_attachments (id, post_id, file_type, file_size, data) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![attachment_id, post_id, &file_type, file_size, &file_bytes],
     ).map_err(|e| format!("Failed to save attachment to database: {}", e))?;
+
+    println!("[UPLOAD-MEDIA] ✓ Saved attachment {} for post {}", attachment_id, post_id);
 
     Ok(MediaAttachment {
         id: attachment_id,
@@ -1978,7 +2009,7 @@ pub async fn get_sync_status(
     device_id: String,
     user_id: SqliteUuid,
     db: State<'_, Database>,
-) -> Result<(usize, usize, usize), String> {
+) -> Result<(usize, usize, usize, usize, usize), String> {
     db.get_sync_status(&device_id, user_id)
         .map_err(|e| e.to_string())
 }

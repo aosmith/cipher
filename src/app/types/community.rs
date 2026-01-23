@@ -63,6 +63,7 @@ pub struct CommunityWithMembers {
 }
 
 /// Request to create a new community
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateCommunityRequest {
@@ -71,6 +72,7 @@ pub struct CreateCommunityRequest {
 }
 
 /// Request to create a community invite
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateCommunityInviteRequest {

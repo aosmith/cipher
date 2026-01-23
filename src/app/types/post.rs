@@ -22,6 +22,7 @@ pub struct PostReaction {
     pub id: SqliteUuid,
     pub post_id: SqliteUuid,
     pub user_id: SqliteUuid,
+    pub display_name: Option<String>,
     pub emoji: String,
     pub created_at: String,
 }
@@ -32,6 +33,7 @@ pub struct PostComment {
     pub id: SqliteUuid,
     pub post_id: SqliteUuid,
     pub user_id: SqliteUuid,
+    pub display_name: Option<String>,
     pub content: String,
     pub parent_comment_id: Option<SqliteUuid>,
     pub created_at: String,

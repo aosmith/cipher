@@ -174,6 +174,7 @@ impl Database {
     }
 
     /// Update a community's name and description
+    #[allow(dead_code)]
     pub fn update_community(
         &self,
         community_id: SqliteUuid,
@@ -194,6 +195,7 @@ impl Database {
     }
 
     /// Delete a community (only creator can delete)
+    #[allow(dead_code)]
     pub fn delete_community(
         &self,
         community_id: SqliteUuid,
@@ -360,6 +362,7 @@ impl Database {
     // ============================================
 
     /// Create a community invite code
+    #[allow(dead_code)]
     pub fn create_community_invite(
         &self,
         community_id: SqliteUuid,

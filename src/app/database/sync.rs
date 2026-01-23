@@ -9,6 +9,28 @@ pub struct SyncData {
     pub posts: Vec<Post>,
     pub messages: Vec<Message>,
     pub friends: Vec<FriendSync>,
+    pub comments: Vec<CommentSync>,
+    pub reactions: Vec<ReactionSync>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentSync {
+    pub id: SqliteUuid,
+    pub post_id: SqliteUuid,
+    pub user_id: SqliteUuid,
+    pub content: String,
+    pub parent_comment_id: Option<SqliteUuid>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionSync {
+    pub id: SqliteUuid,
+    pub post_id: SqliteUuid,
+    pub user_id: SqliteUuid,
+    pub emoji: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,10 +49,10 @@ impl Database {
     pub fn get_sync_data(&self, device_id: &str, user_id: SqliteUuid) -> SqliteResult<SyncData> {
         let conn = self.conn.lock().unwrap();
 
-        // Get last sync timestamps for each table
-        let last_post_sync = self.get_last_sync_timestamp(device_id, "posts")?;
-        let last_message_sync = self.get_last_sync_timestamp(device_id, "messages")?;
-        let last_friend_sync = self.get_last_sync_timestamp(device_id, "p2p_connections")?;
+        // Get last sync timestamps for each table (use _with_conn to avoid deadlock)
+        let last_post_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "posts")?;
+        let last_message_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "messages")?;
+        let last_friend_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "p2p_connections")?;
 
         // Get posts created/updated since last sync
         let mut post_stmt = conn.prepare(
@@ -108,10 +130,58 @@ impl Database {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Get comments created/updated since last sync (on user's posts or by user)
+        let last_comment_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_comments")?;
+        let mut comment_stmt = conn.prepare(
+            "SELECT c.id, c.post_id, c.user_id, c.content, c.parent_comment_id, c.created_at, c.updated_at
+             FROM post_comments c
+             INNER JOIN posts p ON c.post_id = p.id
+             WHERE (c.user_id = ?1 OR p.user_id = ?1) AND (c.updated_at > ?2 OR c.created_at > ?2)
+             ORDER BY c.updated_at ASC"
+        )?;
+
+        let comments = comment_stmt
+            .query_map(params![user_id, last_comment_sync], |row| {
+                Ok(CommentSync {
+                    id: row.get("id")?,
+                    post_id: row.get("post_id")?,
+                    user_id: row.get("user_id")?,
+                    content: row.get("content")?,
+                    parent_comment_id: row.get("parent_comment_id")?,
+                    created_at: row.get("created_at")?,
+                    updated_at: row.get("updated_at")?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Get reactions created since last sync (on user's posts or by user)
+        let last_reaction_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_reactions")?;
+        let mut reaction_stmt = conn.prepare(
+            "SELECT r.id, r.post_id, r.user_id, r.emoji, r.created_at
+             FROM post_reactions r
+             INNER JOIN posts p ON r.post_id = p.id
+             WHERE (r.user_id = ?1 OR p.user_id = ?1) AND r.created_at > ?2
+             ORDER BY r.created_at ASC"
+        )?;
+
+        let reactions = reaction_stmt
+            .query_map(params![user_id, last_reaction_sync], |row| {
+                Ok(ReactionSync {
+                    id: row.get("id")?,
+                    post_id: row.get("post_id")?,
+                    user_id: row.get("user_id")?,
+                    emoji: row.get("emoji")?,
+                    created_at: row.get("created_at")?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(SyncData {
             posts,
             messages,
             friends,
+            comments,
+            reactions,
         })
     }
 
@@ -217,13 +287,61 @@ impl Database {
             }
         }
 
+        // Insert or update comments - only if incoming data is newer or doesn't exist
+        for comment in &sync_data.comments {
+            let existing_updated_at: Option<String> = conn
+                .query_row(
+                    "SELECT updated_at FROM post_comments WHERE id = ?1",
+                    params![comment.id],
+                    |row| row.get("updated_at"),
+                )
+                .ok();
+
+            if existing_updated_at.is_none()
+                || existing_updated_at.as_ref().unwrap() < &comment.updated_at
+            {
+                conn.execute(
+                    "INSERT OR REPLACE INTO post_comments
+                     (id, post_id, user_id, content, parent_comment_id, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        comment.id,
+                        comment.post_id,
+                        comment.user_id,
+                        comment.content,
+                        comment.parent_comment_id,
+                        comment.created_at,
+                        comment.updated_at,
+                    ],
+                )?;
+            }
+        }
+
+        // Insert reactions - use INSERT OR IGNORE since reactions don't have updated_at
+        for reaction in &sync_data.reactions {
+            conn.execute(
+                "INSERT OR IGNORE INTO post_reactions
+                 (id, post_id, user_id, emoji, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    reaction.id,
+                    reaction.post_id,
+                    reaction.user_id,
+                    reaction.emoji,
+                    reaction.created_at,
+                ],
+            )?;
+        }
+
         Ok(())
     }
 
-    /// Get the last sync timestamp for a specific table and device
-    fn get_last_sync_timestamp(&self, device_id: &str, table_name: &str) -> SqliteResult<String> {
-        let conn = self.conn.lock().unwrap();
-
+    /// Get the last sync timestamp for a specific table and device (internal helper with connection)
+    fn get_last_sync_timestamp_with_conn(
+        conn: &rusqlite::Connection,
+        device_id: &str,
+        table_name: &str,
+    ) -> SqliteResult<String> {
         let mut stmt = conn.prepare(
             "SELECT last_sync_timestamp FROM sync_state
              WHERE device_id = ?1 AND table_name = ?2",
@@ -256,6 +374,8 @@ impl Database {
         self.update_sync_timestamp(device_id, "posts")?;
         self.update_sync_timestamp(device_id, "messages")?;
         self.update_sync_timestamp(device_id, "p2p_connections")?;
+        self.update_sync_timestamp(device_id, "post_comments")?;
+        self.update_sync_timestamp(device_id, "post_reactions")?;
         Ok(())
     }
 
@@ -264,12 +384,14 @@ impl Database {
         &self,
         device_id: &str,
         user_id: SqliteUuid,
-    ) -> SqliteResult<(usize, usize, usize)> {
+    ) -> SqliteResult<(usize, usize, usize, usize, usize)> {
         let sync_data = self.get_sync_data(device_id, user_id)?;
         Ok((
             sync_data.posts.len(),
             sync_data.messages.len(),
             sync_data.friends.len(),
+            sync_data.comments.len(),
+            sync_data.reactions.len(),
         ))
     }
 }

@@ -77,6 +77,46 @@ impl Database {
         })
     }
 
+    /// Create a post with a specific ID (for syncing posts from other devices)
+    /// Uses INSERT OR IGNORE to avoid duplicates
+    pub fn create_post_with_id(
+        &self,
+        post_id: SqliteUuid,
+        user_id: SqliteUuid,
+        content: &str,
+        encrypted: bool,
+    ) -> SqliteResult<Post> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT OR IGNORE INTO posts (id, user_id, content, encrypted, pinned, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![post_id, user_id, content, encrypted, false, &now, &now],
+        )?;
+
+        // Get display name for the post author
+        let display_name: Option<String> = conn
+            .query_row(
+                "SELECT display_name FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        Ok(Post {
+            id: post_id,
+            user_id,
+            display_name,
+            content: content.to_string(),
+            encrypted,
+            pinned: false,
+            shared_post_id: None,
+            share_comment: None,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
     /// Share/repost an existing post
     pub fn share_post(
         &self,
@@ -208,6 +248,7 @@ impl Database {
             id: reaction_id,
             post_id,
             user_id,
+            display_name: None, // Will be populated when fetching
             emoji: emoji.to_string(),
             created_at: now,
         })
@@ -232,7 +273,10 @@ impl Database {
     pub fn get_post_reactions(&self, post_id: SqliteUuid) -> SqliteResult<Vec<PostReaction>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, post_id, user_id, emoji, created_at FROM post_reactions WHERE post_id = ?1 ORDER BY created_at DESC"
+            "SELECT r.id, r.post_id, r.user_id, u.display_name, r.emoji, r.created_at
+             FROM post_reactions r
+             LEFT JOIN users u ON r.user_id = u.id
+             WHERE r.post_id = ?1 ORDER BY r.created_at DESC"
         )?;
 
         let reaction_iter = stmt.query_map([post_id], |row| {
@@ -240,6 +284,7 @@ impl Database {
                 id: row.get("id")?,
                 post_id: row.get("post_id")?,
                 user_id: row.get("user_id")?,
+                display_name: row.get("display_name")?,
                 emoji: row.get("emoji")?,
                 created_at: row.get("created_at")?,
             })
@@ -311,6 +356,7 @@ impl Database {
             id: comment_id,
             post_id,
             user_id,
+            display_name: None, // Will be populated when fetching
             content: content.to_string(),
             parent_comment_id,
             created_at: now.clone(),
@@ -322,10 +368,11 @@ impl Database {
     pub fn get_post_comments(&self, post_id: SqliteUuid) -> SqliteResult<Vec<PostComment>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, post_id, user_id, content, parent_comment_id, created_at, updated_at
-             FROM post_comments
-             WHERE post_id = ?1 AND parent_comment_id IS NULL
-             ORDER BY created_at ASC",
+            "SELECT c.id, c.post_id, c.user_id, u.display_name, c.content, c.parent_comment_id, c.created_at, c.updated_at
+             FROM post_comments c
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.post_id = ?1 AND c.parent_comment_id IS NULL
+             ORDER BY c.created_at ASC",
         )?;
 
         let comment_iter = stmt.query_map([post_id], |row| {
@@ -333,6 +380,7 @@ impl Database {
                 id: row.get("id")?,
                 post_id: row.get("post_id")?,
                 user_id: row.get("user_id")?,
+                display_name: row.get("display_name")?,
                 content: row.get("content")?,
                 parent_comment_id: row.get("parent_comment_id")?,
                 created_at: row.get("created_at")?,
@@ -354,10 +402,11 @@ impl Database {
     ) -> SqliteResult<Vec<PostComment>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, post_id, user_id, content, parent_comment_id, created_at, updated_at
-             FROM post_comments
-             WHERE parent_comment_id = ?1
-             ORDER BY created_at ASC",
+            "SELECT c.id, c.post_id, c.user_id, u.display_name, c.content, c.parent_comment_id, c.created_at, c.updated_at
+             FROM post_comments c
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.parent_comment_id = ?1
+             ORDER BY c.created_at ASC",
         )?;
 
         let comment_iter = stmt.query_map([parent_comment_id], |row| {
@@ -365,6 +414,7 @@ impl Database {
                 id: row.get("id")?,
                 post_id: row.get("post_id")?,
                 user_id: row.get("user_id")?,
+                display_name: row.get("display_name")?,
                 content: row.get("content")?,
                 parent_comment_id: row.get("parent_comment_id")?,
                 created_at: row.get("created_at")?,

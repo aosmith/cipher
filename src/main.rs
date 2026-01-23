@@ -8,7 +8,7 @@ use app::{
     accept_friend_request, add_friend, add_message_reaction, add_post_comment, add_post_reaction,
     block_user, cancel_friend_request, cleanup_expired_messages, cleanup_expired_mutes,
     cleanup_old_notifications, create_friend_invite, create_new_user, create_notification,
-    create_post, debug_log, decrypt_message_for_user, delete_message, delete_notification,
+    create_post, create_post_with_id, debug_log, decrypt_message_for_user, delete_message, delete_notification,
     delete_post, delete_post_comment, delete_voice_message, edit_message, edit_post,
     export_friends_list, generate_friend_qr_code, generate_qr_code, generate_recovery_phrase,
     get_all_posts, get_blocked_users, get_comment_replies, get_friends, get_friends_of_friends,
@@ -33,8 +33,9 @@ use tauri::Manager;
 use app::iroh_commands::{
     iroh_add_friend_by_public_key, iroh_announce_presence, iroh_enter_background,
     iroh_enter_foreground, iroh_generate_invite, iroh_get_connection_status, iroh_health_check,
-    iroh_initialize, iroh_publish_post, iroh_read_blob, iroh_recover, iroh_send_message,
-    iroh_shutdown, iroh_subscribe_friend, parse_invite_code,
+    iroh_initialize, iroh_publish_post, iroh_publish_post_comment, iroh_publish_post_reaction,
+    iroh_read_blob, iroh_recover, iroh_send_message, iroh_shutdown, iroh_subscribe_friend,
+    parse_invite_code,
 };
 
 // Device management commands
@@ -119,6 +120,7 @@ fn main() {
             // Posts
             get_all_posts,
             create_post,
+            create_post_with_id,
             // Messaging
             send_encrypted_message,
             get_messages_for_user,
@@ -226,6 +228,8 @@ fn main() {
             iroh_subscribe_friend,
             iroh_send_message,
             iroh_publish_post,
+            iroh_publish_post_comment,
+            iroh_publish_post_reaction,
             iroh_announce_presence,
             iroh_get_connection_status,
             iroh_health_check,

@@ -306,16 +306,17 @@ impl Database {
         println!("[DB] get_pending_friend_requests called for user_id: {}", user_id);
         let conn = self.conn.lock().unwrap();
 
+        // NEW CONVENTION: user_id is ALWAYS the local user, friend_user_id is ALWAYS the friend
         // Find pending requests where:
-        // - friend_user_id = current user (we're the recipient in the row)
-        // - user_id = the requester (they created the row)
-        // - initiated_by = user_id (they initiated it)
+        // - user_id = current user (local user owns this row)
+        // - friend_user_id = the requester (the friend who sent the request)
+        // - initiated_by = friend_user_id (they initiated it, not us)
         // - status = 'pending'
         let mut stmt = conn.prepare(
             "SELECT DISTINCT u.id, u.display_name, u.public_key, u.encryption_public_key,
                     u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
              FROM users u
-             INNER JOIN p2p_connections p ON (p.friend_user_id = ?1 AND p.user_id = u.id AND p.initiated_by = u.id)
+             INNER JOIN p2p_connections p ON (p.user_id = ?1 AND p.friend_user_id = u.id AND p.initiated_by = p.friend_user_id)
              WHERE p.status = 'pending'",
         )?;
 
@@ -376,17 +377,17 @@ impl Database {
 
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Update the pending request to accepted
-        // The row was created by friend_user_id (requester) with:
-        //   user_id = friend_user_id (requester)
-        //   friend_user_id = user_id (accepter/current user)
+        // NEW CONVENTION: user_id is ALWAYS the local user, friend_user_id is ALWAYS the friend
+        // Update the pending request to accepted where:
+        //   user_id = current user (me - the accepter)
+        //   friend_user_id = the friend (who sent the request)
         let rows_updated = conn.execute(
             "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1
              WHERE user_id = ?2 AND friend_user_id = ?3 AND status = 'pending'",
-            rusqlite::params![&now, friend_user_id, user_id],
+            rusqlite::params![&now, user_id, friend_user_id],
         )?;
 
-        println!("[DB] Tried to update where user_id={} AND friend_user_id={} AND status='pending'", friend_user_id, user_id);
+        println!("[DB] Tried to update where user_id={} AND friend_user_id={} AND status='pending'", user_id, friend_user_id);
         println!("[DB] Updated {} rows to accepted", rows_updated);
         if rows_updated == 0 {
             println!("[DB] WARNING: No rows updated! The pending request may not exist or IDs don't match.");
@@ -399,12 +400,13 @@ impl Database {
         println!("[DB] reject_friend_request: user {} rejecting friend {}", user_id, friend_user_id);
         let conn = self.conn.lock().unwrap();
 
-        // The row was created by friend_user_id (requester) with:
-        //   user_id = friend_user_id (requester)
-        //   friend_user_id = user_id (rejecter/current user)
+        // NEW CONVENTION: user_id is ALWAYS the local user, friend_user_id is ALWAYS the friend
+        // Delete the pending request where:
+        //   user_id = current user (me - the rejecter)
+        //   friend_user_id = the friend (who sent the request)
         conn.execute(
             "DELETE FROM p2p_connections WHERE user_id = ?1 AND friend_user_id = ?2 AND status = 'pending'",
-            rusqlite::params![friend_user_id, user_id],
+            rusqlite::params![user_id, friend_user_id],
         )?;
 
         Ok(())

@@ -274,9 +274,9 @@ pub async fn iroh_publish_post(
     let attachments = db.get_post_media(post_id).ok();
     println!("[PUBLISH-POST] Step 2: DONE - Got {} attachments", attachments.as_ref().map(|a| a.len()).unwrap_or(0));
 
-    // Get our encryption keys
+    // Get our encryption keys (public key fetched for future use with multi-device sync)
     println!("[PUBLISH-POST] Step 3: Getting encryption public key from DB...");
-    let our_encryption_public_key = db
+    let _our_encryption_public_key = db
         .get_user_encryption_public_key(network.user_id)
         .map_err(|e| format!("Failed to get encryption public key: {}", e))?
         .ok_or("No encryption public key found")?;
@@ -294,114 +294,101 @@ pub async fn iroh_publish_post(
     let friend_encryption_keys = network.get_friend_encryption_public_keys();
     println!("[PUBLISH-POST] Step 5: DONE - Got {} friend encryption keys", friend_encryption_keys.len());
 
-    if friend_encryption_keys.is_empty() {
-        // No friends with encryption keys yet - use PostWithBlobs via gossip
-        // ALL posts use iroh-blobs connection for NAT hole-punching benefit
-        println!("[PUBLISH-POST] No friends with encryption keys - using PostWithBlobs path");
+    // Get our node ID for blob fetching (needed for both paths)
+    println!("[PUBLISH-POST] Step 6: Getting node_id...");
+    let node_id = network.get_node_id().await;
+    println!("[PUBLISH-POST] Step 6: DONE - Got node_id: {}", &node_id[..8.min(node_id.len())]);
 
-        // Get our node ID for blob fetching
-        println!("[PUBLISH-POST] Step 6: Getting node_id (calling get_node_id().await)...");
-        let node_id = network.get_node_id().await;
-        println!("[PUBLISH-POST] Step 6: DONE - Got node_id: {}", &node_id[..8.min(node_id.len())]);
+    // Store attachments as blobs (same path for both encrypted and unencrypted)
+    let mut blob_refs = Vec::new();
+    if let Some(ref atts) = attachments {
+        println!(
+            "[IROH] Post has {} attachments, storing as blobs via iroh",
+            atts.len()
+        );
 
-        // Store each attachment as a blob and create references
-        let mut blob_refs = Vec::new();
-        if let Some(ref atts) = attachments {
+        for attachment in atts {
+            // Decode base64 data
+            let data = match base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &attachment.data,
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    println!(
+                        "[IROH] Failed to decode attachment {}: {}",
+                        attachment.id, e
+                    );
+                    continue;
+                }
+            };
+
             println!(
-                "[IROH] Post has {} attachments, storing as blobs via iroh",
-                atts.len()
+                "[IROH] Storing attachment {} ({} bytes) as blob...",
+                attachment.id, data.len()
             );
 
-            for attachment in atts {
-                // Decode base64 data
-                let data = match base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &attachment.data,
-                ) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        println!(
-                            "[IROH] Failed to decode attachment {}: {}",
-                            attachment.id, e
-                        );
-                        continue;
-                    }
-                };
-
-                println!(
-                    "[IROH] Storing attachment {} ({} bytes) as blob...",
-                    attachment.id, data.len()
-                );
-
-                // Check storage quota before storing
-                let data_size = data.len() as i64;
-                if let Ok(can_store) = db.can_store(data_size) {
-                    if !can_store {
-                        println!(
-                            "[IROH] Storage quota exceeded, skipping attachment {}",
-                            attachment.id
-                        );
-                        continue;
-                    }
+            // Check storage quota before storing
+            let data_size = data.len() as i64;
+            if let Ok(can_store) = db.can_store(data_size) {
+                if !can_store {
+                    println!(
+                        "[IROH] Storage quota exceeded, skipping attachment {}",
+                        attachment.id
+                    );
+                    continue;
                 }
+            }
 
-                // Store as blob
-                match network.store_blob(data).await {
-                    Ok(hash) => {
-                        // Track storage used
-                        let _ = db.add_storage_used(data_size);
+            // Store as blob
+            match network.store_blob(data).await {
+                Ok(hash) => {
+                    // Track storage used
+                    let _ = db.add_storage_used(data_size);
 
-                        let blob_ref = crate::app::types::BlobReference {
-                            id: attachment.id,
-                            file_type: attachment.file_type.clone(),
-                            file_size: attachment.file_size,
-                            blob_hash: hex::encode(hash.as_bytes()),
-                            downloaded: true, // We're the sender, blob is local
-                        };
-                        blob_refs.push(blob_ref);
-                        println!(
-                            "[IROH] [OK] Stored attachment {} as blob {}",
-                            attachment.id,
-                            hex::encode(hash.as_bytes())
-                        );
-                    }
-                    Err(e) => {
-                        println!(
-                            "[IROH] Failed to store attachment {} as blob: {}",
-                            attachment.id, e
-                        );
-                    }
+                    let blob_ref = crate::app::types::BlobReference {
+                        id: attachment.id,
+                        file_type: attachment.file_type.clone(),
+                        file_size: attachment.file_size,
+                        blob_hash: hex::encode(hash.as_bytes()),
+                        downloaded: true, // We're the sender, blob is local
+                    };
+                    blob_refs.push(blob_ref);
+                    println!(
+                        "[IROH] [OK] Stored attachment {} as blob {}",
+                        attachment.id,
+                        hex::encode(hash.as_bytes())
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "[IROH] Failed to store attachment {} as blob: {}",
+                        attachment.id, e
+                    );
                 }
             }
         }
+    }
 
-        // Always use PostWithBlobs - iroh connection handles hole-punching
-        println!("[PUBLISH-POST] Step 7: Creating PostWithBlobs message...");
-        let message = P2PMessage::PostWithBlobs {
-            user_id: network.user_id,
-            public_key: network.public_key.clone(),
-            node_id,
-            content,
-            timestamp: chrono::Utc::now().timestamp(),
-            device_id: network.device_id.clone(),
-            blob_refs,
-        };
-        println!("[PUBLISH-POST] Step 7: DONE - Message created");
-
-        println!("[PUBLISH-POST] Step 8: Calling publish_message().await...");
-        network.publish_message(CONTENT_TOPIC, message).await?;
-        println!("[PUBLISH-POST] Step 8: DONE - Message published");
-        println!("[PUBLISH-POST] === END iroh_publish_post SUCCESS ===");
-        return Ok("Post published (PostWithBlobs)".to_string());
+    if friend_encryption_keys.is_empty() {
+        // No friends with encryption keys - skip P2P broadcast (post is saved locally)
+        // Posts will be synced via device sync when friends are added
+        println!("[PUBLISH-POST] No friends with encryption keys - skipping P2P broadcast (post saved locally)");
+        println!("[PUBLISH-POST] === END iroh_publish_post SUCCESS (local only) ===");
+        return Ok("Post saved locally (no friends to broadcast to)".to_string());
     }
 
     // PHASE 2: Create sealed envelope with boxes for each friend
-    println!("[PUBLISH-POST] Step 6 (PHASE 2): Creating sealed envelope for {} friends...", friend_encryption_keys.len());
+    println!("[PUBLISH-POST] Step 7 (PHASE 2): Creating sealed envelope for {} friends...", friend_encryption_keys.len());
 
+    // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
+    // The encryption key is only used for creating the sealed boxes
     let envelope = crate::app::crypto::GossipEnvelope::new_post(
-        &our_encryption_public_key,
+        &network.public_key,
+        &post_id.to_string(),
         &content,
-        attachments,
+        &node_id,
+        &blob_refs,
         &friend_encryption_keys,
         &our_encryption_private_key,
     ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
@@ -423,6 +410,167 @@ pub async fn iroh_publish_post(
 
     println!("[PUBLISH-POST] === END iroh_publish_post SUCCESS (sealed) ===");
     Ok("Post published (sealed)".to_string())
+}
+
+/// Publish a post comment to the global mesh (encrypted for friends)
+#[tauri::command]
+pub async fn iroh_publish_post_comment(
+    comment_id: SqliteUuid,
+    post_id: SqliteUuid,
+    content: String,
+    parent_comment_id: Option<SqliteUuid>,
+    db: State<'_, Database>,
+) -> Result<String, String> {
+    println!("[PUBLISH-COMMENT] Publishing comment {} on post {}", comment_id, post_id);
+
+    if is_app_shutting_down() {
+        return Err("App is shutting down".to_string());
+    }
+
+    let network = IROH_NETWORK
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("Iroh not initialized")?
+        .clone();
+
+    // Get friend encryption public keys
+    let friend_encryption_keys = network.get_friend_encryption_public_keys();
+
+    if friend_encryption_keys.is_empty() {
+        // No friends with encryption keys - use unified Content message (same transport as posts)
+        println!("[PUBLISH-COMMENT] No friends with encryption keys - using Content message");
+
+        let node_id = network.get_node_id().await;
+        let payload = serde_json::json!({
+            "comment_id": comment_id.to_string(),
+            "post_id": post_id.to_string(),
+            "content": content,
+            "parent_comment_id": parent_comment_id.map(|id| id.to_string())
+        });
+
+        let message = P2PMessage::Content {
+            content_type: "comment".to_string(),
+            user_id: network.user_id,
+            public_key: network.public_key.clone(),
+            node_id,
+            payload_json: payload.to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+            device_id: network.device_id.clone(),
+            blob_refs: vec![],
+        };
+
+        network.publish_message(CONTENT_TOPIC, message).await?;
+        println!("[PUBLISH-COMMENT] ✓ Comment published via Content message");
+        return Ok("Comment published".to_string());
+    }
+
+    // Get our encryption keys for sealed envelope
+    let our_encryption_private_key = db
+        .get_user_encryption_private_key(network.user_id)
+        .map_err(|e| format!("Failed to get encryption private key: {}", e))?
+        .ok_or("No encryption private key found")?;
+
+    // Create sealed envelope
+    // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
+    let envelope = crate::app::crypto::GossipEnvelope::new_post_comment(
+        &network.public_key,
+        &comment_id.to_string(),
+        &post_id.to_string(),
+        &content,
+        parent_comment_id.as_ref().map(|id| id.to_string()).as_deref(),
+        &friend_encryption_keys,
+        &our_encryption_private_key,
+    ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
+
+    let envelope_json = serde_json::to_string(&envelope)
+        .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
+
+    let message = P2PMessage::SealedEnvelope { envelope_json };
+
+    network.publish_message(CONTENT_TOPIC, message).await?;
+
+    println!("[PUBLISH-COMMENT] ✓ Comment published (sealed)");
+    Ok("Comment published (sealed)".to_string())
+}
+
+/// Publish a post reaction to the global mesh (encrypted for friends, or unencrypted fallback)
+#[tauri::command]
+pub async fn iroh_publish_post_reaction(
+    post_id: SqliteUuid,
+    emoji: String,
+    action: String,
+    db: State<'_, Database>,
+) -> Result<String, String> {
+    println!("[PUBLISH-REACTION] Publishing reaction {} {} on post {}", action, emoji, post_id);
+
+    if is_app_shutting_down() {
+        return Err("App is shutting down".to_string());
+    }
+
+    let network = IROH_NETWORK
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("Iroh not initialized")?
+        .clone();
+
+    // Get friend encryption public keys
+    let friend_encryption_keys = network.get_friend_encryption_public_keys();
+
+    if friend_encryption_keys.is_empty() {
+        // No friends with encryption keys - use unified Content message (same transport as posts)
+        println!("[PUBLISH-REACTION] No friends with encryption keys - using Content message");
+
+        let node_id = network.get_node_id().await;
+        let payload = serde_json::json!({
+            "post_id": post_id.to_string(),
+            "emoji": emoji,
+            "action": action
+        });
+
+        let message = P2PMessage::Content {
+            content_type: "reaction".to_string(),
+            user_id: network.user_id,
+            public_key: network.public_key.clone(),
+            node_id,
+            payload_json: payload.to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+            device_id: network.device_id.clone(),
+            blob_refs: vec![],
+        };
+
+        network.publish_message(CONTENT_TOPIC, message).await?;
+        println!("[PUBLISH-REACTION] ✓ Reaction published via Content message");
+        return Ok("Reaction published".to_string());
+    }
+
+    // Get our encryption keys for sealed envelope
+    let our_encryption_private_key = db
+        .get_user_encryption_private_key(network.user_id)
+        .map_err(|e| format!("Failed to get encryption private key: {}", e))?
+        .ok_or("No encryption private key found")?;
+
+    // Create sealed envelope
+    // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
+    let envelope = crate::app::crypto::GossipEnvelope::new_post_reaction(
+        &network.public_key,
+        &post_id.to_string(),
+        &emoji,
+        &action,
+        &friend_encryption_keys,
+        &our_encryption_private_key,
+    ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
+
+    let envelope_json = serde_json::to_string(&envelope)
+        .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
+
+    let message = P2PMessage::SealedEnvelope { envelope_json };
+
+    network.publish_message(CONTENT_TOPIC, message).await?;
+
+    println!("[PUBLISH-REACTION] ✓ Reaction published (sealed)");
+    Ok("Reaction published (sealed)".to_string())
 }
 
 /// Get connection status
@@ -605,9 +753,9 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
         return Err("Endpoint not initialized".to_string());
     };
 
-    // Extract NodeId and relay URL for logging (relay discovered via DHT, not in invite)
+    // Extract NodeId (relay discovered via DHT, not in invite)
     let node_id = node_addr.node_id.to_string();
-    let relay_url = node_addr.relay_url().map(|url| url.to_string());
+    let _relay_url = node_addr.relay_url().map(|url| url.to_string());
 
     // V2 ultra-minimal format: [32 pubkey][32 node] = 64 bytes = 97 chars
     // No relay (DHT discovery), no name (comes via Presence/FriendRequest gossip)
@@ -1035,8 +1183,16 @@ pub async fn iroh_add_friend_by_public_key(
     if let Some(endpoint) = endpoint_clone.as_ref() {
         if let Ok(our_node_addr) = endpoint.node_addr().await {
 
+            // Get our encryption public key for sealed envelope encryption (comments, reactions)
+            let our_encryption_public_key = db
+                .get_user_encryption_public_key(network.user_id)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+
             let friend_request = P2PMessage::FriendRequest {
                 from_public_key: network.public_key.clone(),
+                from_encryption_public_key: our_encryption_public_key,
                 from_user_id: network.user_id,
                 from_display_name: network.display_name.clone(),
                 from_node_id: our_node_addr.node_id.to_string(),
@@ -1067,13 +1223,14 @@ pub async fn iroh_add_friend_by_public_key(
     Ok(friend_public_key)
 }
 
-/// Read blob data from the local store by hash
-/// Used by frontend to fetch attachment data for PostWithBlobs messages
-/// The blob must have been downloaded already (via PostWithBlobs handler)
+/// Read blob data by hash - downloads from remote peer if not available locally
+/// Used by frontend to fetch attachment data for encrypted posts (SealedEnvelope)
 ///
 /// Note: Uses spawn_blocking to work around the non-Send AsyncSliceReader issue
 #[tauri::command]
-pub async fn iroh_read_blob(blob_hash: String) -> Result<String, String> {
+pub async fn iroh_read_blob(node_id: String, blob_hash: String) -> Result<String, String> {
+    println!("[BLOB-READ] Reading blob {} from node {}", blob_hash, node_id);
+
     let network = IROH_NETWORK
         .lock()
         .unwrap()
@@ -1092,6 +1249,39 @@ pub async fn iroh_read_blob(blob_hash: String) -> Result<String, String> {
     let mut hash_arr = [0u8; 32];
     hash_arr.copy_from_slice(&hash_bytes);
     let hash = iroh_blobs::Hash::from_bytes(hash_arr);
+
+    // Parse sender's NodeId for downloading
+    let sender_node_id = node_id.parse::<iroh::NodeId>()
+        .map_err(|e| format!("Invalid node_id: {}", e))?;
+
+    // First, try to download the blob from the remote peer
+    {
+        let blobs_guard = network.blobs.lock().await;
+        if let Some(blobs) = blobs_guard.as_ref() {
+            let downloader = blobs.downloader().clone();
+            drop(blobs_guard); // Release lock before async operation
+
+            println!("[BLOB-READ] Attempting to download blob from peer...");
+            let request = iroh_blobs::downloader::DownloadRequest::new(
+                iroh_blobs::HashAndFormat::raw(hash),
+                vec![sender_node_id],
+            );
+            let handle = downloader.queue(request).await;
+
+            // Wait for download with timeout (30 seconds for larger files)
+            match tokio::time::timeout(std::time::Duration::from_secs(30), handle).await {
+                Ok(Ok(stats)) => {
+                    println!("[BLOB-READ] Blob downloaded successfully ({} bytes)", stats.bytes_read);
+                }
+                Ok(Err(e)) => {
+                    println!("[BLOB-READ] Download failed: {} - will try local store", e);
+                }
+                Err(_) => {
+                    println!("[BLOB-READ] Download timed out - will try local store");
+                }
+            }
+        }
+    }
 
     // Use a oneshot channel to communicate with a LocalSet task
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1120,9 +1310,10 @@ pub async fn iroh_read_blob(blob_hash: String) -> Result<String, String> {
                 .get(&hash)
                 .await
                 .map_err(|e| format!("Failed to get blob entry: {}", e))?
-                .ok_or_else(|| format!("Blob not found in store"))?;
+                .ok_or_else(|| format!("Blob not found in store after download attempt"))?;
 
             let size = entry.size().value() as usize;
+            println!("[BLOB-READ] Reading {} bytes from local store", size);
 
             let mut reader = entry
                 .data_reader()
@@ -1140,6 +1331,7 @@ pub async fn iroh_read_blob(blob_hash: String) -> Result<String, String> {
                 &data,
             );
 
+            println!("[BLOB-READ] Successfully read blob, base64 length: {}", base64_data.len());
             Ok::<String, String>(base64_data)
         });
 

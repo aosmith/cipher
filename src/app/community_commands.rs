@@ -426,9 +426,9 @@ pub async fn publish_community_post(
         .map_err(|e| format!("Failed to get user: {}", e))?
         .ok_or("User not found")?;
 
-    let sender_pub_key = user
-        .encryption_public_key
-        .ok_or("User missing encryption public key")?;
+    // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
+    let sender_pub_key = user.public_key
+        .ok_or("User missing signing public key")?;
     let sender_priv_key = user
         .encryption_private_key
         .ok_or("User missing encryption private key")?;
@@ -502,10 +502,9 @@ pub async fn announce_community_member(
         .map_err(|e| format!("Failed to get new member: {}", e))?
         .ok_or("New member not found")?;
 
-    let new_member_pub_key = new_member
-        .encryption_public_key
-        .clone()
-        .ok_or("New member missing encryption public key")?;
+    // CRITICAL: Use signing public key (Ed25519) for identification, NOT encryption key (X25519)
+    let new_member_signing_key = new_member.public_key
+        .ok_or("New member missing signing public key")?;
 
     // Get all member public keys (including new member for announcement)
     let member_keys = db
@@ -522,11 +521,13 @@ pub async fn announce_community_member(
         .ok_or("New member missing encryption private key")?;
 
     // Create announcement envelope
+    // sender_public_key = who sent this envelope (the new member)
+    // new_member_public_key = who is being announced (also the new member)
     let envelope = GossipEnvelope::new_community_member_added(
-        &new_member_pub_key,
+        &new_member_signing_key,
         &community_id.to_string(),
         &community.name,
-        &new_member_pub_key,
+        &new_member_signing_key,
         &new_member.display_name,
         &member_keys,
         &sender_priv_key,

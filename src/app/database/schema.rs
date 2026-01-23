@@ -1,5 +1,13 @@
 use rusqlite::{Connection, Result as SqliteResult};
 
+/// Generate a random device ID (16 bytes hex = 32 chars)
+fn generate_device_id() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 16] = rng.gen();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
 pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
     // Create users table
     conn.execute(
@@ -405,11 +413,14 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
 
     // Insert default settings if they don't exist
     // Default storage: 10 GB (10737418240 bytes)
+    // Device ID: unique identifier for this device instance
+    let device_id = generate_device_id();
     conn.execute(
         "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES
             ('storage_limit_bytes', '10737418240', datetime('now')),
-            ('storage_used_bytes', '0', datetime('now'))",
-        [],
+            ('storage_used_bytes', '0', datetime('now')),
+            ('device_id', ?1, datetime('now'))",
+        [&device_id],
     )?;
 
     Ok(())

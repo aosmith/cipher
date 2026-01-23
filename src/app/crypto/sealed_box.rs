@@ -15,7 +15,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
-use crate::app::types::{MediaAttachmentWithData, SqliteUuid};
+use crate::app::types::{BlobReference, MediaAttachmentWithData, SqliteUuid};
 
 /// Content types that can be sealed
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +27,8 @@ pub enum ContentType {
     KeyRotation,
     CommunityPost,
     CommunityMemberAdded,
+    PostComment,
+    PostReaction,
 }
 
 /// Envelope for gossiped content - contains multiple sealed boxes
@@ -62,8 +64,10 @@ pub struct SealedBox {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentPayload {
     Post {
+        post_id: String,
         content: String,
-        attachments: Option<Vec<MediaAttachmentWithData>>,
+        node_id: String,  // Sender's NodeId for blob fetching
+        blob_refs: Vec<BlobReference>,  // Attachments stored as blobs
     },
     DirectMessage {
         content: String,
@@ -97,14 +101,29 @@ pub enum ContentPayload {
         new_member_public_key: String,
         new_member_display_name: String,
     },
+    /// A comment on a post
+    PostComment {
+        comment_id: String,
+        post_id: String,
+        content: String,
+        parent_comment_id: Option<String>,
+    },
+    /// A reaction on a post
+    PostReaction {
+        post_id: String,
+        emoji: String,
+        action: String, // "add" or "remove"
+    },
 }
 
 impl GossipEnvelope {
     /// Create a new envelope for a post, encrypted for all friends
     pub fn new_post(
         sender_public_key: &str,
+        post_id: &str,
         content: &str,
-        attachments: Option<Vec<MediaAttachmentWithData>>,
+        node_id: &str,
+        blob_refs: &[BlobReference],
         friend_public_keys: &[String],
         sender_encryption_private_key: &str,
     ) -> Result<Self, String> {
@@ -112,8 +131,10 @@ impl GossipEnvelope {
         let timestamp = chrono::Utc::now().timestamp();
 
         let payload = ContentPayload::Post {
+            post_id: post_id.to_string(),
             content: content.to_string(),
-            attachments,
+            node_id: node_id.to_string(),
+            blob_refs: blob_refs.to_vec(),
         };
 
         let sealed_boxes = create_sealed_boxes_for_recipients(
@@ -198,6 +219,74 @@ impl GossipEnvelope {
             message_id,
             timestamp,
             content_type: ContentType::CommunityMemberAdded,
+            sender_public_key: sender_public_key.to_string(),
+            sealed_boxes,
+        })
+    }
+
+    /// Create a new envelope for a post comment, encrypted for all friends
+    pub fn new_post_comment(
+        sender_public_key: &str,
+        comment_id: &str,
+        post_id: &str,
+        content: &str,
+        parent_comment_id: Option<&str>,
+        friend_public_keys: &[String],
+        sender_encryption_private_key: &str,
+    ) -> Result<Self, String> {
+        let message_id = generate_message_id();
+        let timestamp = chrono::Utc::now().timestamp();
+
+        let payload = ContentPayload::PostComment {
+            comment_id: comment_id.to_string(),
+            post_id: post_id.to_string(),
+            content: content.to_string(),
+            parent_comment_id: parent_comment_id.map(|s| s.to_string()),
+        };
+
+        let sealed_boxes = create_sealed_boxes_for_recipients(
+            &payload,
+            friend_public_keys,
+            sender_encryption_private_key,
+        )?;
+
+        Ok(GossipEnvelope {
+            message_id,
+            timestamp,
+            content_type: ContentType::PostComment,
+            sender_public_key: sender_public_key.to_string(),
+            sealed_boxes,
+        })
+    }
+
+    /// Create a new envelope for a post reaction, encrypted for all friends
+    pub fn new_post_reaction(
+        sender_public_key: &str,
+        post_id: &str,
+        emoji: &str,
+        action: &str,
+        friend_public_keys: &[String],
+        sender_encryption_private_key: &str,
+    ) -> Result<Self, String> {
+        let message_id = generate_message_id();
+        let timestamp = chrono::Utc::now().timestamp();
+
+        let payload = ContentPayload::PostReaction {
+            post_id: post_id.to_string(),
+            emoji: emoji.to_string(),
+            action: action.to_string(),
+        };
+
+        let sealed_boxes = create_sealed_boxes_for_recipients(
+            &payload,
+            friend_public_keys,
+            sender_encryption_private_key,
+        )?;
+
+        Ok(GossipEnvelope {
+            message_id,
+            timestamp,
+            content_type: ContentType::PostReaction,
             sender_public_key: sender_public_key.to_string(),
             sealed_boxes,
         })
@@ -406,8 +495,10 @@ mod tests {
 
         // Create a test payload
         let payload = ContentPayload::Post {
+            post_id: "test-post-123".to_string(),
             content: "Hello, encrypted world!".to_string(),
-            attachments: None,
+            node_id: "test-node-id".to_string(),
+            blob_refs: vec![],
         };
 
         // Create sealed box
@@ -455,8 +546,10 @@ mod tests {
         // Create envelope
         let envelope = GossipEnvelope::new_post(
             &sender_pub_b64,
+            "test-post-456",
             "Secret message for friends only",
-            None,
+            "test-node-id",
+            &[],
             &recipient_pub_keys,
             &sender_priv_b64,
         ).unwrap();

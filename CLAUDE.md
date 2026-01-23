@@ -34,7 +34,7 @@ cargo tauri ios build                                                     # iOS
 
 ## Beta Testing Flow
 
-**IMPORTANT: Always wipe data before installing during beta testing.**
+**IMPORTANT: Always wipe ALL devices before testing. When testing P2P sync between devices, BOTH macOS AND Android must be wiped together - never wipe just one.**
 
 **Android - Build and Deploy:**
 ```bash
@@ -47,10 +47,11 @@ OPENSSL_STATIC=1 OPENSSL_VENDORED=1 \
 cargo tauri android build --target aarch64 --debug
 
 # Step 2: Wipe app data (ALWAYS do this before install)
-adb shell pm clear com.cipher.social
+# NOTE: Use full path to adb - it's often not in PATH
+~/Library/Android/sdk/platform-tools/adb shell pm clear com.cipher.social
 
 # Step 3: Install
-adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+~/Library/Android/sdk/platform-tools/adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
 ```
 
 **macOS - Build and Deploy:**
@@ -58,19 +59,52 @@ adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-d
 # Step 1: Build
 cargo tauri build --debug
 
-# Step 2: Kill all running instances (CRITICAL - prevents old data from persisting)
-pkill -9 Cipher
-
-# Step 3: Wipe app data (ALWAYS do this before launch)
-# Note: Must wipe BOTH com.cipher.social AND cipher-social (two different locations)
+# Step 2: Kill, wait, wipe ALL locations, THEN launch (must be sequential!)
+# CRITICAL: All commands MUST be in a single chained command
+pkill -9 Cipher cipher-social; sleep 2; \
 rm -rf ~/Library/Application\ Support/com.cipher.social \
+       ~/Library/Application\ Support/cipher-social \
        ~/Library/WebKit/com.cipher.social \
        ~/Library/WebKit/cipher-social \
        ~/Library/Caches/com.cipher.social \
-       ~/Library/Caches/cipher-social
-
-# Step 4: Launch
+       ~/Library/Caches/cipher-social \
+       ~/Library/Saved\ Application\ State/com.cipher.social.savedState \
+       ~/Library/Preferences/com.cipher.social.plist \
+       ~/Library/Preferences/cipher-social.plist \
+       ~/Library/HTTPStorages/com.cipher.social \
+       ~/Library/HTTPStorages/cipher-social \
+       ~/Library/HTTPStorages/com.cipher.social.binarycookies \
+       ~/Library/HTTPStorages/cipher-social.binarycookies \
+       /tmp/cipher*.log /tmp/cipher*.txt; \
+defaults delete com.cipher.social 2>/dev/null; \
+defaults delete cipher-social 2>/dev/null; \
 open target/debug/bundle/macos/Cipher.app
+```
+
+**CRITICAL Wipe Rules:**
+- **ALWAYS wipe BOTH platforms** when testing P2P features - never wipe just one
+- Commands MUST be chained with `&&` or `;` in a single command
+- Never launch the app in a separate tool call - it may start before wipe completes
+- The `sleep 2` ensures pkill has fully terminated the process
+- macOS stores data in MANY locations: Application Support, WebKit, Caches, Preferences, HTTPStorages, Saved Application State
+- Both `com.cipher.social` AND `cipher-social` identifiers are used
+
+**Combined Wipe and Deploy (use this for P2P testing):**
+```bash
+# Wipe and deploy BOTH platforms in one command
+pkill -9 -f cipher; sleep 2; \
+rm -rf ~/Library/Application\ Support/com.cipher.social ~/Library/WebKit/com.cipher.social ~/Library/Caches/com.cipher.social; \
+~/Library/Android/sdk/platform-tools/adb shell pm clear com.cipher.social; \
+~/Library/Android/sdk/platform-tools/adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk; \
+/path/to/Cipher.app/Contents/MacOS/cipher-social > /tmp/cipher-logs.txt 2>&1 &
+```
+
+**Multi-Device Testing (P2P sync):**
+```bash
+# ALWAYS wipe BOTH devices together - never just one!
+# Android:
+adb shell pm clear com.cipher.social
+# macOS: (run the full wipe command above)
 ```
 
 **Why always wipe?**
@@ -80,6 +114,7 @@ open target/debug/bundle/macos/Cipher.app
 - WebView localStorage persists even after uninstall
 - **macOS stores data in MULTIPLE locations** (both `com.cipher.social` and `cipher-social`)
 - **Running instances hold old data in memory** - must kill processes before wiping
+- **Multi-device testing requires ALL devices wiped** - old data on one device breaks sync testing
 
 **Full Rebuild (when code changes aren't picked up):**
 ```bash
@@ -124,6 +159,7 @@ magick icons/icon.png -trim icons/icon.png
 - Public keys are primary identifier (prevents username collisions)
 - Private keys NEVER transmitted over P2P channels
 - Only public keys shared between peers
+- **ALL content must be encrypted** - posts, comments, reactions, messages all use SealedEnvelope (encrypted sealed boxes). No unencrypted content transport.
 
 **P2P Networking (Iroh):**
 - DHT + DNS + Relay discovery for peer finding
@@ -143,6 +179,7 @@ magick icons/icon.png -trim icons/icon.png
 - **Clean up** - kill processes, remove artifacts regularly
 - **Foreground tasks** - run in foreground unless there's a reason
 - **No extra work** - do what's asked, nothing more
+- **Reuse code** - everything should use the same code paths where possible. Posts, comments, reactions, messages should all use the same transport and sync mechanisms. Don't create separate code paths for similar functionality.
 - **P2P testing** - requires 2+ instances running simultaneously
 - **Private key security** - never log or transmit over P2P
 - **Wipe before reinstall** - always clear app data/database before reinstalling to avoid schema conflicts
@@ -150,3 +187,34 @@ magick icons/icon.png -trim icons/icon.png
 - The startup log should include the current version
 - you need to calculate coorindates, the screenshots have different coordinates.
 - For the time being we should keep working a single commit on main and the 0.0.1 tag.
+## P2P Architecture Notes (for comment/reaction sync)
+
+**Key Architecture Points:**
+
+1. **Iroh is for handshake/hole-punching only** - message size is very limited
+2. **Content delivery uses:**
+   - `SealedEnvelope` - encrypted sealed boxes for each friend
+   - `PostWithBlobs` - for posts when friends don't have encryption keys yet
+   - iroh-blobs for large attachments
+
+3. **Device sync (sync.rs) currently syncs:**
+   - Posts
+   - Messages  
+   - Friends
+   - **NOT comments or reactions!**
+
+4. **Comments/reactions don't sync because they were never implemented for P2P**
+   - The `PostComment` and `PostReaction` P2PMessage types exist but aren't used
+   - Frontend event listeners exist but backend never sends these message types
+   - My attempt to add `iroh_broadcast_post_comment` etc was wrong approach
+
+**Correct Solution Options:**
+1. Add comments/reactions to device sync mechanism
+2. Create SealedEnvelope for comments/reactions (like posts do)
+3. Use presence announcements to trigger sync requests
+
+**Files involved:**
+- `src/app/database/sync.rs` - SyncData struct, get_sync_data(), apply_sync_data()
+- `src/app/iroh_commands.rs` - iroh_publish_post shows SealedEnvelope pattern
+- `src/app/crypto/sealed_box.rs` - GossipEnvelope encryption
+- `src/app/iroh_network.rs` - P2PMessage enum, handle_message() handlers

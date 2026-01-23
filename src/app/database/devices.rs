@@ -187,6 +187,7 @@ impl Database {
     /// Clear old node IDs for devices that have been updated with a new node ID
     /// This handles the case where a device was wiped and got a new node ID
     /// Returns the number of stale entries cleared
+    #[allow(dead_code)]
     pub fn clear_stale_node_ids_for_device(&self, device_id: &str, current_node_id: &str) -> SqliteResult<usize> {
         let conn = self.conn.lock().unwrap();
 
@@ -208,6 +209,7 @@ impl Database {
     }
 
     /// Delete a device entry by its node ID (for cleaning up completely stale entries)
+    #[allow(dead_code)]
     pub fn delete_device_by_node_id(&self, node_id: &str) -> SqliteResult<usize> {
         let conn = self.conn.lock().unwrap();
         let deleted = conn.execute(
@@ -218,6 +220,7 @@ impl Database {
     }
 
     /// Get all node IDs for a user (to find stale ones)
+    #[allow(dead_code)]
     pub fn get_node_ids_for_user(&self, user_public_key: &str) -> SqliteResult<Vec<(String, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

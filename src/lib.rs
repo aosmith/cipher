@@ -9,8 +9,9 @@ use tauri::{Manager, Emitter};
 use app::iroh_commands::{
     iroh_add_friend_by_public_key, iroh_announce_presence, iroh_enter_background,
     iroh_enter_foreground, iroh_generate_invite, iroh_get_connection_status, iroh_health_check,
-    iroh_initialize, iroh_publish_post, iroh_read_blob, iroh_recover, iroh_send_message,
-    iroh_shutdown, iroh_subscribe_friend, parse_invite_code,
+    iroh_initialize, iroh_publish_post, iroh_publish_post_comment, iroh_publish_post_reaction,
+    iroh_read_blob, iroh_recover, iroh_send_message, iroh_shutdown, iroh_subscribe_friend,
+    parse_invite_code,
 };
 
 #[cfg(mobile)]
@@ -82,6 +83,7 @@ fn main() {
             // Posts
             get_all_posts,
             create_post,
+            create_post_with_id,
             edit_post,
             delete_post,
             // Messaging
@@ -188,6 +190,8 @@ fn main() {
             iroh_subscribe_friend,
             iroh_send_message,
             iroh_publish_post,
+            iroh_publish_post_comment,
+            iroh_publish_post_reaction,
             iroh_announce_presence,
             iroh_get_connection_status,
             iroh_health_check,

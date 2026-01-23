@@ -35,6 +35,9 @@ pub enum P2PMessage {
     Presence {
         user_id: SqliteUuid,
         public_key: String,
+        /// X25519 encryption public key for sealed envelopes (comments, reactions, etc.)
+        #[serde(default)]
+        encryption_public_key: Option<String>,
         device_id: String,
         node_addr: iroh::NodeAddr, // Full addressing info for direct peer connection
         timestamp: i64,
@@ -68,8 +71,9 @@ pub enum P2PMessage {
         timestamp: i64,
         device_id: Option<String>,
     },
-    /// Post from a user (legacy - kept for backwards compatibility)
-    /// WARNING: Do not use for posts with attachments - use PostWithBlobs instead
+    /// Post from a user (legacy - kept for backwards compatibility, unencrypted)
+    /// NOTE: All new posts should use SealedEnvelope for encryption
+    #[deprecated(note = "Use SealedEnvelope instead - all content must be encrypted")]
     Post {
         user_id: SqliteUuid,
         public_key: String, // Sender's public key for user record creation
@@ -77,18 +81,6 @@ pub enum P2PMessage {
         timestamp: i64,
         device_id: Option<String>,
         attachments: Option<Vec<MediaAttachmentWithData>>,
-    },
-    /// Post with blob-based attachments (for large files like images)
-    /// Attachments are stored in iroh-blobs and referenced by hash
-    /// Receiver fetches blobs directly from sender's node
-    PostWithBlobs {
-        user_id: SqliteUuid,
-        public_key: String,
-        node_id: String,              // Sender's NodeId for blob fetching
-        content: String,
-        timestamp: i64,
-        device_id: Option<String>,
-        blob_refs: Vec<BlobReference>, // References to blobs in sender's store
     },
     /// PHASE 2: Sealed envelope containing encrypted content
     /// All nodes receive this, but only friends can decrypt
@@ -99,29 +91,43 @@ pub enum P2PMessage {
     /// Friend request sent when scanning QR code
     /// Broadcast to global mesh - only the target can process it
     FriendRequest {
-        from_public_key: String,     // Requester's public key
-        from_user_id: SqliteUuid,     // Requester's user ID
-        from_display_name: String,   // Requester's display name
-        from_node_id: String,          // Requester's Iroh NodeId
-        from_relay_url: String,        // Requester's relay URL
-        to_public_key: String,        // Target's public key (for filtering)
+        from_public_key: String,            // Requester's signing public key (Ed25519)
+        from_encryption_public_key: String, // Requester's encryption public key (X25519)
+        from_user_id: SqliteUuid,           // Requester's user ID
+        from_display_name: String,          // Requester's display name
+        from_node_id: String,               // Requester's Iroh NodeId
+        from_relay_url: String,             // Requester's relay URL
+        to_public_key: String,              // Target's public key (for filtering)
         timestamp: i64,
     },
     /// Friend request acceptance
     /// Broadcast to global mesh - only the requester can process it
     FriendAccepted {
-        from_user_id: SqliteUuid,     // Accepter's user ID
-        from_public_key: String,     // Accepter's public key
-        from_display_name: String,   // Accepter's display name
-        from_node_id: String,          // Accepter's Iroh NodeId
-        from_relay_url: String,        // Accepter's relay URL
-        to_public_key: String,        // Original requester's public key (for filtering)
+        from_user_id: SqliteUuid,           // Accepter's user ID
+        from_public_key: String,            // Accepter's signing public key (Ed25519)
+        from_encryption_public_key: String, // Accepter's encryption public key (X25519)
+        from_display_name: String,          // Accepter's display name
+        from_node_id: String,               // Accepter's Iroh NodeId
+        from_relay_url: String,             // Accepter's relay URL
+        to_public_key: String,              // Original requester's public key (for filtering)
     },
     /// Heartbeat message to verify peer is still connected
     /// Broadcast to global mesh for accurate peer counting
     Heartbeat {
         node_id: String,              // Sender's Iroh NodeId
         timestamp: i64,
+    },
+    /// Unified content message for all content types (posts, comments, reactions)
+    /// Single transport mechanism for all unencrypted content
+    Content {
+        content_type: String,         // "post", "comment", "reaction"
+        user_id: SqliteUuid,
+        public_key: String,
+        node_id: String,              // Sender's NodeId for blob fetching
+        payload_json: String,         // Type-specific data as JSON
+        timestamp: i64,
+        device_id: Option<String>,
+        blob_refs: Vec<BlobReference>,
     },
 }
 
@@ -465,7 +471,7 @@ impl IrohNetwork {
                         // Now try to connect with full addressing info
                         println!("[IROH] Attempting to connect to peer: {}", peer_id);
                         match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
-                            Ok(conn) => {
+                            Ok(_conn) => {
                                 println!("[IROH] [OK] CONNECTED to peer {}!", peer_id);
                                 println!("[IROH]   Connected to peer: {}", peer_id);
                                 // Track this connection
@@ -648,6 +654,7 @@ impl IrohNetwork {
     }
 
     /// Subscribe to a gossip topic with bootstrap peers (takes iroh::NodeId directly)
+    #[allow(dead_code)]
     pub async fn subscribe_with_bootstrap(
         &self,
         topic: &str,
@@ -864,14 +871,23 @@ impl IrohNetwork {
                                                 match &p2p_msg {
                                                     P2PMessage::Presence { .. } => "Presence",
                                                     P2PMessage::DirectMessage { .. } => "DirectMessage",
-                                                    P2PMessage::Post { .. } => "Post",
-                                                    P2PMessage::PostWithBlobs { .. } => "PostWithBlobs",
+                                                    #[allow(deprecated)]
+                                                    P2PMessage::Post { .. } => "Post (legacy)",
                                                     P2PMessage::SealedEnvelope { .. } => "SealedEnvelope",
                                                     P2PMessage::FriendRequest { .. } => "FriendRequest",
                                                     P2PMessage::FriendAccepted { .. } => "FriendAccepted",
                                                     P2PMessage::DeviceSyncRequest { .. } => "DeviceSyncRequest",
                                                     P2PMessage::DeviceSyncResponse { .. } => "DeviceSyncResponse",
                                                     P2PMessage::Heartbeat { .. } => "Heartbeat",
+                                                    P2PMessage::Content { content_type, .. } => {
+                                                        // Show the content type for unified Content messages
+                                                        match content_type.as_str() {
+                                                            "post" => "Content(post)",
+                                                            "comment" => "Content(comment)",
+                                                            "reaction" => "Content(reaction)",
+                                                            _ => "Content(unknown)",
+                                                        }
+                                                    },
                                                 }
                                             );
                                             self.handle_message(p2p_msg).await;
@@ -969,6 +985,7 @@ impl IrohNetwork {
 
     /// Unsubscribe from a gossip topic
     /// This cleanly removes the subscription and stops the message handler
+    #[allow(dead_code)]
     async fn unsubscribe_topic(&self, topic: &str) -> Result<(), String> {
         println!("[IROH-UNSUB] Unsubscribing from topic '{}'...", topic);
 
@@ -1149,6 +1166,7 @@ impl IrohNetwork {
 
     /// Fetch a blob from a peer by hash
     /// Uses the existing NAT-traversed connection for efficient transfer
+    #[allow(dead_code)]
     pub async fn fetch_blob(
         &self,
         hash: iroh_blobs::Hash,
@@ -1206,6 +1224,7 @@ impl IrohNetwork {
     }
 
     /// Check if we have a blob locally
+    #[allow(dead_code)]
     pub async fn has_blob(&self, hash: iroh_blobs::Hash) -> bool {
         use iroh_blobs::store::Map;
 
@@ -1269,9 +1288,13 @@ impl IrohNetwork {
             None
         };
 
+        // Get encryption public key for sealed envelopes (comments, reactions, etc.)
+        let encryption_public_key = self.get_user_encryption_public_key();
+
         let presence = P2PMessage::Presence {
             user_id: self.user_id,
             public_key: self.public_key.clone(),
+            encryption_public_key,
             device_id: self
                 .device_id
                 .clone()
@@ -1315,10 +1338,14 @@ impl IrohNetwork {
                         println!("[IROH] Failed to announce presence: {}", e);
                     }
                 }
+
+                // CRITICAL: Also retry FriendAccepted messages every cycle
+                // This ensures FriendAccepted is delivered even if mesh was unstable initially
+                network.resend_friend_accepted_if_needed().await;
             }
         });
 
-        println!("[IROH] Started presence announcement loop");
+        println!("[IROH] Started presence announcement loop (includes FriendAccepted retry)");
     }
 
     /// Actively discover peers using Pkarr rendezvous DHT key
@@ -1554,6 +1581,7 @@ impl IrohNetwork {
             P2PMessage::Presence {
                 user_id: peer_user_id,
                 public_key,
+                encryption_public_key,
                 device_id,
                 node_addr,
                 timestamp: _,
@@ -1616,26 +1644,33 @@ impl IrohNetwork {
                     );
                 }
 
-                // CLEANUP: Remove stale device entries for this user
-                // This handles the case where a device was wiped and got a new device_id/node_id
+                // CLEANUP: Remove stale device entries for OTHER users (not our own user)
+                // This handles the case where a peer user wiped their device and got a new device_id/node_id
                 // The old device entry with the old node_id would otherwise stay in our database forever
-                match self.db.cleanup_stale_devices_for_user(&public_key, &device_id, &node_id_str) {
-                    Ok(stale_node_ids) if !stale_node_ids.is_empty() => {
-                        println!(
-                            "[IROH] Cleaned up {} stale device entries for user {}",
-                            stale_node_ids.len(),
-                            &public_key[..8]
-                        );
-                        // Also remove stale node_ids from connected_peers
-                        for stale_node_id in stale_node_ids {
-                            if let Ok(stale_id) = stale_node_id.parse::<iroh::NodeId>() {
-                                self.remove_connected_peer(stale_id).await;
-                                println!("[IROH] Removed stale peer {} from connected set", stale_node_id);
+                //
+                // CRITICAL: Only run cleanup for OTHER users, not our own user!
+                // If peer is another device of the SAME user (public_key == self.public_key),
+                // running cleanup would delete OUR OWN device entry since it would match the
+                // "different device_id, different node_id" criteria.
+                if public_key != self.public_key {
+                    match self.db.cleanup_stale_devices_for_user(&public_key, &device_id, &node_id_str) {
+                        Ok(stale_node_ids) if !stale_node_ids.is_empty() => {
+                            println!(
+                                "[IROH] Cleaned up {} stale device entries for user {}",
+                                stale_node_ids.len(),
+                                &public_key[..8]
+                            );
+                            // Also remove stale node_ids from connected_peers
+                            for stale_node_id in stale_node_ids {
+                                if let Ok(stale_id) = stale_node_id.parse::<iroh::NodeId>() {
+                                    self.remove_connected_peer(stale_id).await;
+                                    println!("[IROH] Removed stale peer {} from connected set", stale_node_id);
+                                }
                             }
                         }
+                        Ok(_) => {} // No stale entries
+                        Err(e) => println!("[IROH] Warning: Failed to cleanup stale devices: {}", e),
                     }
-                    Ok(_) => {} // No stale entries
-                    Err(e) => println!("[IROH] Warning: Failed to cleanup stale devices: {}", e),
                 }
 
                 // NOTE: We received this Presence message via gossip, which means we ALREADY have
@@ -1671,34 +1706,36 @@ impl IrohNetwork {
                     );
 
                     // First, ensure the peer user exists in our database with their profile data
-                    // Use try_lock to avoid blocking async runtime - skip if DB is busy
-                    match self.db.conn.try_lock() {
-                        Ok(conn) => {
-                            if let Err(e) = conn.execute(
-                                "INSERT INTO users (id, display_name, public_key, bio, profile_picture, profile_signature, created_at, updated_at)
-                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                                 ON CONFLICT(public_key) DO UPDATE SET
-                                    display_name = excluded.display_name,
-                                    bio = excluded.bio,
-                                    profile_picture = excluded.profile_picture,
-                                    profile_signature = excluded.profile_signature,
-                                    updated_at = excluded.updated_at",
-                                rusqlite::params![
-                                    peer_user_id,
-                                    &display_name,
-                                    &public_key,
-                                    &bio,
-                                    &profile_picture,
-                                    &profile_signature,
-                                    chrono::Utc::now().to_rfc3339(),
-                                    chrono::Utc::now().to_rfc3339()
-                                ],
-                            ) {
-                                println!("[IROH] Warning: Failed to update peer user: {}", e);
-                            }
-                        }
-                        Err(_) => {
-                            println!("[IROH] DB busy in Presence handler - skipping user update");
+                    // CRITICAL: Include encryption_public_key for sealed envelope encryption (comments, reactions, etc.)
+                    // NOTE: Using lock() because encryption_public_key is ESSENTIAL for comments/reactions to work.
+                    // Without this data, sealed envelope encryption will fail and messages won't be delivered.
+                    {
+                        let conn = self.db.conn.lock().unwrap();
+                        if let Err(e) = conn.execute(
+                            "INSERT INTO users (id, display_name, public_key, encryption_public_key, bio, profile_picture, profile_signature, created_at, updated_at)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                             ON CONFLICT(public_key) DO UPDATE SET
+                                display_name = excluded.display_name,
+                                encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+                                bio = excluded.bio,
+                                profile_picture = excluded.profile_picture,
+                                profile_signature = excluded.profile_signature,
+                                updated_at = excluded.updated_at",
+                            rusqlite::params![
+                                peer_user_id,
+                                &display_name,
+                                &public_key,
+                                &encryption_public_key,
+                                &bio,
+                                &profile_picture,
+                                &profile_signature,
+                                chrono::Utc::now().to_rfc3339(),
+                                chrono::Utc::now().to_rfc3339()
+                            ],
+                        ) {
+                            println!("[IROH] Warning: Failed to update peer user: {}", e);
+                        } else if encryption_public_key.is_some() {
+                            println!("[IROH] [OK] Stored encryption_public_key for peer {}", &public_key[..8]);
                         }
                     }
 
@@ -1707,8 +1744,9 @@ impl IrohNetwork {
                     // Warn if display name changes with valid signature (legitimate update)
                     // or especially if signature is invalid (potential impersonation)
                     // Check both directions since connection could be stored either way
-                    // Use try_lock to avoid blocking async runtime
-                    if let Ok(conn) = self.db.conn.try_lock() {
+                    // NOTE: Using lock() instead of try_lock() - security checks must not be skipped
+                    {
+                        let conn = self.db.conn.lock().unwrap();
                         if let Ok((known_name, _stored_sig)) = conn
                             .query_row(
                                 "SELECT known_display_name, friend_profile_signature FROM p2p_connections
@@ -1760,21 +1798,16 @@ impl IrohNetwork {
                     // Only update peer address for EXISTING friendships (pending or accepted)
                     // Do NOT auto-create friendships - that should happen via FriendRequest flow
                     // Check both directions since connection could be stored either way
-                    // Use try_lock to avoid blocking async runtime
+                    // NOTE: Using lock() instead of try_lock() - connection status check must not be skipped
                     println!("[IROH] Checking existing connection status for peer {}", peer_user_id);
-                    let existing_status: Option<String> = match self.db.conn.try_lock() {
-                        Ok(conn) => {
-                            conn.query_row(
-                                "SELECT status FROM p2p_connections
-                                 WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                                rusqlite::params![self.user_id, peer_user_id],
-                                |row| row.get(0)
-                            ).ok()
-                        }
-                        Err(_) => {
-                            println!("[IROH] DB busy - skipping connection status check");
-                            None
-                        }
+                    let existing_status: Option<String> = {
+                        let conn = self.db.conn.lock().unwrap();
+                        conn.query_row(
+                            "SELECT status FROM p2p_connections
+                             WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                            rusqlite::params![self.user_id, peer_user_id],
+                            |row| row.get(0)
+                        ).ok()
                     };
                     println!("[IROH] Existing status query returned: {:?}", existing_status);
 
@@ -1800,20 +1833,15 @@ impl IrohNetwork {
                         // This handles the case where our original FriendAccepted was lost due to gossip mesh instability
                         if status == "accepted" {
                             // Check if this peer initiated the connection (they sent the friend request to us)
-                            // Use try_lock to avoid blocking async runtime
-                            let initiated_by: Option<super::types::SqliteUuid> = match self.db.conn.try_lock() {
-                                Ok(conn) => {
-                                    conn.query_row(
-                                        "SELECT initiated_by FROM p2p_connections
-                                         WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                                        rusqlite::params![self.user_id, peer_user_id],
-                                        |row| row.get(0)
-                                    ).ok()
-                                }
-                                Err(_) => {
-                                    println!("[IROH] DB busy - skipping initiated_by check for accepted");
-                                    None
-                                }
+                            // NOTE: Using lock() instead of try_lock() - this check is important for FriendAccepted resend
+                            let initiated_by: Option<super::types::SqliteUuid> = {
+                                let conn = self.db.conn.lock().unwrap();
+                                conn.query_row(
+                                    "SELECT initiated_by FROM p2p_connections
+                                     WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                                    rusqlite::params![self.user_id, peer_user_id],
+                                    |row| row.get(0)
+                                ).ok()
                             };
 
                             // If peer_user_id initiated the connection, they are waiting for our FriendAccepted
@@ -1848,9 +1876,13 @@ impl IrohNetwork {
                                 };
 
                                 if !our_node_id.is_empty() {
+                                    // Get our encryption public key for sealed envelope encryption
+                                    let our_encryption_public_key = self.get_user_encryption_public_key().unwrap_or_default();
+
                                     let friend_accepted = P2PMessage::FriendAccepted {
                                         from_user_id: self.user_id,
                                         from_public_key: self.public_key.clone(),
+                                        from_encryption_public_key: our_encryption_public_key,
                                         from_display_name: self.display_name.clone(),
                                         from_node_id: our_node_id,
                                         from_relay_url: our_relay_url,
@@ -1870,20 +1902,15 @@ impl IrohNetwork {
                         // This handles the case where their app data was cleared and they lost our original request
                         if status == "pending" {
                             // Check if WE initiated the connection (we sent the friend request to them)
-                            // Use try_lock to avoid blocking async runtime
-                            let initiated_by: Option<super::types::SqliteUuid> = match self.db.conn.try_lock() {
-                                Ok(conn) => {
-                                    conn.query_row(
-                                        "SELECT initiated_by FROM p2p_connections
-                                         WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                                        rusqlite::params![self.user_id, peer_user_id],
-                                        |row| row.get(0)
-                                    ).ok()
-                                }
-                                Err(_) => {
-                                    println!("[IROH] DB busy - skipping initiated_by check for pending");
-                                    None
-                                }
+                            // NOTE: Using lock() instead of try_lock() - this check is important for FriendRequest resend
+                            let initiated_by: Option<super::types::SqliteUuid> = {
+                                let conn = self.db.conn.lock().unwrap();
+                                conn.query_row(
+                                    "SELECT initiated_by FROM p2p_connections
+                                     WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                                    rusqlite::params![self.user_id, peer_user_id],
+                                    |row| row.get(0)
+                                ).ok()
                             };
 
                             // If WE initiated the connection, they may have lost our FriendRequest - resend it
@@ -1906,9 +1933,13 @@ impl IrohNetwork {
                                 };
 
                                 if !our_node_id.is_empty() {
+                                    // Get our encryption public key for sealed envelope encryption
+                                    let our_encryption_public_key = self.get_user_encryption_public_key().unwrap_or_default();
+
                                     let friend_request = P2PMessage::FriendRequest {
                                         from_user_id: self.user_id,
                                         from_public_key: self.public_key.clone(),
+                                        from_encryption_public_key: our_encryption_public_key,
                                         from_display_name: self.display_name.clone(),
                                         from_node_id: our_node_id,
                                         from_relay_url: our_relay_url,
@@ -2123,29 +2154,22 @@ impl IrohNetwork {
                     return;
                 }
 
-                // CRITICAL: Ensure the sender's user record exists before saving post
+                // Ensure the sender's user record exists before saving post
                 // This prevents foreign key constraint violations in the posts table
-                // Use try_lock to avoid blocking async runtime
-                match self.db.conn.try_lock() {
-                    Ok(conn) => {
-                        if let Err(e) = conn.execute(
-                            "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                             VALUES (?1, ?2, ?3, ?4, ?5)",
-                            rusqlite::params![
-                                user_id,
-                                format!("User_{}", &public_key[..8.min(public_key.len())]),
-                                public_key,
-                                chrono::Utc::now().to_rfc3339(),
-                                chrono::Utc::now().to_rfc3339()
-                            ],
-                        ) {
-                            println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
-                        } else {
-                            println!("[IROH] [OK] Ensured user record exists for post sender");
-                        }
-                    }
-                    Err(_) => {
-                        println!("[IROH] DB busy in Post handler - skipping user insert");
+                // NOTE: Using try_lock to avoid blocking executor - INSERT OR IGNORE is idempotent
+                if let Ok(conn) = self.db.conn.try_lock() {
+                    if let Err(e) = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            user_id,
+                            format!("User_{}", &public_key[..8.min(public_key.len())]),
+                            public_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
                     }
                 }
 
@@ -2170,159 +2194,7 @@ impl IrohNetwork {
                 );
             }
 
-            P2PMessage::PostWithBlobs {
-                user_id,
-                ref public_key,
-                ref node_id,
-                ref content,
-                timestamp,
-                ref device_id,
-                ref blob_refs,
-            } => {
-                println!(
-                    "[IROH] Received PostWithBlobs from user {} ({}) with {} blob refs",
-                    user_id, public_key, blob_refs.len()
-                );
-
-                // Skip our own posts (they're already in DB)
-                if public_key == &self.public_key {
-                    println!("[IROH] Skipping own post with blobs");
-                    return;
-                }
-
-                // CRITICAL: Ensure the sender's user record exists before saving post
-                // Use try_lock to avoid deadlock - skip if DB is busy
-                println!("[IROH] Attempting to acquire DB lock for user insert...");
-                match self.db.conn.try_lock() {
-                    Ok(conn) => {
-                        if let Err(e) = conn.execute(
-                            "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                             VALUES (?1, ?2, ?3, ?4, ?5)",
-                            rusqlite::params![
-                                user_id,
-                                format!("User_{}", &public_key[..8.min(public_key.len())]),
-                                public_key,
-                                chrono::Utc::now().to_rfc3339(),
-                                chrono::Utc::now().to_rfc3339()
-                            ],
-                        ) {
-                            println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
-                        } else {
-                            println!("[IROH] [OK] Ensured user record exists for post sender");
-                        }
-                    }
-                    Err(_) => {
-                        println!("[IROH] WARNING: DB lock busy in PostWithBlobs handler - skipping user insert");
-                    }
-                }
-
-                // Parse sender's NodeId for blob fetching
-                let sender_node_id = match node_id.parse::<iroh::NodeId>() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        println!("[IROH] Failed to parse sender NodeId '{}': {}", node_id, e);
-                        // Emit post without attachments
-                        let _ = self.app_handle.emit(
-                            "p2p-message-received",
-                            serde_json::json!({
-                                "message": {
-                                    "type": "Post",
-                                    "user_id": user_id,
-                                    "public_key": public_key,
-                                    "content": content,
-                                    "timestamp": timestamp,
-                                    "device_id": device_id,
-                                    "attachments": []
-                                }
-                            }),
-                        );
-                        return;
-                    }
-                };
-
-                // Download blobs in background - don't block message processing
-                // Clone what we need and spawn a background task
-                let mut downloaded_blob_refs = blob_refs.clone();
-
-                // Get the downloader quickly, then release the lock
-                let downloader_opt = {
-                    let blobs_guard = self.blobs.lock().await;
-                    blobs_guard.as_ref().map(|b| b.downloader().clone())
-                }; // Lock released here
-
-                if let Some(downloader) = downloader_opt {
-                    // Download blobs WITHOUT holding any locks
-                    for (idx, blob_ref) in blob_refs.iter().enumerate() {
-                        println!(
-                            "[IROH] Downloading blob {} ({} bytes) from {}",
-                            blob_ref.blob_hash, blob_ref.file_size, node_id
-                        );
-
-                        // Parse blob hash
-                        let hash = match hex::decode(&blob_ref.blob_hash) {
-                            Ok(bytes) if bytes.len() == 32 => {
-                                let mut arr = [0u8; 32];
-                                arr.copy_from_slice(&bytes);
-                                iroh_blobs::Hash::from_bytes(arr)
-                            }
-                            Ok(_) => {
-                                println!("[IROH] Invalid blob hash length for {}", blob_ref.blob_hash);
-                                continue;
-                            }
-                            Err(e) => {
-                                println!("[IROH] Failed to decode blob hash: {}", e);
-                                continue;
-                            }
-                        };
-
-                        // Queue the download with a timeout to prevent hanging
-                        let request = iroh_blobs::downloader::DownloadRequest::new(
-                            iroh_blobs::HashAndFormat::raw(hash),
-                            vec![sender_node_id],
-                        );
-                        let handle = downloader.queue(request).await;
-
-                        // Wait for download with timeout (10 seconds per blob)
-                        match tokio::time::timeout(std::time::Duration::from_secs(10), handle).await {
-                            Ok(Ok(stats)) => {
-                                println!(
-                                    "[IROH] Blob {} downloaded successfully ({} bytes received)",
-                                    blob_ref.blob_hash, stats.bytes_read
-                                );
-                                downloaded_blob_refs[idx].downloaded = true;
-                            }
-                            Ok(Err(e)) => {
-                                println!("[IROH] Failed to download blob {}: {}", blob_ref.blob_hash, e);
-                            }
-                            Err(_) => {
-                                println!("[IROH] Blob {} download timed out", blob_ref.blob_hash);
-                            }
-                        }
-                    }
-                }
-
-                // Emit PostWithBlobs to UI with download status
-                // Frontend will only try to read blobs marked as downloaded
-                #[derive(serde::Serialize, Clone)]
-                struct MessageEvent {
-                    message: P2PMessage,
-                }
-
-                let _ = self.app_handle.emit(
-                    "p2p-message-received",
-                    MessageEvent {
-                        message: P2PMessage::PostWithBlobs {
-                            user_id,
-                            public_key: public_key.clone(),
-                            node_id: node_id.clone(),
-                            content: content.clone(),
-                            timestamp,
-                            device_id: device_id.clone(),
-                            blob_refs: downloaded_blob_refs,
-                        },
-                    },
-                );
-            }
+            // PostWithBlobs removed - all posts use SealedEnvelope (encrypted)
 
             P2PMessage::SealedEnvelope { envelope_json } => {
                 // PHASE 2: Sealed box encryption
@@ -2369,13 +2241,14 @@ impl IrohNetwork {
 
                         // Process the decrypted content
                         match payload {
-                            super::crypto::ContentPayload::Post { content, attachments } => {
+                            super::crypto::ContentPayload::Post { post_id, content, node_id, blob_refs } => {
                                 // Get sender's user_id from their public key
                                 let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
 
                                 // Ensure sender exists in database
-                                // Use try_lock to avoid blocking async runtime
-                                if let Ok(conn) = self.db.conn.try_lock() {
+                                // NOTE: Using lock() instead of try_lock() for data integrity
+                                {
+                                    let conn = self.db.conn.lock().unwrap();
                                     if let Err(e) = conn.execute(
                                         "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
                                          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -2391,24 +2264,28 @@ impl IrohNetwork {
                                     }
                                 }
 
-                                // Emit decrypted post to UI
+                                // Emit decrypted post to UI via sealed-post-received event
                                 #[derive(serde::Serialize, Clone)]
                                 struct DecryptedPostEvent {
+                                    post_id: String,
                                     user_id: super::types::SqliteUuid,
                                     public_key: String,
+                                    node_id: String,
                                     content: String,
                                     timestamp: i64,
-                                    attachments: Option<Vec<super::types::MediaAttachmentWithData>>,
+                                    blob_refs: Vec<super::types::BlobReference>,
                                 }
 
                                 let _ = self.app_handle.emit(
                                     "sealed-post-received",
                                     DecryptedPostEvent {
+                                        post_id,
                                         user_id: sender_user_id,
                                         public_key: envelope.sender_public_key.clone(),
+                                        node_id,
                                         content,
                                         timestamp: envelope.timestamp,
-                                        attachments,
+                                        blob_refs,
                                     },
                                 );
                                 println!("[IROH] [OK] Emitted decrypted post to UI");
@@ -2459,8 +2336,9 @@ impl IrohNetwork {
                                 };
 
                                 // Ensure sender exists in database
-                                // Use try_lock to avoid blocking async runtime
-                                if let Ok(conn) = self.db.conn.try_lock() {
+                                // NOTE: Using lock() instead of try_lock() for data integrity
+                                {
+                                    let conn = self.db.conn.lock().unwrap();
                                     if let Err(e) = conn.execute(
                                         "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
                                          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -2541,8 +2419,9 @@ impl IrohNetwork {
                                 let new_member_user_id = super::types::SqliteUuid::from_public_key(&new_member_public_key);
 
                                 // Ensure the new member user exists in database
-                                // Use try_lock to avoid blocking async runtime
-                                if let Ok(conn) = self.db.conn.try_lock() {
+                                // NOTE: Using lock() instead of try_lock() for data integrity
+                                {
+                                    let conn = self.db.conn.lock().unwrap();
                                     if let Err(e) = conn.execute(
                                         "INSERT OR IGNORE INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
                                          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -2595,6 +2474,169 @@ impl IrohNetwork {
                                 );
                                 println!("[IROH] [OK] Community member added and emitted");
                             }
+                            super::crypto::ContentPayload::PostComment {
+                                comment_id,
+                                post_id,
+                                content,
+                                parent_comment_id,
+                            } => {
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
+                                println!("[IROH] Received post comment from {} on post {}",
+                                    envelope.sender_public_key, post_id);
+
+                                // Parse IDs
+                                let comment_uuid = match super::types::SqliteUuid::parse_str(&comment_id) {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        println!("[IROH] Failed to parse comment_id: {}", e);
+                                        return;
+                                    }
+                                };
+                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id) {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        println!("[IROH] Failed to parse post_id: {}", e);
+                                        return;
+                                    }
+                                };
+                                let parent_uuid = parent_comment_id.as_ref().and_then(|id| {
+                                    super::types::SqliteUuid::parse_str(id).ok()
+                                });
+
+                                // Ensure sender exists and save comment
+                                // NOTE: Using lock() instead of try_lock() - CRITICAL for comment persistence
+                                {
+                                    let conn = self.db.conn.lock().unwrap();
+                                    let now = chrono::Utc::now().to_rfc3339();
+
+                                    // Ensure sender exists
+                                    let _ = conn.execute(
+                                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                                        rusqlite::params![
+                                            sender_user_id,
+                                            format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
+                                            &envelope.sender_public_key,
+                                            &now,
+                                            &now
+                                        ],
+                                    );
+
+                                    // Save comment (OR IGNORE for duplicates)
+                                    if let Err(e) = conn.execute(
+                                        "INSERT OR IGNORE INTO post_comments (id, post_id, user_id, content, parent_comment_id, created_at, updated_at)
+                                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                                        rusqlite::params![
+                                            comment_uuid,
+                                            post_uuid,
+                                            sender_user_id,
+                                            &content,
+                                            parent_uuid,
+                                            &now,
+                                            &now
+                                        ],
+                                    ) {
+                                        println!("[IROH] Warning: Failed to save comment: {}", e);
+                                    } else {
+                                        println!("[IROH] ✓ Saved comment to database");
+                                    }
+                                }
+
+                                // Emit to UI
+                                let _ = self.app_handle.emit(
+                                    "p2p-post-comment",
+                                    serde_json::json!({
+                                        "commentId": comment_id,
+                                        "postId": post_id,
+                                        "userId": sender_user_id.to_string(),
+                                        "publicKey": envelope.sender_public_key,
+                                        "content": content,
+                                        "parentCommentId": parent_comment_id,
+                                        "timestamp": envelope.timestamp
+                                    }),
+                                );
+                                println!("[IROH] ✓ Emitted p2p-post-comment event");
+                            }
+                            super::crypto::ContentPayload::PostReaction {
+                                post_id,
+                                emoji,
+                                action,
+                            } => {
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
+                                println!("[IROH] Received post reaction from {}: {} {} on post {}",
+                                    envelope.sender_public_key, action, emoji, post_id);
+
+                                // Parse post ID
+                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id) {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        println!("[IROH] Failed to parse post_id: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                // Save or remove reaction
+                                // NOTE: Using lock() instead of try_lock() - CRITICAL for reaction persistence
+                                {
+                                    let conn = self.db.conn.lock().unwrap();
+                                    let now = chrono::Utc::now().to_rfc3339();
+
+                                    // Ensure sender exists
+                                    let _ = conn.execute(
+                                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                                        rusqlite::params![
+                                            sender_user_id,
+                                            format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
+                                            &envelope.sender_public_key,
+                                            &now,
+                                            &now
+                                        ],
+                                    );
+
+                                    if action == "add" {
+                                        // Use REPLACE to handle existing reactions
+                                        if let Err(e) = conn.execute(
+                                            "INSERT OR REPLACE INTO post_reactions (id, post_id, user_id, emoji, created_at)
+                                             VALUES (?1, ?2, ?3, ?4, ?5)",
+                                            rusqlite::params![
+                                                super::types::SqliteUuid::new(),
+                                                post_uuid,
+                                                sender_user_id,
+                                                &emoji,
+                                                &now
+                                            ],
+                                        ) {
+                                            println!("[IROH] Warning: Failed to save reaction: {}", e);
+                                        } else {
+                                            println!("[IROH] ✓ Saved reaction to database");
+                                        }
+                                    } else if action == "remove" {
+                                        if let Err(e) = conn.execute(
+                                            "DELETE FROM post_reactions WHERE post_id = ?1 AND user_id = ?2",
+                                            rusqlite::params![post_uuid, sender_user_id],
+                                        ) {
+                                            println!("[IROH] Warning: Failed to remove reaction: {}", e);
+                                        } else {
+                                            println!("[IROH] ✓ Removed reaction from database");
+                                        }
+                                    }
+                                }
+
+                                // Emit to UI
+                                let _ = self.app_handle.emit(
+                                    "p2p-post-reaction",
+                                    serde_json::json!({
+                                        "postId": post_id,
+                                        "userId": sender_user_id.to_string(),
+                                        "publicKey": envelope.sender_public_key,
+                                        "emoji": emoji,
+                                        "action": action,
+                                        "timestamp": envelope.timestamp
+                                    }),
+                                );
+                                println!("[IROH] ✓ Emitted p2p-post-reaction event");
+                            }
                             _ => {
                                 println!("[IROH] Received other sealed content type");
                             }
@@ -2609,7 +2651,8 @@ impl IrohNetwork {
 
             P2PMessage::FriendRequest {
                 from_public_key,
-                from_user_id,
+                from_encryption_public_key,
+                from_user_id: _from_user_id,  // Unused - we compute from public_key for consistency
                 from_display_name,
                 from_node_id,
                 from_relay_url,
@@ -2632,23 +2675,39 @@ impl IrohNetwork {
 
                 println!("[IROH] Processing friend request from {} ({})", from_display_name, from_public_key);
 
-                // 1. Ensure the friend user exists in database with their actual display name
-                // Use INSERT OR REPLACE to update display name if user already exists with stub name
-                // Use try_lock to avoid blocking async runtime
-                if let Ok(conn) = self.db.conn.try_lock() {
+                // CRITICAL: Compute friend's user_id from their public key to ensure consistency
+                // Don't trust from_user_id from the message - derive it deterministically
+                let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
+                println!("[IROH] Computed friend_user_id {} from public_key", friend_user_id);
+
+                // 1. Ensure the friend user exists in database with their actual display name and encryption key
+                // Use ON CONFLICT(public_key) since that's the reliable unique identifier
+                // CRITICAL: Store encryption_public_key so we can encrypt comments/reactions to them
+                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    // Use empty string check since encryption_public_key might be "" for old clients
+                    let enc_key = if from_encryption_public_key.is_empty() { None } else { Some(&from_encryption_public_key) };
                     if let Err(e) = conn.execute(
-                        "INSERT INTO users (id, display_name, public_key, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5)
-                         ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at",
+                        "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                         ON CONFLICT(public_key) DO UPDATE SET
+                            display_name = excluded.display_name,
+                            encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+                            updated_at = excluded.updated_at",
                         rusqlite::params![
-                            from_user_id,
+                            friend_user_id,  // Use computed ID, not from message
                             &from_display_name,
                             &from_public_key,
+                            enc_key,
                             chrono::Utc::now().to_rfc3339(),
                             chrono::Utc::now().to_rfc3339()
                         ],
                     ) {
                         println!("[IROH] Warning: Failed to create/update friend user: {}", e);
+                    } else {
+                        println!("[IROH] [OK] Created/updated friend user {} with display name: {} (enc_key: {})",
+                            friend_user_id, from_display_name, if enc_key.is_some() { "yes" } else { "no" });
                     }
                 }
 
@@ -2656,16 +2715,17 @@ impl IrohNetwork {
                 // User must accept this request before friendship is established
                 // Convention: user_id = sender (initiator), friend_user_id = receiver
                 // IMPORTANT: Check both directions to avoid duplicate rows when both users send requests
-                // Use try_lock to avoid blocking async runtime
+                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
                 let mut auto_accepted = false;
-                if let Ok(conn) = self.db.conn.try_lock() {
+                {
+                    let conn = self.db.conn.lock().unwrap();
                     let now = chrono::Utc::now().to_rfc3339();
 
                     // Check if any connection exists in either direction
                     let existing: Option<(String, super::types::SqliteUuid)> = conn.query_row(
                         "SELECT status, initiated_by FROM p2p_connections
                          WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                        rusqlite::params![self.user_id, from_user_id],
+                        rusqlite::params![self.user_id, friend_user_id],
                         |row| Ok((row.get(0)?, row.get(1)?))
                     ).ok();
 
@@ -2676,7 +2736,7 @@ impl IrohNetwork {
                             let _ = conn.execute(
                                 "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                  WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, from_user_id],
+                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
                             );
                         }
                         Some((status, initiated_by)) if status == "pending" && initiated_by == self.user_id => {
@@ -2685,7 +2745,7 @@ impl IrohNetwork {
                             let _ = conn.execute(
                                 "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                  WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, from_user_id],
+                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
                             );
                             auto_accepted = true;
                         }
@@ -2695,18 +2755,22 @@ impl IrohNetwork {
                             let _ = conn.execute(
                                 "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                  WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, from_user_id],
+                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
                             );
                         }
                         _ => {
                             // No existing connection - create new incoming request
+                            // CRITICAL: user_id must ALWAYS be the local user (self) for queries to work
+                            // friend_user_id is the friend we're connecting to (computed from public key)
+                            // initiated_by tracks who sent the original request
                             if let Err(e) = conn.execute(
                                 "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at, iroh_node_id, friend_relay_url)
-                                 VALUES (?1, ?2, ?3, 'pending', ?2, ?4, ?5, ?6, ?7)",
+                                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8)",
                                 rusqlite::params![
                                     super::types::SqliteUuid::new(),
-                                    from_user_id,   // user_id = sender (who sent the request)
-                                    self.user_id,   // friend_user_id = receiver (us)
+                                    self.user_id,     // user_id = ALWAYS the local user (us)
+                                    friend_user_id,   // friend_user_id = computed from sender's public key
+                                    friend_user_id,   // initiated_by = sender (they sent the request)
                                     &now,
                                     &now,
                                     &from_node_id,
@@ -2715,25 +2779,24 @@ impl IrohNetwork {
                             ) {
                                 println!("[IROH] Warning: Failed to create friend request: {}", e);
                             } else {
-                                println!("[IROH] [OK] Incoming friend request created from {}", from_public_key);
+                                println!("[IROH] [OK] Incoming friend request created from {} (our user_id={}, friend_user_id={})",
+                                    from_public_key, self.user_id, friend_user_id);
                             }
                         }
                     }
-                } else {
-                    println!("[IROH] DB busy - skipping FriendRequest processing");
                 }
 
                 // Emit acceptance event AFTER releasing the database lock
                 if auto_accepted {
                     let _ = self.app_handle.emit("friend-request-accepted", serde_json::json!({
-                        "friend_user_id": from_user_id.to_string(),
+                        "friend_user_id": friend_user_id.to_string(),
                         "friend_public_key": from_public_key,
                     }));
                 }
 
                 // Emit event to UI so it can show the pending request
                 let _ = self.app_handle.emit("friend-request-received", serde_json::json!({
-                    "from_user_id": from_user_id.to_string(),
+                    "from_user_id": friend_user_id.to_string(),
                     "from_public_key": from_public_key,
                     "from_node_id": from_node_id,
                 }));
@@ -2771,6 +2834,7 @@ impl IrohNetwork {
             P2PMessage::FriendAccepted {
                 from_user_id: _from_user_id, // Unused - we compute deterministically from public key
                 from_public_key,
+                from_encryption_public_key,
                 from_display_name,
                 from_node_id,
                 from_relay_url,
@@ -2795,27 +2859,42 @@ impl IrohNetwork {
                 let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
                 println!("[IROH] Computed friend_user_id from public key: {}", friend_user_id);
 
-                // Update the friend's display name in case they have a real name now (was previously a stub)
-                // Use try_lock to avoid blocking async runtime
-                if let Ok(conn) = self.db.conn.try_lock() {
+                // Ensure the friend user exists with their proper display name and encryption key
+                // CRITICAL: Store encryption_public_key so we can encrypt comments/reactions to them
+                // Use INSERT ON CONFLICT to handle both new users and stub-named users
+                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    // Use empty string check since encryption_public_key might be "" for old clients
+                    let enc_key = if from_encryption_public_key.is_empty() { None } else { Some(&from_encryption_public_key) };
                     if let Err(e) = conn.execute(
-                        "UPDATE users SET display_name = ?1, updated_at = ?2 WHERE id = ?3",
+                        "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                         ON CONFLICT(public_key) DO UPDATE SET
+                            display_name = excluded.display_name,
+                            encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+                            updated_at = excluded.updated_at",
                         rusqlite::params![
-                            &from_display_name,
-                            chrono::Utc::now().to_rfc3339(),
                             friend_user_id,
+                            &from_display_name,
+                            &from_public_key,
+                            enc_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
                         ],
                     ) {
-                        println!("[IROH] Warning: Failed to update friend display name: {}", e);
+                        println!("[IROH] Warning: Failed to create/update friend user: {}", e);
                     } else {
-                        println!("[IROH] Updated friend display name to {}", from_display_name);
+                        println!("[IROH] [OK] Created/updated friend user with display name: {} (enc_key: {})",
+                            from_display_name, if enc_key.is_some() { "yes" } else { "no" });
                     }
                 }
 
                 // Update our pending request to accepted (check both directions for safety)
                 // Also save their node_id and relay_url for reconnection
-                // Use try_lock to avoid blocking async runtime
-                if let Ok(conn) = self.db.conn.try_lock() {
+                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+                {
+                    let conn = self.db.conn.lock().unwrap();
                     let now = chrono::Utc::now().to_rfc3339();
                     println!("[IROH] Updating p2p_connections: user_id={}, friend_user_id={}", self.user_id, friend_user_id);
 
@@ -2911,8 +2990,6 @@ impl IrohNetwork {
                             }
                         }
                     }
-                } else {
-                    println!("[IROH] DB busy - skipping FriendAccepted processing");
                 }
 
                 // Emit event to UI so it can refresh the friends list
@@ -2968,6 +3045,169 @@ impl IrohNetwork {
                     }
                     Err(e) => {
                         println!("[HEARTBEAT] Failed to parse node_id from heartbeat: {}", e);
+                    }
+                }
+            }
+
+            P2PMessage::Content {
+                content_type,
+                user_id: sender_user_id,
+                public_key,
+                node_id,
+                payload_json,
+                timestamp,
+                device_id,
+                blob_refs,
+            } => {
+                println!("[IROH] Received Content({}) from {}", content_type, public_key);
+
+                // Ensure sender exists in database
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    let now = chrono::Utc::now().to_rfc3339();
+
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            sender_user_id,
+                            format!("User_{}", &public_key[..8.min(public_key.len())]),
+                            &public_key,
+                            &now,
+                            &now
+                        ],
+                    );
+                }
+
+                // Handle based on content_type
+                match content_type.as_str() {
+                    "post" => {
+                        // Parse post payload
+                        #[derive(serde::Deserialize)]
+                        struct PostPayload {
+                            content: String,
+                        }
+                        if let Ok(payload) = serde_json::from_str::<PostPayload>(&payload_json) {
+                            // Emit post event via sealed-post-received
+                            let _ = self.app_handle.emit(
+                                "p2p-post-with-blobs",
+                                serde_json::json!({
+                                    "userId": sender_user_id.to_string(),
+                                    "publicKey": public_key,
+                                    "nodeId": node_id,
+                                    "content": payload.content,
+                                    "timestamp": timestamp,
+                                    "deviceId": device_id,
+                                    "blobRefs": blob_refs
+                                }),
+                            );
+                            println!("[IROH] ✓ Emitted Content(post) event");
+                        }
+                    }
+                    "comment" => {
+                        // Parse comment payload
+                        #[derive(serde::Deserialize)]
+                        struct CommentPayload {
+                            comment_id: String,
+                            post_id: String,
+                            content: String,
+                            parent_comment_id: Option<String>,
+                        }
+                        if let Ok(payload) = serde_json::from_str::<CommentPayload>(&payload_json) {
+                            let comment_uuid = super::types::SqliteUuid::parse_str(&payload.comment_id).ok();
+                            let post_uuid = super::types::SqliteUuid::parse_str(&payload.post_id).ok();
+                            let parent_uuid = payload.parent_comment_id.as_ref().and_then(|id| {
+                                super::types::SqliteUuid::parse_str(id).ok()
+                            });
+
+                            if let (Some(comment_id), Some(post_id)) = (comment_uuid, post_uuid) {
+                                // Save comment
+                                {
+                                    let conn = self.db.conn.lock().unwrap();
+                                    let now = chrono::Utc::now().to_rfc3339();
+                                    if let Err(e) = conn.execute(
+                                        "INSERT OR IGNORE INTO post_comments (id, post_id, user_id, content, parent_comment_id, created_at, updated_at)
+                                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                                        rusqlite::params![comment_id, post_id, sender_user_id, &payload.content, parent_uuid, &now, &now],
+                                    ) {
+                                        println!("[IROH] Warning: Failed to save comment: {}", e);
+                                    } else {
+                                        println!("[IROH] ✓ Saved Content(comment) to database");
+                                    }
+                                }
+
+                                // Emit to UI
+                                let _ = self.app_handle.emit(
+                                    "p2p-post-comment",
+                                    serde_json::json!({
+                                        "commentId": payload.comment_id,
+                                        "postId": payload.post_id,
+                                        "userId": sender_user_id.to_string(),
+                                        "publicKey": public_key,
+                                        "content": payload.content,
+                                        "parentCommentId": payload.parent_comment_id,
+                                        "timestamp": timestamp
+                                    }),
+                                );
+                                println!("[IROH] ✓ Emitted Content(comment) event");
+                            }
+                        }
+                    }
+                    "reaction" => {
+                        // Parse reaction payload
+                        #[derive(serde::Deserialize)]
+                        struct ReactionPayload {
+                            post_id: String,
+                            emoji: String,
+                            action: String,
+                        }
+                        if let Ok(payload) = serde_json::from_str::<ReactionPayload>(&payload_json) {
+                            if let Ok(post_uuid) = super::types::SqliteUuid::parse_str(&payload.post_id) {
+                                // Save or remove reaction
+                                {
+                                    let conn = self.db.conn.lock().unwrap();
+                                    let now = chrono::Utc::now().to_rfc3339();
+
+                                    if payload.action == "add" {
+                                        if let Err(e) = conn.execute(
+                                            "INSERT OR REPLACE INTO post_reactions (id, post_id, user_id, emoji, created_at)
+                                             VALUES (?1, ?2, ?3, ?4, ?5)",
+                                            rusqlite::params![super::types::SqliteUuid::new(), post_uuid, sender_user_id, &payload.emoji, &now],
+                                        ) {
+                                            println!("[IROH] Warning: Failed to save reaction: {}", e);
+                                        } else {
+                                            println!("[IROH] ✓ Saved Content(reaction) to database");
+                                        }
+                                    } else if payload.action == "remove" {
+                                        if let Err(e) = conn.execute(
+                                            "DELETE FROM post_reactions WHERE post_id = ?1 AND user_id = ?2",
+                                            rusqlite::params![post_uuid, sender_user_id],
+                                        ) {
+                                            println!("[IROH] Warning: Failed to remove reaction: {}", e);
+                                        } else {
+                                            println!("[IROH] ✓ Removed Content(reaction) from database");
+                                        }
+                                    }
+                                }
+
+                                // Emit to UI
+                                let _ = self.app_handle.emit(
+                                    "p2p-post-reaction",
+                                    serde_json::json!({
+                                        "postId": payload.post_id,
+                                        "userId": sender_user_id.to_string(),
+                                        "publicKey": public_key,
+                                        "emoji": payload.emoji,
+                                        "action": payload.action,
+                                        "timestamp": timestamp
+                                    }),
+                                );
+                                println!("[IROH] ✓ Emitted Content(reaction) event");
+                            }
+                        }
+                    }
+                    _ => {
+                        println!("[IROH] Unknown content_type: {}", content_type);
                     }
                 }
             }
@@ -3068,38 +3308,33 @@ impl IrohNetwork {
         // Query for connections where status='accepted' and initiated_by != our user_id
         // These are connections where someone else sent us a friend request and we accepted
         // Join with users table to get the friend's public_key
-        // Use try_lock to avoid blocking async runtime
-        let accepted_connections: Vec<(String, String)> = match self.db.conn.try_lock() {
-            Ok(conn) => {
-                let stmt_result = conn.prepare(
-                    "SELECT p.friend_user_id, u.public_key FROM p2p_connections p
-                     JOIN users u ON p.friend_user_id = u.id
-                     WHERE p.user_id = ?1 AND p.status = 'accepted' AND p.initiated_by != ?1"
-                );
+        // NOTE: Using lock() instead of try_lock() for reliable resend behavior
+        let accepted_connections: Vec<(String, String)> = {
+            let conn = self.db.conn.lock().unwrap();
+            let stmt_result = conn.prepare(
+                "SELECT p.friend_user_id, u.public_key FROM p2p_connections p
+                 JOIN users u ON p.friend_user_id = u.id
+                 WHERE p.user_id = ?1 AND p.status = 'accepted' AND p.initiated_by != ?1"
+            );
 
-                match stmt_result {
-                    Ok(mut stmt) => {
-                        let rows = stmt.query_map(rusqlite::params![self.user_id.to_string()], |row| {
-                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                        });
+            match stmt_result {
+                Ok(mut stmt) => {
+                    let rows = stmt.query_map(rusqlite::params![self.user_id.to_string()], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    });
 
-                        match rows {
-                            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
-                            Err(e) => {
-                                println!("[FRIEND-RESEND] Query failed: {}", e);
-                                Vec::new()
-                            }
+                    match rows {
+                        Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+                        Err(e) => {
+                            println!("[FRIEND-RESEND] Query failed: {}", e);
+                            Vec::new()
                         }
                     }
-                    Err(e) => {
-                        println!("[FRIEND-RESEND] Failed to prepare query: {}", e);
-                        Vec::new()
-                    }
                 }
-            }
-            Err(_) => {
-                println!("[FRIEND-RESEND] DB busy - skipping friend accept resend check");
-                Vec::new()
+                Err(e) => {
+                    println!("[FRIEND-RESEND] Failed to prepare query: {}", e);
+                    Vec::new()
+                }
             }
         };
 
@@ -3129,12 +3364,16 @@ impl IrohNetwork {
             return;
         };
 
+        // Get our encryption public key for sealed envelope encryption
+        let our_encryption_public_key = self.get_user_encryption_public_key().unwrap_or_default();
+
         for (friend_user_id, friend_public_key) in accepted_connections {
             println!("[FRIEND-RESEND] Resending FriendAccepted to {} ({})", friend_user_id, friend_public_key);
 
             let friend_accepted = P2PMessage::FriendAccepted {
                 from_user_id: self.user_id,
                 from_public_key: self.public_key.clone(),
+                from_encryption_public_key: our_encryption_public_key.clone(),
                 from_display_name: self.display_name.clone(),
                 from_node_id: our_node_id.clone(),
                 from_relay_url: our_relay_url.clone(),
@@ -3245,7 +3484,19 @@ impl IrohNetwork {
 
     /// Get current user's encryption public key from database
     fn get_user_encryption_public_key(&self) -> Option<String> {
-        let conn = self.db.conn.lock().unwrap();
+        // Use try_lock to avoid blocking if network handler holds the lock
+        let conn = match self.db.conn.try_lock() {
+            Ok(c) => c,
+            Err(_) => {
+                println!("[DB] get_user_encryption_public_key: lock busy, retrying...");
+                // One retry after short wait
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                match self.db.conn.try_lock() {
+                    Ok(c) => c,
+                    Err(_) => return None,
+                }
+            }
+        };
         conn.query_row(
             "SELECT encryption_public_key FROM users WHERE id = ?1",
             rusqlite::params![self.user_id],
@@ -3257,7 +3508,18 @@ impl IrohNetwork {
 
     /// Get current user's encryption private key from database
     fn get_user_encryption_private_key(&self) -> Option<String> {
-        let conn = self.db.conn.lock().unwrap();
+        // Use try_lock to avoid blocking if network handler holds the lock
+        let conn = match self.db.conn.try_lock() {
+            Ok(c) => c,
+            Err(_) => {
+                println!("[DB] get_user_encryption_private_key: lock busy, retrying...");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                match self.db.conn.try_lock() {
+                    Ok(c) => c,
+                    Err(_) => return None,
+                }
+            }
+        };
         conn.query_row(
             "SELECT encryption_private_key FROM users WHERE id = ?1",
             rusqlite::params![self.user_id],
@@ -3269,20 +3531,77 @@ impl IrohNetwork {
 
     /// Get friend encryption public keys for creating sealed envelopes
     pub fn get_friend_encryption_public_keys(&self) -> Vec<String> {
-        let conn = self.db.conn.lock().unwrap();
+        // Use try_lock to avoid blocking if network handler holds the lock
+        let conn = match self.db.conn.try_lock() {
+            Ok(c) => c,
+            Err(_) => {
+                println!("[DB] get_friend_encryption_public_keys: lock busy, retrying...");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                match self.db.conn.try_lock() {
+                    Ok(c) => c,
+                    Err(_) => {
+                        println!("[DB] get_friend_encryption_public_keys: lock still busy, returning empty");
+                        return vec![];
+                    }
+                }
+            }
+        };
+
+        // DEBUG: Log all p2p_connections for this user
+        println!("[DEBUG-KEYS] Looking up encryption keys for user_id: {}", self.user_id);
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT friend_user_id, status FROM p2p_connections WHERE user_id = ?1"
+        ) {
+            if let Ok(rows) = stmt.query_map(rusqlite::params![self.user_id], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?))
+            }) {
+                for row in rows.flatten() {
+                    let friend_id = super::types::SqliteUuid::from_bytes(row.0.try_into().unwrap_or([0u8; 16]));
+                    println!("[DEBUG-KEYS]   p2p_connection: friend_user_id={}, status={}", friend_id, row.1);
+                }
+            }
+        }
+
+        // DEBUG: Log all users with encryption_public_key
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT id, public_key, encryption_public_key FROM users WHERE encryption_public_key IS NOT NULL"
+        ) {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            }) {
+                for row in rows.flatten() {
+                    let user_id = super::types::SqliteUuid::from_bytes(row.0.try_into().unwrap_or([0u8; 16]));
+                    println!("[DEBUG-KEYS]   user with enc_key: id={}, public_key={}..., enc_key={}...",
+                        user_id, &row.1[..8.min(row.1.len())], &row.2[..8.min(row.2.len())]);
+                }
+            }
+        }
+
+        // CRITICAL: Check BOTH directions of the friendship relationship
+        // Connection can be stored as (user_id=me, friend_user_id=them) OR (user_id=them, friend_user_id=me)
+        // depending on who initiated the friend request
         let mut stmt = match conn.prepare(
             "SELECT u.encryption_public_key FROM users u
-             INNER JOIN p2p_connections p ON u.id = p.friend_user_id
-             WHERE p.user_id = ?1 AND p.status = 'accepted' AND u.encryption_public_key IS NOT NULL"
+             INNER JOIN p2p_connections p ON
+                (u.id = p.friend_user_id AND p.user_id = ?1) OR
+                (u.id = p.user_id AND p.friend_user_id = ?1)
+             WHERE p.status = 'accepted' AND u.encryption_public_key IS NOT NULL AND u.id != ?1"
         ) {
             Ok(s) => s,
-            Err(_) => return vec![],
+            Err(e) => {
+                println!("[DEBUG-KEYS] Failed to prepare query: {}", e);
+                return vec![];
+            }
         };
 
         let result: Vec<String> = match stmt.query_map(rusqlite::params![self.user_id], |row| row.get(0)) {
             Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-            Err(_) => vec![],
+            Err(e) => {
+                println!("[DEBUG-KEYS] Query failed: {}", e);
+                vec![]
+            }
         };
+        println!("[DEBUG-KEYS] Final result: {} encryption keys found", result.len());
         result
     }
 
