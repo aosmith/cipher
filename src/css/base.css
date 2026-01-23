@@ -1,0 +1,230 @@
+/* ========================================
+   BASE.CSS - Reset, Variables, Utilities
+   ======================================== */
+
+/* Universal Reset and Base Styles */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    /* Hide scrollbars across all browsers */
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;     /* Firefox */
+}
+
+*::-webkit-scrollbar {
+    display: none; /* WebKit browsers */
+}
+
+html {
+    overflow: hidden;
+    scroll-behavior: smooth;
+    height: 100vh;
+}
+
+body {
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden;
+    font-family: var(--font-family-primary);
+    background-color: var(--color-background);
+    background-image:
+        radial-gradient(circle at top left, rgba(var(--color-accent-rgb), 0.12), transparent 40%),
+        linear-gradient(rgba(var(--color-accent-rgb), 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(var(--color-accent-rgb), 0.02) 1px, transparent 1px),
+        linear-gradient(rgba(var(--color-accent-rgb), 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(var(--color-accent-rgb), 0.04) 1px, transparent 1px);
+    background-size: 100% 100%, 20px 20px, 20px 20px, 100px 100px, 100px 100px;
+    background-position: 0 0, -1px -1px, -1px -1px, -1px -1px, -1px -1px;
+    color: var(--color-text-primary);
+    height: 100vh;
+    width: 100vw;
+    position: fixed;
+    top: 0;
+    left: 0;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.container {
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: hidden;
+    position: fixed;
+    top: 0;
+    left: 0;
+    /* Golden ratio proportions for better visual balance */
+    --golden-section: 0.618; /* φ - 1 */
+    --golden-ratio: 1.618;   /* φ */
+}
+
+/* CSS Variables */
+:root {
+    /* Golden Ratio Spacing Scale (φ ≈ 1.618) */
+    --spacing-micro: 1px;
+    --spacing-mini: 3px;
+    --spacing-xs: 4px;
+    --spacing-sm: 6px;
+    --spacing-md: 10px;
+    --spacing-lg: 16px;
+    --spacing-xl: 26px;
+    --spacing-2xl: 42px;
+    --spacing-3xl: 68px;
+    --spacing-4xl: 110px;
+    --spacing-5xl: 178px;
+    --spacing-6xl: 288px;
+
+    /* Modern brand palette - inspired by iOS 18 and macOS Sequoia */
+    --color-primary: #007aff;
+    --color-primary-hover: #0051d5;
+    --color-primary-rgb: 0, 122, 255;
+    --color-primary-dark: #0040dd;
+    --color-primary-light: #5ac8fa;
+    --color-accent: #64f4ac;
+    --color-accent-rgb: 100, 244, 172;
+    --color-accent-secondary: #af52de;
+
+    /* Apple Liquid Glass color system - Dark theme */
+    --color-background: #090c12;
+    --color-background-rgb: 9, 12, 18;
+    --color-background-secondary: #10131a;
+    --color-surface: rgba(28, 28, 30, 0.64);
+    --color-surface-secondary: rgba(44, 44, 46, 0.68);
+    --color-surface-tertiary: rgba(58, 58, 60, 0.72);
+    --color-surface-hover: rgba(72, 72, 74, 0.76);
+    --color-border: rgba(84, 84, 88, 0.48);
+    --color-border-hover: rgba(99, 99, 102, 0.52);
+
+    /* Apple glass materials with modern colors */
+    --glass-regular: rgba(255, 255, 255, 0.05);
+    --glass-regular-border: rgba(255, 255, 255, 0.12);
+    --glass-clear: rgba(255, 255, 255, 0.03);
+    --glass-clear-border: rgba(255, 255, 255, 0.08);
+    --glass-tinted: rgba(0, 122, 255, 0.08);
+    --glass-tinted-border: rgba(0, 122, 255, 0.16);
+    --glass-accent: rgba(94, 92, 230, 0.06);
+    --glass-accent-border: rgba(94, 92, 230, 0.14);
+
+    /* Additional glass materials for components */
+    --glass-lighter: rgba(255, 255, 255, 0.02);
+    --glass-border: rgba(255, 255, 255, 0.15);
+    --glass-heavy: rgba(30, 30, 40, 0.95);
+    --glass-highlight: rgba(0, 122, 255, 0.15);
+
+    /* Dark theme text colors */
+    --color-text-primary: #ffffff;
+    --color-text-secondary: rgba(255, 255, 255, 0.68);
+    --color-text-tertiary: rgba(255, 255, 255, 0.55);
+    --color-text-quaternary: rgba(255, 255, 255, 0.36);
+    --color-text-inverse: #000000;
+    --color-text-muted: rgba(255, 255, 255, 0.5);
+
+    /* Dark theme status colors */
+    --color-success: #30d158;
+    --color-success-light: rgba(48, 209, 88, 0.12);
+    --color-error: #ff453a;
+    --color-error-light: rgba(255, 69, 58, 0.12);
+    --color-warning: #ff9f0a;
+    --color-warning-light: rgba(255, 159, 10, 0.12);
+    --color-danger: #ff3a30;
+    --color-white: #ffffff;
+
+    /* Accent color aliases (for consistency) */
+    --accent-primary: var(--color-primary);
+    --accent-primary-rgb: var(--color-primary-rgb);
+    --accent-secondary: var(--color-accent-secondary);
+    --accent-warning: var(--color-warning);
+
+    /* Typography - Apple system fonts */
+    --font-family-primary: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+    --font-size-xs: 0.625rem;
+    --font-size-sm: 0.75rem;
+    --font-size-base: 1rem;
+    --font-size-lg: 1.25rem;
+    --font-size-xl: 1.618rem;
+    --font-size-2xl: 2.058rem;
+    --font-size-3xl: 2.618rem;
+    --font-weight-normal: 400;
+    --font-weight-medium: 500;
+    --font-weight-semibold: 600;
+    --font-weight-bold: 700;
+
+    /* Border radius */
+    --border-radius-sm: 6px;
+    --border-radius-md: 8px;
+    --border-radius-lg: 12px;
+    --border-radius-xl: 16px;
+    --border-radius-2xl: 20px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+
+    /* Apple Liquid Glass shadows and blur */
+    --blur-regular: 20px;
+    --blur-strong: 32px;
+    --blur-subtle: 12px;
+    --shadow-glass-sm: 0 1px 4px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+    --shadow-glass-md: 0 4px 12px rgba(0, 0, 0, 0.15), 0 2px 6px rgba(0, 0, 0, 0.25);
+    --shadow-glass-lg: 0 8px 24px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.28);
+    --shadow-glass-xl: 0 16px 48px rgba(0, 0, 0, 0.22), 0 8px 24px rgba(0, 0, 0, 0.32);
+
+    /* Transitions */
+    --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-smooth: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-slow: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Layout - Consistent max-width system */
+    --container-max-width: 64rem;  /* 1024px - main container */
+    --content-max-width: 800px;     /* Feed posts, main content */
+    --form-max-width: 600px;        /* Create forms, edit forms */
+    --auth-max-width: 480px;        /* Login/signup forms */
+    --button-max-width: 200px;      /* Standard buttons */
+    --button-max-width-mobile: 400px; /* Mobile buttons */
+    --mobile-padding: 1rem;
+    --desktop-padding: 2rem;
+
+    /* Elevated surface for modals */
+    --color-surface-elevated: rgba(40, 40, 45, 0.95);
+}
+
+/* Utility Classes */
+.hidden {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+}
+
+/* App Loading State - prevents flash of login screen */
+body.app-loading .content {
+    opacity: 0;
+}
+
+body:not(.app-loading) .content {
+    opacity: 1;
+    transition: opacity 0.2s ease-in;
+}
+
+.text-center {
+    text-align: center;
+}
+
+/* Screen reader only - for accessibility */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}

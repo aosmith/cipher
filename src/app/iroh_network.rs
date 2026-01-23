@@ -515,10 +515,11 @@ impl IrohNetwork {
         }
         println!("[IROH] [OK] Subscribed to global content topic");
 
-        // Start presence announcements and heartbeat
+        // Start presence announcements, heartbeat, and periodic sync
         self.start_presence_loop();
         self.start_heartbeat_sender();
         self.start_heartbeat_monitor();
+        self.start_periodic_device_sync();
 
         // Actively try to connect to discovered peers via direct connection attempts
         // This helps bootstrap the gossip mesh using stored peer addresses
@@ -1348,14 +1349,45 @@ impl IrohNetwork {
         println!("[IROH] Started presence announcement loop (includes FriendAccepted retry)");
     }
 
+    /// Start periodic device sync loop
+    /// Regularly requests sync from other devices with same user account
+    /// Ensures posts, comments, reactions stay in sync even if presence detection is delayed
+    fn start_periodic_device_sync(&self) {
+        let network = Arc::new(self.clone_for_background());
+        let shutdown_flag = self.shutdown_flag.clone();
+
+        tokio::spawn(async move {
+            // Initial delay before first sync request
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+            // Sync every 30 seconds
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+
+            loop {
+                interval.tick().await;
+
+                // Check if we should stop
+                if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("[IROH-SYNC] Periodic sync loop stopping due to shutdown flag");
+                    break;
+                }
+
+                // Request sync from other same-user devices
+                network.request_device_sync().await;
+            }
+        });
+
+        println!("[IROH] Started periodic device sync loop (every 30s)");
+    }
+
     /// Actively discover peers using Pkarr rendezvous DHT key
     /// All Cipher nodes publish to and query from a well-known rendezvous point
     fn start_active_peer_discovery(&self) {
         let network = Arc::new(self.clone_for_background());
 
         tokio::spawn(async move {
-            // Wait for endpoint to be fully initialized
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            // Brief delay to allow endpoint initialization (reduced from 5s for faster reconnection)
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
             println!("[IROH-RENDEZVOUS] Starting Pkarr-based peer discovery...");
 
@@ -1814,8 +1846,10 @@ impl IrohNetwork {
                     if let Some(status) = existing_status {
                         println!("[IROH] Existing connection with peer {} has status: {}", peer_user_id, status);
 
-                        // Save peer address (NodeId + relay URL) for reconnection
+                        // CRITICAL: Always update NodeId for reconnection - even if relay_url is missing
+                        // This ensures the discovery loop has the correct NodeId after peer wipes/restarts
                         if let Some(relay_url) = node_addr.relay_url() {
+                            // Have relay URL: update both NodeId and relay URL
                             let relay_url_str = relay_url.to_string();
                             if let Err(e) = self.db.save_friend_peer_address(
                                 self.user_id,
@@ -1826,6 +1860,17 @@ impl IrohNetwork {
                                 println!("[IROH] Warning: Failed to save friend peer address: {}", e);
                             } else {
                                 println!("[IROH] [OK] Friend peer address saved for reconnection: NodeId={}, Relay={}", node_id_str, relay_url_str);
+                            }
+                        } else {
+                            // No relay URL: update just the NodeId, preserve existing relay URL
+                            if let Err(e) = self.db.update_friend_node_id(
+                                self.user_id,
+                                peer_user_id,
+                                &node_id_str,
+                            ) {
+                                println!("[IROH] Warning: Failed to update friend NodeId: {}", e);
+                            } else {
+                                println!("[IROH] [OK] Friend NodeId updated for reconnection: {}", node_id_str);
                             }
                         }
 
@@ -3842,6 +3887,27 @@ impl IrohNetwork {
         (is_healthy, needs_reconnect, status)
     }
 
+    /// Request device sync from other devices with the same user account
+    /// Called after recovery to catch up on any content missed while disconnected
+    async fn request_device_sync(&self) {
+        println!("[IROH-SYNC] Requesting device sync after recovery...");
+
+        let sync_request = P2PMessage::DeviceSyncRequest {
+            public_key: self.public_key.clone(),
+            device_id: self
+                .device_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            last_sync_timestamp: 0, // Get all data
+        };
+
+        if let Err(e) = self.publish_message(CONTENT_TOPIC, sync_request).await {
+            println!("[IROH-SYNC] Failed to send device sync request: {}", e);
+        } else {
+            println!("[IROH-SYNC] Device sync request broadcast to mesh");
+        }
+    }
+
     /// Recover network connectivity without full reinitialization
     /// This is faster than full shutdown+init and preserves NAT traversal state
     pub async fn recover(&self) -> Result<(), String> {
@@ -3865,6 +3931,7 @@ impl IrohNetwork {
         self.start_presence_loop();
         self.start_heartbeat_sender();
         self.start_heartbeat_monitor();
+        self.start_periodic_device_sync();
 
         // Announce presence immediately
         if let Err(e) = self.announce_presence().await {
@@ -3876,6 +3943,10 @@ impl IrohNetwork {
 
         // Try to reconnect to known peers
         self.start_active_peer_discovery();
+
+        // Send device sync request to catch up on any missed content
+        // This ensures we sync even if we missed presence announcements while disconnected
+        self.request_device_sync().await;
 
         println!("[IROH-RECOVER] Recovery complete");
         Ok(())

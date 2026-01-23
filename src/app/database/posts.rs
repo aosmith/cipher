@@ -357,6 +357,7 @@ impl Database {
             post_id,
             user_id,
             display_name: None, // Will be populated when fetching
+            public_key: None,   // Will be populated when fetching
             content: content.to_string(),
             parent_comment_id,
             created_at: now.clone(),
@@ -368,7 +369,7 @@ impl Database {
     pub fn get_post_comments(&self, post_id: SqliteUuid) -> SqliteResult<Vec<PostComment>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.post_id, c.user_id, u.display_name, c.content, c.parent_comment_id, c.created_at, c.updated_at
+            "SELECT c.id, c.post_id, c.user_id, u.display_name, u.public_key, c.content, c.parent_comment_id, c.created_at, c.updated_at
              FROM post_comments c
              LEFT JOIN users u ON c.user_id = u.id
              WHERE c.post_id = ?1 AND c.parent_comment_id IS NULL
@@ -381,6 +382,7 @@ impl Database {
                 post_id: row.get("post_id")?,
                 user_id: row.get("user_id")?,
                 display_name: row.get("display_name")?,
+                public_key: row.get("public_key")?,
                 content: row.get("content")?,
                 parent_comment_id: row.get("parent_comment_id")?,
                 created_at: row.get("created_at")?,
@@ -402,7 +404,7 @@ impl Database {
     ) -> SqliteResult<Vec<PostComment>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT c.id, c.post_id, c.user_id, u.display_name, c.content, c.parent_comment_id, c.created_at, c.updated_at
+            "SELECT c.id, c.post_id, c.user_id, u.display_name, u.public_key, c.content, c.parent_comment_id, c.created_at, c.updated_at
              FROM post_comments c
              LEFT JOIN users u ON c.user_id = u.id
              WHERE c.parent_comment_id = ?1
@@ -415,6 +417,7 @@ impl Database {
                 post_id: row.get("post_id")?,
                 user_id: row.get("user_id")?,
                 display_name: row.get("display_name")?,
+                public_key: row.get("public_key")?,
                 content: row.get("content")?,
                 parent_comment_id: row.get("parent_comment_id")?,
                 created_at: row.get("created_at")?,

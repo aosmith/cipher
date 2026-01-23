@@ -150,25 +150,6 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
-    // Create voice_messages table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS voice_messages (
-            id BLOB PRIMARY KEY,
-            sender_id BLOB NOT NULL,
-            recipient_id BLOB NOT NULL,
-            audio_data TEXT NOT NULL,
-            duration_seconds REAL NOT NULL,
-            waveform TEXT,
-            encrypted BOOLEAN DEFAULT 1,
-            thread_id BLOB,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (sender_id) REFERENCES users (id),
-            FOREIGN KEY (recipient_id) REFERENCES users (id),
-            FOREIGN KEY (thread_id) REFERENCES messages (id)
-        )",
-        [],
-    )?;
-
     // Create friend_invites table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS friend_invites (

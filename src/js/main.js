@@ -25,19 +25,34 @@ function formatNameWithFingerprint(displayName, publicKey) {
 }
 
 // Helper function to get display name for a user ID
-function getDisplayName(userId) {
+// Can optionally pass publicKey for more reliable lookup (IDs may not match across devices)
+function getDisplayName(userId, publicKey) {
     if (!userId) return 'Unknown';
     if (currentUser && userId === currentUser.id) return 'You';
 
-    // Look up friend by ID
-    const friend = allFriends.find(f => f.id === userId);
+    // Look up friend by ID first
+    let friend = allFriends.find(f => f.id === userId);
+
+    // Fallback: look up by public key (more reliable for P2P content)
+    if (!friend && publicKey) {
+        friend = allFriends.find(f => f.publicKey === publicKey);
+    }
+
     if (friend) {
         return formatNameWithFingerprint(friend.displayName, friend.publicKey);
     }
 
-    // Fallback: show truncated ID
+    // If friends list is empty, we're still loading - show syncing message
+    if (allFriends.length === 0) {
+        return 'Syncing Identity...';
+    }
+
+    // Fallback for non-friends: show truncated public key
+    if (publicKey) {
+        return `User_${publicKey.substring(0, 8)}`;
+    }
     const idStr = String(userId);
-    return idStr.length > 8 ? idStr.substring(0, 8) + '...' : idStr;
+    return idStr.length > 8 ? `User_${idStr.substring(0, 8)}` : idStr;
 }
 
 // Removed legacy WebSocket notification system - now using WebRTC P2P
@@ -485,7 +500,7 @@ function showLogin() {
     }, 100);
 }
 
-function showDashboard() {
+async function showDashboard() {
     console.log('[DASHBOARD] showDashboard called');
     document.getElementById('loginForm').classList.add('hidden');
     document.getElementById('dashboard').classList.remove('hidden');
@@ -499,6 +514,16 @@ function showDashboard() {
     }
     UI.clearErrors();
     UI.updateUserInterface();
+    // Load friends list early so display names work for comments
+    if (currentUser) {
+        try {
+            const friends = await TauriAPI.invoke('get_friends', { userId: currentUser.id });
+            allFriends = friends;
+            console.log('[DASHBOARD] Loaded friends for display names:', friends.length);
+        } catch (e) {
+            console.warn('[DASHBOARD] Failed to load friends:', e);
+        }
+    }
     console.log('[DASHBOARD] About to call loadPosts');
     loadPosts();
     console.log('[DASHBOARD] About to call showFeed');
@@ -1034,8 +1059,41 @@ async function handleLogout() {
         console.error('Failed to stop P2P server:', error);
     }
 
+    // Reset all global state
     currentUser = null;
+    allFriends = [];
+    selectedRecipients = [];
+    pendingAuthUser = null;
+
+    // Clear session storage
     Session.clear();
+
+    // Reset login form UI to fresh state
+    const createBtn = document.getElementById('createAccountBtn');
+    if (createBtn) {
+        createBtn.disabled = false;
+        createBtn.textContent = 'Create New Account';
+    }
+
+    const displayNameInput = document.getElementById('newDisplayName');
+    if (displayNameInput) {
+        displayNameInput.value = '';
+    }
+
+    const recoveryInput = document.getElementById('recoveryPhraseInput');
+    if (recoveryInput) {
+        recoveryInput.value = '';
+    }
+
+    // Clear any messages
+    UI.clearErrors();
+    const loginSuccess = document.getElementById('loginSuccess');
+    if (loginSuccess) loginSuccess.textContent = '';
+
+    // Hide any open modals
+    const recoveryModal = document.getElementById('recoveryPhraseModal');
+    if (recoveryModal) recoveryModal.classList.add('hidden');
+
     showLogin();
 }
 
@@ -1553,7 +1611,7 @@ const PostInteractions = {
     renderComment(comment, postId) {
         const isOwn = currentUser && comment.userId === currentUser.id;
         const timeAgo = this.formatTimeAgo(new Date(comment.createdAt));
-        const displayName = getDisplayName(comment.userId);
+        const displayName = getDisplayName(comment.userId, comment.publicKey);
 
         return `
             <div class="comment" data-comment-id="${comment.id}" style="margin-left: ${(comment.depth || 0) * 20}px">
@@ -2374,7 +2432,6 @@ async function loadMessages() {
         setupFriendSearch();
 
         const messages = await TauriAPI.invoke('get_messages_for_user', { userId: currentUser.id });
-        const voiceMessages = await TauriAPI.invoke('get_voice_messages', { userId: currentUser.id });
 
         // Auto-mark all messages as read when viewing messages tab
         // This marks all messages from all friends as read
@@ -2390,8 +2447,13 @@ async function loadMessages() {
         }
         const messagesContainer = document.getElementById('messages');
 
-        if (messages.length === 0 && voiceMessages.length === 0) {
-            messagesContainer.innerHTML = '<p class="text-center">No messages yet.</p>';
+        if (messages.length === 0) {
+            messagesContainer.innerHTML = `
+                <div class="chat-empty">
+                    <div class="chat-empty-icon">💬</div>
+                    <p>No messages yet</p>
+                    <p style="font-size: var(--font-size-sm);">Select a friend and start chatting!</p>
+                </div>`;
         } else {
             // Process messages to load reactions and read receipts for each
             const messagesWithReactions = await Promise.all(messages.map(async (message) => {
@@ -2418,67 +2480,38 @@ async function loadMessages() {
                 }
             }));
 
-            // Combine and sort messages and voice messages by timestamp
-            const allMessages = [
-                ...messagesWithReactions.map(msg => ({ ...msg, type: 'text' })),
-                ...voiceMessages.map(msg => ({ ...msg, type: 'voice' }))
-            ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            // Sort messages oldest first (newest at bottom like chat apps)
+            const allMessages = messagesWithReactions.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
             messagesContainer.innerHTML = allMessages.map(message => {
-                if (message.type === 'voice') {
-                    return `
-                        <div class="post glass-card hover-lift-md voice-message-post" data-voice-id="${message.id}">
-                            <div class="post-meta">
-                                ${getDisplayName(message.senderId)}
-                                → ${getDisplayName(message.recipientId)}
-                                • ${new Date(message.createdAt).toLocaleDateString()}
-                                • 🔒 Encrypted Voice Message
-                                ${message.threadId ? ` • 💬 Reply to Message ${message.threadId}` : ''}
-                            </div>
-                            <div class="post-content">
-                                ${renderVoiceMessage(message)}
-                            </div>
+                const isSent = message.senderId === currentUser.id;
+                const bubbleClass = isSent ? 'sent' : 'received';
+                const disappearInfo = message.disappearsAt ? getDisappearTimeRemaining(message.disappearsAt) : null;
+                const timeStr = new Date(message.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                const otherPerson = isSent ? getDisplayName(message.recipientId) : getDisplayName(message.senderId);
+
+                return `
+                    <div class="chat-bubble ${bubbleClass} ${disappearInfo ? 'disappearing' : ''}" data-message-id="${message.id}">
+                        <div class="bubble-sender">${isSent ? 'To: ' : ''}${otherPerson}</div>
+                        <div class="bubble-content">
+                            ${message.encrypted ? '[Encrypted]' : Utils.escapeHtml(message.content)}
                         </div>
-                    `;
-                } else {
-                    // Calculate remaining time for disappearing messages
-                    const disappearInfo = message.disappearsAt ? getDisappearTimeRemaining(message.disappearsAt) : null;
-                    return `
-                        <div class="post glass-card hover-lift-md ${disappearInfo ? 'disappearing-message' : ''}" data-message-id="${message.id}">
-                            <div class="post-meta">
-                                ${getDisplayName(message.senderId)}
-                                → ${getDisplayName(message.recipientId)}
-                                • ${new Date(message.createdAt).toLocaleDateString()}
-                                ${message.encrypted ? ' • 🔒 Encrypted' : ''}
-                                ${disappearInfo ? ` • <span class="disappear-timer" title="Disappears in ${disappearInfo}">⏱️ ${disappearInfo}</span>` : ''}
-                                ${message.threadId ? ` • 💬 Reply to Message ${message.threadId}` : ''}
-                                ${message.senderId === currentUser.id && message.isRead ? ' • <span style="color: var(--color-success)">✓✓ Read</span>' : ''}
-                            </div>
-                            <div class="post-content message-content">
-                                ${message.encrypted ? '[Encrypted Message - Click to decrypt]' : Utils.escapeHtml(message.content)}
-                            </div>
-                            <div class="message-actions">
-                                <div class="message-reactions">
-                                    ${renderMessageReactions(message.reactions)}
-                                    <button class="btn-reaction" onclick="addReaction(${message.id})">😊</button>
-                                    <button class="btn-reaction" onclick="addReaction(${message.id}, '❤️')">❤️</button>
-                                    <button class="btn-reaction" onclick="addReaction(${message.id}, '👍')">👍</button>
-                                    <button class="btn-reaction" onclick="addReaction(${message.id}, '👎')">👎</button>
-                                    <button class="btn-reaction" onclick="addReaction(${message.id}, '😂')">😂</button>
-                                </div>
-                                <div class="message-thread-actions">
-                                    <button class="btn-secondary btn-small" onclick="replyToMessage(${message.id})">💬 Reply</button>
-                                    ${message.threadId ? `<button class="btn-secondary btn-small" onclick="viewThread(${message.threadId || message.id})">🧵 View Thread</button>` : ''}
-                                    ${message.senderId === currentUser.id ? `
-                                        <button class="message-action-btn edit" onclick="editMessage(${message.id})">✏️ Edit</button>
-                                        <button class="message-action-btn delete" onclick="deleteMessage(${message.id})">🗑️ Delete</button>
-                                    ` : ''}
-                                </div>
-                            </div>
+                        <div class="bubble-meta">
+                            <span>${timeStr}${message.encrypted ? ' 🔒' : ''}${disappearInfo ? ' ⏱️' + disappearInfo : ''}${isSent && message.isRead ? ' ✓✓' : ''}</span>
                         </div>
-                    `;
-                }
+                        <div class="bubble-actions">
+                            ${renderMessageReactions(message.reactions)}
+                            <button onclick="addReaction(${message.id}, '❤️')">❤️</button>
+                            <button onclick="addReaction(${message.id}, '👍')">👍</button>
+                            <button onclick="replyToMessage(${message.id})">↩️</button>
+                            ${isSent ? `<button onclick="deleteMessage(${message.id})">🗑️</button>` : ''}
+                        </div>
+                    </div>
+                `;
             }).join('');
+
+            // Scroll to bottom to show newest messages
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
         setTimeout(() => UI.updateModalLayout(document.getElementById('messagesContent')), 100);
@@ -2588,210 +2621,6 @@ async function viewThread(threadId) {
     } catch (error) {
         console.error('Failed to load thread:', error);
         UI.showError('dashboardError', 'Failed to load thread: ' + error);
-    }
-}
-
-// Voice message functions
-let mediaRecorder = null;
-let audioChunks = [];
-let isRecording = false;
-
-async function startVoiceRecording() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = (event) => {
-            audioChunks.push(event.data);
-        };
-
-        mediaRecorder.onstop = async () => {
-            const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-            await processVoiceMessage(audioBlob);
-
-            // Stop all tracks to release microphone
-            stream.getTracks().forEach(track => track.stop());
-        };
-
-        mediaRecorder.start();
-        isRecording = true;
-
-        // Update UI
-        const recordButton = document.getElementById('voiceRecordButton');
-        if (recordButton) {
-            recordButton.textContent = '🛑 Stop Recording';
-            recordButton.onclick = stopVoiceRecording;
-            recordButton.classList.add('recording');
-        }
-
-        console.log('Voice recording started...');
-    } catch (error) {
-        console.error('Error starting voice recording:', error);
-        UI.showError('dashboardError', 'Failed to start voice recording: ' + error.message);
-    }
-}
-
-function stopVoiceRecording() {
-    if (mediaRecorder && isRecording) {
-        mediaRecorder.stop();
-        isRecording = false;
-
-        // Update UI
-        const recordButton = document.getElementById('voiceRecordButton');
-        if (recordButton) {
-            recordButton.textContent = '🎤 Record Voice Message';
-            recordButton.onclick = startVoiceRecording;
-            recordButton.classList.remove('recording');
-        }
-
-        console.log('Voice recording stopped...');
-    }
-}
-
-async function processVoiceMessage(audioBlob) {
-    if (selectedRecipients.length === 0) {
-        UI.showError('dashboardError', 'Please select at least one recipient for the voice message');
-        return;
-    }
-
-    try {
-        // Convert blob to base64
-        const reader = new FileReader();
-        reader.onload = async () => {
-            const base64Audio = reader.result.split(',')[1]; // Remove data URL prefix
-
-            // Calculate duration (approximate)
-            const duration = audioBlob.size / (16000 * 2); // Rough estimate
-
-            // Generate simple waveform data (placeholder)
-            const waveform = generateWaveformData(audioBlob);
-
-            // Check for thread context
-            const messageContentInput = document.getElementById('messageContent');
-            const replyToId = messageContentInput?.getAttribute('data-reply-to');
-
-            // Send to all selected recipients
-            const sendPromises = selectedRecipients.map(recipient =>
-                TauriAPI.invoke('send_voice_message', {
-                    senderId: currentUser.id,
-                    recipientId: recipient.id,
-                    audioData: base64Audio,
-                    durationSeconds: duration,
-                    waveform: waveform,
-                    threadId: replyToId ? parseInt(replyToId) : null
-                })
-            );
-
-            await Promise.all(sendPromises);
-
-            const count = selectedRecipients.length;
-            UI.showSuccess('dashboardError', `Voice message sent to ${count} recipient${count > 1 ? 's' : ''}!`);
-            clearSelectedRecipients();
-            await loadMessages();
-            await loadVoiceMessages();
-
-            // Clear reply context if it exists
-            if (messageContentInput) {
-                messageContentInput.removeAttribute('data-reply-to');
-                messageContentInput.placeholder = 'Enter your message';
-            }
-        };
-
-        reader.readAsDataURL(audioBlob);
-    } catch (error) {
-        console.error('Error processing voice message:', error);
-        UI.showError('dashboardError', 'Failed to send voice message: ' + error);
-    }
-}
-
-function generateWaveformData(audioBlob) {
-    // Simple placeholder waveform generation
-    // In a real implementation, you'd analyze the audio to generate actual waveform data
-    const length = Math.min(100, Math.max(20, Math.floor(audioBlob.size / 1000)));
-    const waveform = [];
-    for (let i = 0; i < length; i++) {
-        waveform.push(Math.random() * 0.8 + 0.1); // Random values between 0.1 and 0.9
-    }
-    return JSON.stringify(waveform);
-}
-
-async function loadVoiceMessages() {
-    if (!currentUser) return;
-
-    try {
-        const voiceMessages = await TauriAPI.invoke('get_voice_messages', { userId: currentUser.id });
-
-        // Voice messages will be integrated into the main messages display
-        // This function can be used to specifically load voice messages if needed
-        console.log('Voice messages loaded:', voiceMessages.length);
-
-        return voiceMessages;
-    } catch (error) {
-        console.error('Failed to load voice messages:', error);
-        return [];
-    }
-}
-
-function playVoiceMessage(audioData) {
-    try {
-        const audio = new Audio('data:audio/wav;base64,' + audioData);
-        audio.play();
-    } catch (error) {
-        console.error('Error playing voice message:', error);
-        UI.showError('dashboardError', 'Failed to play voice message');
-    }
-}
-
-async function deleteVoiceMessage(voiceMessageId) {
-    if (!currentUser) return;
-
-    try {
-        await TauriAPI.invoke('delete_voice_message', {
-            voiceMessageId,
-            userId: currentUser.id
-        });
-
-        UI.showSuccess('dashboardError', 'Voice message deleted successfully!');
-        await loadMessages();
-        await loadVoiceMessages();
-    } catch (error) {
-        console.error('Error deleting voice message:', error);
-        UI.showError('dashboardError', 'Failed to delete voice message: ' + error);
-    }
-}
-
-function renderVoiceMessage(voiceMessage) {
-    const duration = Math.floor(voiceMessage.durationSeconds);
-    const minutes = Math.floor(duration / 60);
-    const seconds = duration % 60;
-    const durationText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-
-    return `
-        <div class="voice-message" data-voice-id="${voiceMessage.id}">
-            <div class="voice-message-header">
-                <span class="voice-duration">🎵 Voice Message (${durationText})</span>
-                ${voiceMessage.senderId === currentUser?.id ?
-                    `<button class="btn-small btn-secondary" onclick="deleteVoiceMessage(${voiceMessage.id})">🗑️ Delete</button>` :
-                    ''
-                }
-            </div>
-            <div class="voice-message-controls">
-                <button class="btn-play" onclick="playVoiceMessage('${voiceMessage.audioData}')">▶️ Play</button>
-                ${voiceMessage.waveform ? `<div class="waveform">${renderWaveform(voiceMessage.waveform)}</div>` : ''}
-            </div>
-        </div>
-    `;
-}
-
-function renderWaveform(waveformData) {
-    try {
-        const waveform = JSON.parse(waveformData);
-        return waveform.map(amplitude =>
-            `<div class="waveform-bar" style="height: ${amplitude * 100}%"></div>`
-        ).join('');
-    } catch (error) {
-        return '<div class="waveform-error">Waveform unavailable</div>';
     }
 }
 
@@ -3087,11 +2916,12 @@ function setupTauriEventListeners() {
                     try {
                         const blobData = await TauriAPI.invoke('iroh_read_blob', {
                             nodeId: node_id,
-                            blobHash: blobRef.blobHash
+                            blobHash: blobRef.blobHash,
+                            encryptionKey: blobRef.encryptionKey || null
                         });
                         if (blobData) {
                             downloadedBlobs.push({ blobRef, blobData });
-                            console.log(`[EVENT] Downloaded blob ${blobRef.blobHash}`);
+                            console.log(`[EVENT] Downloaded blob ${blobRef.blobHash} (encrypted: ${!!blobRef.encryptionKey})`);
                         }
                     } catch (blobErr) {
                         console.error(`[EVENT] Failed to download blob ${blobRef.blobHash}:`, blobErr);
@@ -3289,10 +3119,23 @@ function setupFriendSearch() {
     // Render the friends list
     renderFriendsList();
 
-    // Filter on input
     if (searchInput) {
+        // Show dropdown on focus
+        searchInput.addEventListener('focus', function() {
+            friendsList.classList.remove('hidden');
+        });
+
+        // Filter on input
         searchInput.addEventListener('input', function() {
+            friendsList.classList.remove('hidden');
             renderFriendsList(this.value.toLowerCase().trim());
+        });
+
+        // Hide dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!searchInput.contains(e.target) && !friendsList.contains(e.target)) {
+                friendsList.classList.add('hidden');
+            }
         });
     }
 }
@@ -3597,7 +3440,7 @@ async function generateQRCode(containerId, options = {}) {
         console.log('═══════════════════════════════════════════════════════════════');
 
         if (qrContainer) {
-            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="Your QR Code" style="max-width: ${maxWidth}; max-height: ${maxWidth}; border-radius: var(--border-radius-md);">`;
+            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="QR" style="max-width:${maxWidth};max-height:${maxWidth};border-radius:var(--border-radius-md)"><p style="margin-top:8px;font-weight:600">${currentUser.displayName}</p>`;
         }
 
         if (showSuccess) {
@@ -3654,7 +3497,7 @@ async function generateMyQRCode() {
 
         const qrContainer = document.getElementById('myQrCode');
         if (qrContainer) {
-            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="Your QR Code" style="width: 90%; height: auto; max-width: 500px; border-radius: var(--border-radius-md);">`;
+            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="QR" style="width:90%;max-width:500px;border-radius:var(--border-radius-md)"><p style="margin-top:8px;font-weight:600">${currentUser.displayName}</p>`;
             console.log('[QR-GEN] QR code displayed successfully');
         }
 
@@ -4183,116 +4026,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         showLogin();
     }
 });
-
-// Add keyboard shortcut for message search
-document.addEventListener('DOMContentLoaded', () => {
-    const searchInput = document.getElementById('messageSearchInput');
-    if (searchInput) {
-        searchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                searchMessages();
-            }
-        });
-    }
-});
-
-// Message Search and Editing Functions
-async function searchMessages() {
-    if (!currentUser) return;
-
-    const searchInput = document.getElementById('messageSearchInput');
-    const query = searchInput.value.trim();
-
-    if (!query) {
-        UI.showError('searchResults', 'Please enter a search query');
-        return;
-    }
-
-    try {
-        const results = await TauriAPI.invoke('search_messages', {
-            userId: currentUser.id,
-            query: query
-        });
-
-        displaySearchResults(results);
-    } catch (error) {
-        console.error('Search failed:', error);
-        UI.showError('searchResults', 'Search failed: ' + error);
-    }
-}
-
-function displaySearchResults(results) {
-    const searchResultsContainer = document.getElementById('searchResults');
-
-    if (results.length === 0) {
-        searchResultsContainer.innerHTML = '<div class="no-search-results">No messages found matching your search.</div>';
-        searchResultsContainer.classList.remove('hidden');
-        return;
-    }
-
-    let resultsHTML = '';
-    results.forEach(message => {
-        const date = new Date(message.createdAt).toLocaleDateString();
-        const time = new Date(message.createdAt).toLocaleTimeString();
-
-        // For search results, we need to decrypt if encrypted
-        let contentPreview = message.content;
-        if (message.encrypted) {
-            contentPreview = '[Encrypted Message - Click to view]';
-        }
-
-        // Truncate long messages
-        if (contentPreview.length > 150) {
-            contentPreview = contentPreview.substring(0, 150) + '...';
-        }
-
-        resultsHTML += `
-            <div class="search-result-item" onclick="scrollToMessage(${message.id})">
-                <div class="search-result-content">${Utils.escapeHtml(contentPreview)}</div>
-                <div class="search-result-meta">
-                    <span class="search-result-sender">Message ID: ${message.id}</span>
-                    <span class="search-result-date">${date} ${time}</span>
-                </div>
-            </div>
-        `;
-    });
-
-    searchResultsContainer.innerHTML = resultsHTML;
-    searchResultsContainer.classList.remove('hidden');
-}
-
-function clearMessageSearch() {
-    document.getElementById('messageSearchInput').value = '';
-    document.getElementById('searchResults').classList.add('hidden');
-}
-
-function scrollToMessage(messageId) {
-    // Switch to regular messages view if in search mode
-    clearMessageSearch();
-
-    // Find the message element and scroll to it
-    const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
-    if (messageElement) {
-        messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        // Highlight the message briefly
-        messageElement.classList.add('message-highlight');
-        setTimeout(() => {
-            messageElement.classList.remove('message-highlight');
-        }, 2000);
-    } else {
-        // If message not visible, reload messages and try again
-        loadMessages().then(() => {
-            const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
-            if (messageElement) {
-                messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                messageElement.classList.add('message-highlight');
-                setTimeout(() => {
-                    messageElement.classList.remove('message-highlight');
-                }, 2000);
-            }
-        });
-    }
-}
 
 function editMessage(messageId) {
     const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
@@ -5486,8 +5219,7 @@ Object.assign(window, {
     generateMyQRCode, generateProfileQRCode, scanQRCode, handleQRCodeFile, selectFriend, removeRecipient, toggleFriendSelection, copyInviteLink,
     viewMediaAttachment, showEditProfile, handleProfilePictureUpload, saveProfile,
     createFriendInvite, useFriendInvite, exportFriendsList, importFriendsList,
-    searchMessages, clearMessageSearch, scrollToMessage, editMessage,
-    cancelEditMessage, saveEditMessage, deleteMessage,
+    editMessage, cancelEditMessage, saveEditMessage, deleteMessage,
     // Hamburger menu functions
     toggleHamburgerMenu, closeHamburgerMenu,
     // New QR and P2P functions

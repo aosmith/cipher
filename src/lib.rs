@@ -91,7 +91,6 @@ fn main() {
             get_messages_for_user,
             decrypt_message_for_user,
             verify_message_signature,
-            search_messages,
             edit_message,
             delete_message,
             cleanup_expired_messages,
@@ -168,9 +167,6 @@ fn main() {
             get_message_reactions,
             reply_to_message,
             get_message_thread,
-            send_voice_message,
-            get_voice_messages,
-            delete_voice_message,
             // Device Management
             get_user_devices,
             get_device,

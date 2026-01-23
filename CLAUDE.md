@@ -11,7 +11,7 @@ Cipher is a Tauri/Rust end-to-end encrypted peer-to-peer social network. Local-f
 - Iroh for P2P networking (DHT discovery, gossip protocol)
 - Glassmorphism UI with dark theme
 
-**Current Version**: 0.1.3
+**Current Version**: 0.1.7
 
 ## Key Commands
 
@@ -38,20 +38,22 @@ cargo tauri ios build                                                     # iOS
 
 **Android - Build and Deploy:**
 ```bash
-# Step 1: Build
-PATH="/bin:/usr/bin:$HOME/.cargo/bin:$PATH" \
+# Step 1: Build (run in foreground - background mode has PATH issues)
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ANDROID_HOME=~/Library/Android/sdk \
-NDK_HOME=~/Library/Android/sdk/ndk/26.1.10909125 \
+NDK_HOME=~/Library/Android/sdk/ndk/28.2.13676358 \
 OPENSSL_STATIC=1 OPENSSL_VENDORED=1 \
 cargo tauri android build --target aarch64 --debug
 
 # Step 2: Wipe app data (ALWAYS do this before install)
-# NOTE: Use full path to adb - it's often not in PATH
+# NOTE: Always use full path to adb - it's not in PATH
 ~/Library/Android/sdk/platform-tools/adb shell pm clear com.cipher.social
 
 # Step 3: Install
 ~/Library/Android/sdk/platform-tools/adb install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+
+# Step 4: Launch (optional)
+~/Library/Android/sdk/platform-tools/adb shell am start -n com.cipher.social/.MainActivity
 ```
 
 **macOS - Build and Deploy:**

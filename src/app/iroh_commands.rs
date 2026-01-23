@@ -1,7 +1,13 @@
 // Tauri commands for Iroh P2P networking
 // Global mesh architecture: all nodes on cipher/content/v1
 
+use base64::{engine::general_purpose, Engine as _};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    Key, XChaCha20Poly1305, XNonce,
+};
 use lazy_static::lazy_static;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -340,8 +346,47 @@ pub async fn iroh_publish_post(
                 }
             }
 
-            // Store as blob
-            match network.store_blob(data).await {
+            // Encrypt blob data before storing (Signal/WhatsApp style)
+            // Scope the encryption to avoid rng crossing await boundary
+            let (encrypted_data, key_bytes) = {
+                // Generate random 32-byte key for this blob
+                let mut rng = rand::thread_rng();
+                let mut key_bytes = [0u8; 32];
+                rng.fill(&mut key_bytes);
+
+                // Generate random 24-byte nonce
+                let mut nonce_bytes = [0u8; 24];
+                rng.fill(&mut nonce_bytes);
+
+                // Encrypt with XChaCha20Poly1305
+                let key = Key::from_slice(&key_bytes);
+                let cipher = XChaCha20Poly1305::new(key);
+                let nonce = XNonce::from_slice(&nonce_bytes);
+
+                match cipher.encrypt(nonce, data.as_slice()) {
+                    Ok(ciphertext) => {
+                        // Prepend nonce to ciphertext (nonce is not secret)
+                        let mut encrypted = nonce_bytes.to_vec();
+                        encrypted.extend(ciphertext);
+                        (encrypted, key_bytes)
+                    }
+                    Err(e) => {
+                        println!(
+                            "[IROH] Failed to encrypt attachment {}: {:?}",
+                            attachment.id, e
+                        );
+                        continue;
+                    }
+                }
+            };
+
+            println!(
+                "[IROH] Encrypted attachment {} ({} bytes -> {} bytes)",
+                attachment.id, data.len(), encrypted_data.len()
+            );
+
+            // Store encrypted blob
+            match network.store_blob(encrypted_data).await {
                 Ok(hash) => {
                     // Track storage used
                     let _ = db.add_storage_used(data_size);
@@ -352,10 +397,11 @@ pub async fn iroh_publish_post(
                         file_size: attachment.file_size,
                         blob_hash: hex::encode(hash.as_bytes()),
                         downloaded: true, // We're the sender, blob is local
+                        encryption_key: Some(general_purpose::STANDARD.encode(&key_bytes)),
                     };
                     blob_refs.push(blob_ref);
                     println!(
-                        "[IROH] [OK] Stored attachment {} as blob {}",
+                        "[IROH] [OK] Stored encrypted attachment {} as blob {}",
                         attachment.id,
                         hex::encode(hash.as_bytes())
                     );
@@ -757,9 +803,7 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     let node_id = node_addr.node_id.to_string();
     let _relay_url = node_addr.relay_url().map(|url| url.to_string());
 
-    // V2 ultra-minimal format: [32 pubkey][32 node] = 64 bytes = 97 chars
-    // No relay (DHT discovery), no name (comes via Presence/FriendRequest gossip)
-    // Guaranteed to fit in SMS (160 char limit)
+    // V2 format: [32 pubkey][32 node][1 name_len][name] - includes display name
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -770,21 +814,28 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     let node_bytes = hex::decode(&node_id)
         .map_err(|e| format!("Invalid node id hex: {}", e))?;
 
-    // Build ultra-minimal binary payload
+    // Get display name (truncate to 255 bytes max)
+    let display_name = network.display_name.clone();
+    let name_bytes = display_name.as_bytes();
+    let name_len = name_bytes.len().min(255) as u8;
+
+    // Build binary payload: [32 pubkey][32 node][1 name_len][name]
     let mut payload = Vec::new();
-    payload.extend_from_slice(&pubkey_bytes);  // 32 bytes
-    payload.extend_from_slice(&node_bytes);     // 32 bytes
+    payload.extend_from_slice(&pubkey_bytes);           // 32 bytes
+    payload.extend_from_slice(&node_bytes);             // 32 bytes
+    payload.push(name_len);                             // 1 byte
+    payload.extend_from_slice(&name_bytes[..name_len as usize]); // N bytes
 
     // Encode as base64url
     let encoded = URL_SAFE_NO_PAD.encode(&payload);
 
-    // Create ultra-minimal URI
+    // Create URI
     let qr_code = format!("cipher://i/{}", encoded);
 
-    println!("[IROH] ✓ QR code generated (ultra-minimal, 97 chars)");
+    println!("[IROH] ✓ QR code generated ({} chars)", qr_code.len());
     println!("[IROH]   Public Key: {}", network.public_key);
     println!("[IROH]   NodeId: {}", node_id);
-    println!("[IROH]   Display name will come via gossip");
+    println!("[IROH]   Display Name: {}", display_name);
 
     Ok(qr_code)
 }
@@ -1225,11 +1276,12 @@ pub async fn iroh_add_friend_by_public_key(
 
 /// Read blob data by hash - downloads from remote peer if not available locally
 /// Used by frontend to fetch attachment data for encrypted posts (SealedEnvelope)
+/// If encryption_key is provided, decrypts the blob after downloading
 ///
 /// Note: Uses spawn_blocking to work around the non-Send AsyncSliceReader issue
 #[tauri::command]
-pub async fn iroh_read_blob(node_id: String, blob_hash: String) -> Result<String, String> {
-    println!("[BLOB-READ] Reading blob {} from node {}", blob_hash, node_id);
+pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: Option<String>) -> Result<String, String> {
+    println!("[BLOB-READ] Reading blob {} from node {} (encrypted: {})", blob_hash, node_id, encryption_key.is_some());
 
     let network = IROH_NETWORK
         .lock()
@@ -1325,26 +1377,62 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String) -> Result<String
                 .await
                 .map_err(|e| format!("Failed to read blob: {}", e))?;
 
-            // Return as base64
-            let base64_data = base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &data,
-            );
-
-            println!("[BLOB-READ] Successfully read blob, base64 length: {}", base64_data.len());
-            Ok::<String, String>(base64_data)
+            println!("[BLOB-READ] Read {} bytes from store", data.len());
+            Ok::<Vec<u8>, String>(data.to_vec())
         });
 
         let _ = tx.send(result);
     });
 
-    rx.await.map_err(|_| "Blob read task failed".to_string())?
+    let encrypted_data = rx.await.map_err(|_| "Blob read task failed".to_string())??;
+
+    // Decrypt if encryption key provided
+    let final_data = if let Some(key_b64) = encryption_key {
+        println!("[BLOB-READ] Decrypting blob with provided key...");
+
+        // Decode key
+        let key_bytes = general_purpose::STANDARD
+            .decode(&key_b64)
+            .map_err(|e| format!("Invalid encryption key: {}", e))?;
+
+        if key_bytes.len() != 32 {
+            return Err("Encryption key must be 32 bytes".to_string());
+        }
+
+        // Extract nonce (first 24 bytes) and ciphertext
+        if encrypted_data.len() < 24 {
+            return Err("Encrypted blob too short (missing nonce)".to_string());
+        }
+
+        let (nonce_bytes, ciphertext) = encrypted_data.split_at(24);
+
+        // Decrypt
+        let key = Key::from_slice(&key_bytes);
+        let cipher = XChaCha20Poly1305::new(key);
+        let nonce = XNonce::from_slice(nonce_bytes);
+
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| "Blob decryption failed - invalid key or corrupted data")?;
+
+        println!("[BLOB-READ] Decrypted {} bytes -> {} bytes", encrypted_data.len(), plaintext.len());
+        plaintext
+    } else {
+        // No encryption key - return raw data (legacy or unencrypted blob)
+        println!("[BLOB-READ] No encryption key provided, returning raw data");
+        encrypted_data
+    };
+
+    // Return as base64
+    let base64_data = general_purpose::STANDARD.encode(&final_data);
+    println!("[BLOB-READ] Successfully read blob, base64 length: {}", base64_data.len());
+    Ok(base64_data)
 }
 
 /// Signal app entering background - pauses P2P operations to prevent crashes during termination
 /// Call this when visibilitychange fires with hidden=true or on pagehide
 #[tauri::command]
-pub async fn iroh_enter_background() -> Result<String, String> {
+pub async fn iroh_enter_background(db: State<'_, Database>) -> Result<String, String> {
     println!("[IROH] App entering background - pausing operations");
 
     // Mark as not in foreground (enables next foreground call)
@@ -1354,6 +1442,12 @@ pub async fn iroh_enter_background() -> Result<String, String> {
     // This helps avoid the race condition where async IPC responses
     // try to write to a destroyed WebView during termination
     signal_app_shutdown();
+
+    // Checkpoint SQLite WAL to ensure all data is persisted to main database file
+    // This prevents data loss if the app is terminated while backgrounded
+    if let Err(e) = db.checkpoint() {
+        println!("[IROH] Warning: WAL checkpoint failed: {}", e);
+    }
 
     Ok("Background mode entered".to_string())
 }

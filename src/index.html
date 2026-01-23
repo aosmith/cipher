@@ -12,7 +12,12 @@
       gtag('js', new Date());
       gtag('config', 'G-WJJ3ZPMPGK');
     </script>
-    <link rel="stylesheet" href="styles.css">
+    <!-- CSS Modules -->
+    <link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/components.css">
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/responsive.css">
     <link rel="stylesheet" href="utilities.css">
 </head>
 <body class="app-loading">
@@ -197,74 +202,32 @@
 
                 <!-- Messages Tab -->
                 <div id="messagesTab" class="hidden">
-                    <div class="modal-content" id="messagesContent">
-                        <div class="modal-header">
-                            <h3 class="tab-header">Messages</h3>
-
-                            <!-- Recent Contacts Quick Access -->
-                            <div class="recent-contacts-section">
-                                <div class="recent-contacts-header">
-                                    <span class="recent-label">Recent:</span>
-                                    <div id="recentContacts" class="recent-contacts-list">
-                                        <!-- Recent contacts will be loaded here -->
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Send Message Form -->
-                            <div class="form-section">
-                                <h4>New Message</h4>
-                                <div class="form-group">
-                                    <label>To:</label>
-                                    <div id="selectedRecipient" class="selected-recipients-row">
-                                        <!-- Selected recipients chips will appear here -->
-                                    </div>
-                                    <input type="text" id="friendSearch" placeholder="Search friends to add..." class="friend-search-input">
-                                    <div id="friendsList" class="friends-select-list">
-                                        <!-- Friends will be loaded here -->
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="messageContent">Message</label>
-                                    <textarea id="messageContent" class="textarea" placeholder="Enter your message" required></textarea>
-                                </div>
-                                <div class="message-input-actions">
-                                    <div class="message-timer-wrapper">
-                                        <select id="messageTimer" class="timer-select" title="Disappearing message timer">
-                                            <option value="0">⏱️ Off</option>
-                                            <option value="30">30s</option>
-                                            <option value="300">5m</option>
-                                            <option value="3600">1h</option>
-                                            <option value="86400">24h</option>
-                                            <option value="604800">7d</option>
-                                        </select>
-                                    </div>
-                                    <button id="voiceRecordButton" class="btn btn-secondary" onclick="startVoiceRecording()">🎤</button>
-                                    <button class="btn btn-primary" onclick="sendMessage()">Send</button>
-                                </div>
-                                <div id="dashboardError" class="error hidden" style="margin-top: var(--spacing-md);"></div>
-                            </div>
-
-                            <!-- Message Search Section -->
-                            <div class="form-section">
-                                <h4>🔍 Search Messages</h4>
-                                <div class="form-group">
-                                    <label for="messageSearchInput">Search your messages</label>
-                                    <input type="text" id="messageSearchInput" placeholder="Enter search query..." class="search-input">
-                                    <div class="search-actions" style="margin-top: var(--spacing-md);">
-                                        <button class="btn btn-secondary" onclick="searchMessages()">Search</button>
-                                        <button class="btn btn-secondary" onclick="clearMessageSearch()">Clear</button>
-                                    </div>
-                                </div>
-                                <div id="searchResults" class="search-results hidden">
-                                    <!-- Search results will appear here -->
-                                </div>
-                            </div>
+                    <div class="chat-container" id="messagesContent">
+                        <!-- Messages area - scrollable -->
+                        <div class="chat-messages" id="messages">
+                            <!-- Messages will be loaded here -->
                         </div>
-                        <div class="modal-scrollable">
-                            <div id="messages">
-                                <!-- Messages will be loaded here -->
+                        <!-- Compose area - fixed at bottom -->
+                        <div class="chat-compose">
+                            <div class="compose-recipient-row">
+                                <span class="compose-to-label">To:</span>
+                                <div id="selectedRecipient" class="selected-chips"></div>
+                                <input type="text" id="friendSearch" placeholder="Select recipient..." class="recipient-input">
+                                <div id="friendsList" class="recipient-dropdown hidden"></div>
                             </div>
+                            <div class="compose-input-row">
+                                <select id="messageTimer" class="timer-select-mini" title="Auto-delete timer">
+                                    <option value="0">⏱️</option>
+                                    <option value="300">5m</option>
+                                    <option value="3600">1h</option>
+                                    <option value="86400">24h</option>
+                                </select>
+                                <input type="text" id="messageContent" placeholder="Type a message..." class="chat-input">
+                                <button class="send-btn" onclick="sendMessage()">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                                </button>
+                            </div>
+                            <div id="dashboardError" class="error hidden"></div>
                         </div>
                     </div>
                 </div>

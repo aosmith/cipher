@@ -585,6 +585,29 @@ impl Database {
         Ok(())
     }
 
+    /// Update only the NodeId for a friend connection, preserving existing relay_url
+    /// Used when we receive presence from a friend but don't have their relay URL
+    pub fn update_friend_node_id(
+        &self,
+        user_id: SqliteUuid,
+        friend_user_id: SqliteUuid,
+        iroh_node_id: &str,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE p2p_connections
+             SET iroh_node_id = :node_id
+             WHERE ((user_id = :user_id AND friend_user_id = :friend_user_id)
+                    OR (user_id = :friend_user_id AND friend_user_id = :user_id))",
+            rusqlite::named_params! {
+                ":node_id": iroh_node_id,
+                ":user_id": user_id,
+                ":friend_user_id": friend_user_id,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Get all friend peer addresses (NodeId + relay URL) for a user
     /// Used to pre-populate endpoint with known peer addresses on app startup
     #[allow(dead_code)]

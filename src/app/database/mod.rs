@@ -33,6 +33,16 @@ impl Database {
             notification_server,
         })
     }
+
+    /// Checkpoint the WAL file to ensure all data is written to the main database
+    /// Call this before app goes to background or quits to prevent data loss
+    pub fn checkpoint(&self) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        // TRUNCATE mode: checkpoint and truncate the WAL file to zero bytes
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        println!("[DB] WAL checkpoint completed");
+        Ok(())
+    }
 }
 
 // Module declarations

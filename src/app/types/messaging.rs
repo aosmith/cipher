@@ -27,17 +27,3 @@ pub struct MessageReaction {
     pub emoji: String,
     pub created_at: String,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VoiceMessage {
-    pub id: SqliteUuid,
-    pub sender_id: SqliteUuid,
-    pub recipient_id: SqliteUuid,
-    pub audio_data: String,
-    pub duration_seconds: f64,
-    pub waveform: Option<String>,
-    pub encrypted: bool,
-    pub thread_id: Option<SqliteUuid>,
-    pub created_at: String,
-}

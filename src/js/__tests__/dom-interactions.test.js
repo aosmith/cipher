@@ -369,76 +369,6 @@ describe('Message Editing Interface', () => {
     });
 });
 
-describe('Voice Recording Interface', () => {
-    let mockMediaRecorder;
-    let mockStream;
-
-    beforeEach(() => {
-        document.body.innerHTML = `
-            <button id="voiceRecordButton" onclick="startVoiceRecording()">
-                🎤 Record Voice Message
-            </button>
-            <div id="dashboardError" class="error hidden"></div>
-        `;
-
-        global.currentUser = { id: '123' };
-        global.selectedRecipient = { id: '456', username: 'friend' };
-
-        mockStream = {
-            getTracks: jest.fn().mockReturnValue([{ stop: jest.fn() }])
-        };
-
-        mockMediaRecorder = {
-            start: jest.fn(),
-            stop: jest.fn(),
-            ondataavailable: null,
-            onstop: null
-        };
-
-        global.MediaRecorder = jest.fn().mockImplementation(() => mockMediaRecorder);
-        global.navigator.mediaDevices = {
-            getUserMedia: jest.fn().mockResolvedValue(mockStream)
-        };
-    });
-
-    test('should change button appearance when recording starts', async () => {
-        const button = document.getElementById('voiceRecordButton');
-
-        await startVoiceRecording();
-
-        expect(button.textContent).toBe('🛑 Stop Recording');
-        expect(button.classList.contains('recording')).toBe(true);
-        expect(button.onclick).toBe(stopVoiceRecording);
-    });
-
-    test('should restore button when recording stops', () => {
-        const button = document.getElementById('voiceRecordButton');
-        button.textContent = '🛑 Stop Recording';
-        button.classList.add('recording');
-        button.onclick = stopVoiceRecording;
-
-        global.mediaRecorder = mockMediaRecorder;
-        global.isRecording = true;
-
-        stopVoiceRecording();
-
-        expect(button.textContent).toBe('🎤 Record Voice Message');
-        expect(button.classList.contains('recording')).toBe(false);
-        expect(button.onclick).toBe(startVoiceRecording);
-    });
-
-    test('should handle microphone permission error', async () => {
-        const permissionError = new Error('Permission denied');
-        global.navigator.mediaDevices.getUserMedia.mockRejectedValue(permissionError);
-
-        await startVoiceRecording();
-
-        const error = document.getElementById('dashboardError');
-        expect(error.textContent).toContain('Failed to start voice recording');
-        expect(error.classList.contains('hidden')).toBe(false);
-    });
-});
-
 describe('QR Code Scanning', () => {
     beforeEach(() => {
         document.body.innerHTML = `
@@ -615,34 +545,10 @@ describe('Drag and Drop', () => {
 describe('Keyboard Shortcuts', () => {
     beforeEach(() => {
         document.body.innerHTML = `
-            <div id="dashboard">
-                <input id="messageSearchInput" />
-                <button onclick="searchMessages()">Search</button>
-            </div>
+            <div id="dashboard"></div>
         `;
 
         global.currentUser = { id: '123' };
-        global.__TAURI__ = { invoke: jest.fn() };
-    });
-
-    test('should trigger search on Enter key', () => {
-        const searchInput = document.getElementById('messageSearchInput');
-        searchInput.value = 'test query';
-
-        // Add event listener
-        searchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                searchMessages();
-            }
-        });
-
-        const enterEvent = new KeyboardEvent('keypress', { key: 'Enter' });
-        searchInput.dispatchEvent(enterEvent);
-
-        expect(global.__TAURI__.invoke).toHaveBeenCalledWith('search_messages', {
-            userId: '123',
-            query: 'test query'
-        });
     });
 
     test('should navigate tabs with keyboard', () => {

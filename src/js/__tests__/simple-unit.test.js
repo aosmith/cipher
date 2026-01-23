@@ -326,36 +326,6 @@ describe('Friend Management Logic', () => {
     });
 });
 
-describe('Voice Message Utilities', () => {
-    test('formats duration correctly', () => {
-        const formatDuration = (seconds) => {
-            const minutes = Math.floor(seconds / 60);
-            const secs = Math.floor(seconds % 60);
-            return `${minutes}:${secs.toString().padStart(2, '0')}`;
-        };
-
-        expect(formatDuration(65)).toBe('1:05');
-        expect(formatDuration(125)).toBe('2:05');
-        expect(formatDuration(59)).toBe('0:59');
-        expect(formatDuration(0)).toBe('0:00');
-    });
-
-    test('generates waveform data', () => {
-        const generateWaveform = (length) => {
-            const waveform = [];
-            for (let i = 0; i < length; i++) {
-                waveform.push(Math.random());
-            }
-            return waveform;
-        };
-
-        const waveform = generateWaveform(10);
-
-        expect(waveform.length).toBe(10);
-        expect(waveform.every(val => val >= 0 && val <= 1)).toBe(true);
-    });
-});
-
 describe('Clipboard Operations', () => {
     beforeEach(() => {
         navigator.clipboard = {

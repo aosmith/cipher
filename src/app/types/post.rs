@@ -34,6 +34,7 @@ pub struct PostComment {
     pub post_id: SqliteUuid,
     pub user_id: SqliteUuid,
     pub display_name: Option<String>,
+    pub public_key: Option<String>,
     pub content: String,
     pub parent_comment_id: Option<SqliteUuid>,
     pub created_at: String,

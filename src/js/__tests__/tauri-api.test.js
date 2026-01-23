@@ -347,22 +347,6 @@ describe('Tauri API Commands - Messages', () => {
 
         expect(result).toEqual(mockResponse);
     });
-
-    test('search_messages command', async () => {
-        const mockResults = [
-            { id: '1', content: 'Message containing search term' },
-            { id: '2', content: 'Another search result' }
-        ];
-
-        global.__TAURI__.invoke.mockResolvedValue(mockResults);
-
-        const result = await TauriAPI.invoke('search_messages', {
-            userId: '123',
-            query: 'search'
-        });
-
-        expect(result).toEqual(mockResults);
-    });
 });
 
 describe('Tauri API Commands - Message Features', () => {
@@ -434,64 +418,6 @@ describe('Tauri API Commands - Message Features', () => {
         });
 
         expect(result).toEqual(mockThread);
-    });
-});
-
-describe('Tauri API Commands - Voice Messages', () => {
-    beforeEach(() => {
-        global.__TAURI__ = {
-            invoke: jest.fn()
-        };
-    });
-
-    test('send_voice_message command', async () => {
-        const mockResponse = {
-            id: '333',
-            senderId: '123',
-            recipientId: '456',
-            durationSeconds: 5.2
-        };
-
-        global.__TAURI__.invoke.mockResolvedValue(mockResponse);
-
-        const result = await TauriAPI.invoke('send_voice_message', {
-            senderId: '123',
-            recipientId: '456',
-            audioData: 'base64audio',
-            durationSeconds: 5.2,
-            waveform: '[0.1,0.5,0.8,0.3]',
-            threadId: null
-        });
-
-        expect(result).toEqual(mockResponse);
-    });
-
-    test('get_voice_messages command', async () => {
-        const mockVoiceMessages = [
-            { id: '1', senderId: '123', audioData: 'base64_1' },
-            { id: '2', senderId: '456', audioData: 'base64_2' }
-        ];
-
-        global.__TAURI__.invoke.mockResolvedValue(mockVoiceMessages);
-
-        const result = await TauriAPI.invoke('get_voice_messages', {
-            userId: '123'
-        });
-
-        expect(result).toEqual(mockVoiceMessages);
-    });
-
-    test('delete_voice_message command', async () => {
-        const mockResponse = { success: true };
-
-        global.__TAURI__.invoke.mockResolvedValue(mockResponse);
-
-        const result = await TauriAPI.invoke('delete_voice_message', {
-            voiceMessageId: '333',
-            userId: '123'
-        });
-
-        expect(result).toEqual(mockResponse);
     });
 });
 
