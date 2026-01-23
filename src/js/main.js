@@ -3087,11 +3087,12 @@ function setupTauriEventListeners() {
                     try {
                         const blobData = await TauriAPI.invoke('iroh_read_blob', {
                             nodeId: node_id,
-                            blobHash: blobRef.blobHash
+                            blobHash: blobRef.blobHash,
+                            encryptionKey: blobRef.encryptionKey || null
                         });
                         if (blobData) {
                             downloadedBlobs.push({ blobRef, blobData });
-                            console.log(`[EVENT] Downloaded blob ${blobRef.blobHash}`);
+                            console.log(`[EVENT] Downloaded blob ${blobRef.blobHash} (encrypted: ${!!blobRef.encryptionKey})`);
                         }
                     } catch (blobErr) {
                         console.error(`[EVENT] Failed to download blob ${blobRef.blobHash}:`, blobErr);

@@ -19,3 +19,7 @@ rustflags = ["-C", "link-arg=-framework", "-C", "link-arg=SystemConfiguration"]
 
 [target.aarch64-apple-ios-sim]
 rustflags = ["-C", "link-arg=-framework", "-C", "link-arg=SystemConfiguration"]
+
+# Android 15 requires 16KB page size alignment
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

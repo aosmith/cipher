@@ -11,7 +11,7 @@ Cipher is a Tauri/Rust end-to-end encrypted peer-to-peer social network. Local-f
 - Iroh for P2P networking (DHT discovery, gossip protocol)
 - Glassmorphism UI with dark theme
 
-**Current Version**: 0.1.3
+**Current Version**: 0.1.7
 
 ## Key Commands
 
@@ -42,7 +42,7 @@ cargo tauri ios build                                                     # iOS
 PATH="/bin:/usr/bin:$HOME/.cargo/bin:$PATH" \
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ANDROID_HOME=~/Library/Android/sdk \
-NDK_HOME=~/Library/Android/sdk/ndk/26.1.10909125 \
+NDK_HOME=~/Library/Android/sdk/ndk/28.2.13676358 \
 OPENSSL_STATIC=1 OPENSSL_VENDORED=1 \
 cargo tauri android build --target aarch64 --debug
 

@@ -51,6 +51,13 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    // Use compressed native libs to bypass 16KB alignment check for bundled WebView libs
+    // The libimage_processing_util_jni.so from WebView isn't 16KB aligned yet
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 rust {

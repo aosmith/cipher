@@ -516,8 +516,10 @@ mod tests {
         let (pub_key, priv_key) = generate_test_keypair();
 
         let payload = RealContentPayload::Post {
+            post_id: "test-post-id".to_string(),
             content: "Hello, encrypted world!".to_string(),
-            attachments: None,
+            node_id: "test-node-id".to_string(),
+            blob_refs: vec![],
         };
 
         let sealed = SealedBox::new(&payload, &pub_key, &priv_key)
@@ -606,8 +608,10 @@ mod tests {
 
         let envelope = GossipEnvelope::new_post(
             &sender_pub,
+            "test-post-1",
             "Secret message for friends",
-            None,
+            "test-node-id",
+            &[],
             &recipient_keys,
             &sender_priv,
         ).expect("Should create envelope");
@@ -645,8 +649,10 @@ mod tests {
 
         let envelope = GossipEnvelope::new_post(
             &sender_pub,
+            "test-post-2",
             "Secret message",
-            None,
+            "test-node-id",
+            &[],
             &recipient_keys,
             &sender_priv,
         ).expect("Should create envelope");
@@ -666,8 +672,10 @@ mod tests {
 
         let envelope = GossipEnvelope::new_post(
             &sender_pub,
+            "test-post-3",
             "Secret message",
-            None,
+            "test-node-id",
+            &[],
             &recipient_keys,
             &sender_priv,
         ).expect("Should create envelope");
@@ -686,8 +694,10 @@ mod tests {
 
         let envelope = GossipEnvelope::new_post(
             &sender_pub,
+            "test-post-4",
             unicode_content,
-            None,
+            "test-node-id",
+            &[],
             &[alice_pub.clone()],
             &sender_priv,
         ).expect("Should create envelope");
@@ -712,8 +722,10 @@ mod tests {
 
         let envelope = GossipEnvelope::new_post(
             &sender_pub,
+            "test-post-5",
             &large_content,
-            None,
+            "test-node-id",
+            &[],
             &[alice_pub.clone()],
             &sender_priv,
         ).expect("Should create envelope");
