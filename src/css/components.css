@@ -1961,6 +1961,51 @@ select.textarea {
 }
 
 /* ===========================================
+   KEY DERIVATION WELL (Auth Screen)
+   =========================================== */
+
+.key-derivation-well {
+    padding: var(--spacing-xl);
+    margin: var(--spacing-2xl) 0;
+    text-align: left;
+    position: relative;
+    border-radius: var(--border-radius-lg);
+    box-shadow:
+        0 1px 3px rgba(0, 0, 0, 0.12),
+        0 1px 2px rgba(0, 0, 0, 0.24),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.key-derivation-well h4 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+    margin: 0 0 var(--spacing-lg) 0;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.key-derivation-well p {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-base);
+    line-height: var(--golden-ratio);
+    margin: 0 0 var(--spacing-md) 0;
+}
+
+.key-derivation-well p:last-child {
+    margin-bottom: 0;
+}
+
+.key-derivation-well p strong {
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+/* ===========================================
    MOBILE ADJUSTMENTS
    =========================================== */
 
