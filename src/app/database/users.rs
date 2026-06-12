@@ -224,7 +224,8 @@ impl Database {
             conn.execute(
                 "UPDATE users SET device_id = ?1, updated_at = ?2 WHERE public_key = ?3",
                 params![&device_id, &now, &signing_public],
-            ).map_err(|e| format!("Database error: {}", e))?;
+            )
+            .map_err(|e| format!("Database error: {}", e))?;
 
             // Register device in devices table
             conn.execute(

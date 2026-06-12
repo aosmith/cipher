@@ -3,4 +3,4 @@
 
 pub mod sealed_box;
 
-pub use sealed_box::{GossipEnvelope, ContentPayload};
+pub use sealed_box::{ContentPayload, GossipEnvelope};

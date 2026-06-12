@@ -22,10 +22,9 @@ fn test_user_crud_operations() {
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     // Create
-    let (user, _) = db.create_user_first_launch(
-        "testuser".to_string(),
-        Database::generate_device_id()
-    ).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("testuser".to_string(), Database::generate_device_id())
+        .unwrap();
 
     assert_eq!(user.display_name, "testuser");
     assert!(user.public_key.is_some());
@@ -35,12 +34,14 @@ fn test_user_crud_operations() {
     assert_eq!(found.display_name, "testuser");
 
     // Update
-    let updated = db.update_user_profile(
-        user.id,
-        None, // don't change display_name
-        Some("Test bio".to_string()),
-        Some("avatar.jpg".to_string())
-    ).unwrap();
+    let updated = db
+        .update_user_profile(
+            user.id,
+            None, // don't change display_name
+            Some("Test bio".to_string()),
+            Some("avatar.jpg".to_string()),
+        )
+        .unwrap();
 
     assert_eq!(updated.bio, Some("Test bio".to_string()));
     assert_eq!(updated.profile_picture, Some("avatar.jpg".to_string()));
@@ -51,10 +52,9 @@ fn test_device_management() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch(
-        "testuser".to_string(),
-        "device-1".to_string()
-    ).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("testuser".to_string(), "device-1".to_string())
+        .unwrap();
 
     // Get devices for user
     let user_public_key = user.public_key.as_ref().unwrap();
@@ -76,7 +76,9 @@ fn test_node_id_storage() {
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     let device_id = Database::generate_device_id();
-    let (_user, _) = db.create_user_first_launch("testuser".to_string(), device_id.clone()).unwrap();
+    let (_user, _) = db
+        .create_user_first_launch("testuser".to_string(), device_id.clone())
+        .unwrap();
 
     // Store NodeId
     let node_id = "test-node-id-12345";
@@ -94,7 +96,9 @@ fn test_relay_url_storage() {
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     let device_id = Database::generate_device_id();
-    let (_user, _) = db.create_user_first_launch("testuser".to_string(), device_id.clone()).unwrap();
+    let (_user, _) = db
+        .create_user_first_launch("testuser".to_string(), device_id.clone())
+        .unwrap();
 
     // Store relay URL
     let relay_url = "https://relay.example.com";
@@ -103,7 +107,10 @@ fn test_relay_url_storage() {
 
     // Verify device exists (relay_url field not in Device struct yet)
     let device = db.get_device(&device_id).unwrap();
-    assert!(device.is_some(), "Device should exist after relay URL update");
+    assert!(
+        device.is_some(),
+        "Device should exist after relay URL update"
+    );
 }
 
 #[test]
@@ -114,7 +121,9 @@ fn test_peer_address_management() {
     let device1_id = Database::generate_device_id();
     let device2_id = Database::generate_device_id();
 
-    let (user, _) = db.create_user_first_launch("alice".to_string(), device1_id.clone()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("alice".to_string(), device1_id.clone())
+        .unwrap();
 
     // Create second device for same user
     let user_public_key = user.public_key.as_ref().unwrap();
@@ -143,19 +152,28 @@ fn test_get_all_peer_addrs() {
     let device1 = Database::generate_device_id();
     let device2 = Database::generate_device_id();
 
-    let (_alice, _) = db.create_user_first_launch("alice".to_string(), device1.clone()).unwrap();
-    let (_bob, _) = db.create_user_first_launch("bob".to_string(), device2.clone()).unwrap();
+    let (_alice, _) = db
+        .create_user_first_launch("alice".to_string(), device1.clone())
+        .unwrap();
+    let (_bob, _) = db
+        .create_user_first_launch("bob".to_string(), device2.clone())
+        .unwrap();
 
     // Store node info
     db.update_device_node_id(&device1, "node-alice").unwrap();
     db.update_device_node_id(&device2, "node-bob").unwrap();
-    db.update_device_relay_url(&device1, "https://relay1.com").unwrap();
-    db.update_device_relay_url(&device2, "https://relay2.com").unwrap();
+    db.update_device_relay_url(&device1, "https://relay1.com")
+        .unwrap();
+    db.update_device_relay_url(&device2, "https://relay2.com")
+        .unwrap();
 
     // Get all peer addresses
     let peer_addrs = db.get_all_peer_addrs().unwrap();
 
-    assert!(peer_addrs.len() >= 2, "Should find at least 2 peer addresses");
+    assert!(
+        peer_addrs.len() >= 2,
+        "Should find at least 2 peer addresses"
+    );
 
     // Verify structure
     let node_ids: Vec<&str> = peer_addrs.iter().map(|(id, _)| id.as_str()).collect();
@@ -169,18 +187,22 @@ fn test_sync_peer_user() {
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     // Create Alice on Device 1
-    let (alice_original, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (alice_original, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Create Bob's database (different device)
     let temp_dir2 = TempDir::new().unwrap();
     let bob_db = Database::new(&temp_dir2.path().join("bob.db").to_string_lossy()).unwrap();
 
     // Bob syncs Alice's public info to his database
-    let alice_on_bob_device = bob_db.sync_peer_user(
-        "alice",
-        alice_original.public_key.as_ref().unwrap(),
-        alice_original.encryption_public_key.as_ref().unwrap()
-    ).unwrap();
+    let alice_on_bob_device = bob_db
+        .sync_peer_user(
+            "alice",
+            alice_original.public_key.as_ref().unwrap(),
+            alice_original.encryption_public_key.as_ref().unwrap(),
+        )
+        .unwrap();
 
     assert_eq!(alice_on_bob_device.display_name, "alice");
     assert_eq!(alice_on_bob_device.public_key, alice_original.public_key);
@@ -196,8 +218,12 @@ fn test_friend_management() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Add friend
     let result = db.add_friend(alice.id, bob.id);
@@ -221,19 +247,29 @@ fn test_friend_public_keys_retrieval() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
-    let (charlie, _) = db.create_user_first_launch("charlie".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (charlie, _) = db
+        .create_user_first_launch("charlie".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Add friends
     db.add_friend(alice.id, bob.id).unwrap();
     db.add_friend(alice.id, charlie.id).unwrap();
 
     // Accept friendships
-    db.conn.lock().unwrap().execute(
-        "UPDATE p2p_connections SET status = 'accepted' WHERE user_id = ?1",
-        rusqlite::params![alice.id]
-    ).unwrap();
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE p2p_connections SET status = 'accepted' WHERE user_id = ?1",
+            rusqlite::params![alice.id],
+        )
+        .unwrap();
 
     // Get friend public keys
     let friend_keys = db.get_friend_public_keys(alice.id).unwrap();
@@ -248,7 +284,9 @@ fn test_post_operations() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("testuser".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("testuser".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Create post
     let post = db.create_post(user.id, "Test post content", false).unwrap();
@@ -266,16 +304,17 @@ fn test_message_storage() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Send message
-    let message = db.send_encrypted_message(
-        alice.id,
-        bob.id,
-        "Hello Bob!",
-        None
-    ).unwrap();
+    let message = db
+        .send_encrypted_message(alice.id, bob.id, "Hello Bob!", None)
+        .unwrap();
 
     assert_eq!(message.sender_id, alice.id);
     assert_eq!(message.recipient_id, bob.id);
@@ -291,11 +330,16 @@ fn test_uuid_blob_storage() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("testuser".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("testuser".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // UUID should be stored as 16-byte BLOB and be retrievable
     let retrieved = db.find_user_by_id(user.id).unwrap().unwrap();
-    assert_eq!(retrieved.id, user.id, "UUID should be stored and retrieved correctly");
+    assert_eq!(
+        retrieved.id, user.id,
+        "UUID should be stored and retrieved correctly"
+    );
 }
 
 #[test]
@@ -304,7 +348,9 @@ fn test_sync_data_operations() {
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     let device_id = Database::generate_device_id();
-    let (user, _) = db.create_user_first_launch("alice".to_string(), device_id.clone()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("alice".to_string(), device_id.clone())
+        .unwrap();
 
     // Create some data
     db.create_post(user.id, "Test post", false).unwrap();
@@ -322,7 +368,9 @@ fn test_device_count() {
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     let device1 = Database::generate_device_id();
-    let (user, _) = db.create_user_first_launch("testuser".to_string(), device1.clone()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("testuser".to_string(), device1.clone())
+        .unwrap();
 
     // Initial count
     let user_public_key = user.public_key.as_ref().unwrap();
@@ -347,7 +395,9 @@ fn test_concurrent_database_access() {
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(&db_path.to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("testuser".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("testuser".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Multiple readers should work
     let db1 = Database::new(&db_path.to_string_lossy()).unwrap();

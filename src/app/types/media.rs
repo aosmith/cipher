@@ -33,12 +33,12 @@ pub struct MediaAttachmentWithData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobReference {
-    pub id: SqliteUuid,           // Attachment ID (matches MediaAttachment)
-    pub file_type: String,        // MIME type (e.g., "image/jpeg")
-    pub file_size: i64,           // Size in bytes (of original unencrypted data)
-    pub blob_hash: String,        // iroh-blobs Hash as hex string
+    pub id: SqliteUuid,    // Attachment ID (matches MediaAttachment)
+    pub file_type: String, // MIME type (e.g., "image/jpeg")
+    pub file_size: i64,    // Size in bytes (of original unencrypted data)
+    pub blob_hash: String, // iroh-blobs Hash as hex string
     #[serde(default)]
-    pub downloaded: bool,         // Whether the blob has been downloaded to local store
+    pub downloaded: bool, // Whether the blob has been downloaded to local store
     #[serde(default)]
-    pub encryption_key: Option<String>,  // Base64-encoded 32-byte XChaCha20Poly1305 key
+    pub encryption_key: Option<String>, // Base64-encoded 32-byte XChaCha20Poly1305 key
 }

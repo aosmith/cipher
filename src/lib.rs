@@ -3,7 +3,7 @@ pub use app::*;
 
 // Mobile entry point for Android/iOS builds
 #[cfg(mobile)]
-use tauri::{Manager, Emitter};
+use tauri::{Emitter, Manager};
 
 #[cfg(mobile)]
 use app::iroh_commands::{
@@ -247,14 +247,12 @@ fn main() {
                     }
                 }
             }
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                println!("[LIFECYCLE] App exit requested - triggering background handler");
-                // Emit event to frontend so it can call iroh_enter_background
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.emit("app-backgrounding", ());
-                }
-                // Don't prevent exit
-                api.prevent_exit();
+            tauri::RunEvent::ExitRequested { .. } => {
+                // Let the exit proceed. prevent_exit() here left a windowless zombie
+                // process holding the device keypair - peers kept connecting to the
+                // dead instance's NodeId and the next launch fought it for the DB.
+                // SQLite WAL is crash-safe, so no flush dance is needed.
+                println!("[LIFECYCLE] App exit requested - exiting");
             }
             _ => {}
         }

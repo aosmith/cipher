@@ -66,8 +66,8 @@ pub enum ContentPayload {
     Post {
         post_id: String,
         content: String,
-        node_id: String,  // Sender's NodeId for blob fetching
-        blob_refs: Vec<BlobReference>,  // Attachments stored as blobs
+        node_id: String,               // Sender's NodeId for blob fetching
+        blob_refs: Vec<BlobReference>, // Attachments stored as blobs
     },
     DirectMessage {
         content: String,
@@ -320,7 +320,9 @@ impl GossipEnvelope {
     /// Check if this envelope might be for us (quick hint check)
     pub fn might_be_for_us(&self, recipient_public_key: &str) -> bool {
         let our_hint = calculate_recipient_hint(recipient_public_key);
-        self.sealed_boxes.iter().any(|sb| sb.recipient_hint == our_hint)
+        self.sealed_boxes
+            .iter()
+            .any(|sb| sb.recipient_hint == our_hint)
     }
 }
 
@@ -344,9 +346,8 @@ impl SealedBox {
             return Err("Invalid recipient key length".to_string());
         }
 
-        let recipient_public = X25519PublicKey::from(
-            <[u8; 32]>::try_from(recipient_pub_bytes.as_slice()).unwrap()
-        );
+        let recipient_public =
+            X25519PublicKey::from(<[u8; 32]>::try_from(recipient_pub_bytes.as_slice()).unwrap());
 
         // Generate ephemeral keypair for forward secrecy
         let mut rng = rand::thread_rng();
@@ -392,9 +393,8 @@ impl SealedBox {
             return Err("Invalid ephemeral key length".to_string());
         }
 
-        let ephemeral_public = X25519PublicKey::from(
-            <[u8; 32]>::try_from(ephemeral_pub_bytes.as_slice()).unwrap()
-        );
+        let ephemeral_public =
+            X25519PublicKey::from(<[u8; 32]>::try_from(ephemeral_pub_bytes.as_slice()).unwrap());
 
         // Decode recipient private key
         let recipient_priv_bytes = general_purpose::STANDARD
@@ -405,9 +405,8 @@ impl SealedBox {
             return Err("Invalid private key length".to_string());
         }
 
-        let recipient_private = StaticSecret::from(
-            <[u8; 32]>::try_from(recipient_priv_bytes.as_slice()).unwrap()
-        );
+        let recipient_private =
+            StaticSecret::from(<[u8; 32]>::try_from(recipient_priv_bytes.as_slice()).unwrap());
 
         // Perform ECDH
         let shared_secret = recipient_private.diffie_hellman(&ephemeral_public);
@@ -452,7 +451,7 @@ fn calculate_recipient_hint(public_key: &str) -> String {
         }
     }
     // Fallback: hash the key and use first 8 bytes
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(public_key.as_bytes());
     let hash = hasher.finalize();
@@ -552,7 +551,8 @@ mod tests {
             &[],
             &recipient_pub_keys,
             &sender_priv_b64,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Each recipient should be able to decrypt
         for (pub_key, priv_key) in &recipients {

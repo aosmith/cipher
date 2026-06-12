@@ -2979,22 +2979,7 @@ function setupTauriEventListeners() {
     // Listen for native app lifecycle events (from Rust lifecycle hooks)
     listen('app-resumed', async (event) => {
         console.log('[LIFECYCLE] Native app-resumed event received');
-        if (P2P.initialized && currentUser) {
-            try {
-                // Signal foreground first to reset shutdown flag
-                await TauriAPI.invoke('iroh_enter_foreground');
-
-                // Then run comprehensive health check and recovery
-                const recovered = await P2P.healthCheckAndRecover();
-                if (recovered) {
-                    console.log('[LIFECYCLE] P2P health check passed or recovery successful');
-                } else {
-                    console.warn('[LIFECYCLE] P2P health check/recovery had issues, will retry on next poll');
-                }
-            } catch (error) {
-                console.error('[LIFECYCLE] Failed to resume/restore P2P:', error);
-            }
-        }
+        await handleAppForeground('app-resumed');
     });
 
     listen('app-backgrounding', async (event) => {
@@ -3970,23 +3955,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 } catch (error) {
                     // Don't log errors here - app might be terminating
                 }
-            } else if (P2P.initialized) {
+            } else {
                 // App coming back to foreground
-                console.log('App became visible, resuming P2P and running health check...');
-                try {
-                    // Signal foreground first to reset shutdown flag
-                    await TauriAPI.invoke('iroh_enter_foreground');
-
-                    // Then run comprehensive health check and recovery
-                    const recovered = await P2P.healthCheckAndRecover();
-                    if (recovered) {
-                        console.log('P2P health check passed or recovery successful');
-                    } else {
-                        console.warn('P2P health check/recovery had issues, will retry on next poll');
-                    }
-                } catch (error) {
-                    console.error('Failed to resume/restore P2P:', error);
-                }
+                await handleAppForeground('visibilitychange');
             }
         });
 
@@ -4002,23 +3973,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Handle page focus (additional safeguard for mobile)
         window.addEventListener('focus', async () => {
-            if (P2P.initialized && currentUser) {
-                console.log('Window focused, resuming P2P and running health check...');
-                try {
-                    // Signal foreground first
-                    await TauriAPI.invoke('iroh_enter_foreground');
+            await handleAppForeground('focus');
+        });
 
-                    // Then run health check
-                    const recovered = await P2P.healthCheckAndRecover();
-                    if (recovered) {
-                        console.log('P2P health check passed or recovery successful');
-                    } else {
-                        console.warn('P2P health check/recovery had issues, will retry on next poll');
-                    }
-                } catch (error) {
-                    console.error('Failed to resume/restore P2P:', error);
-                }
-            }
+        // bfcache restore (iOS) - counterpart to the pagehide handler above
+        window.addEventListener('pageshow', async () => {
+            await handleAppForeground('pageshow');
+        });
+
+        // Network came back or changed - existing QUIC paths are likely dead.
+        // This is the only signal we get for WiFi<->cellular transitions.
+        window.addEventListener('online', async () => {
+            await handleAppForeground('online');
         });
     } catch (error) {
         console.error('Failed to initialize app:', error);
@@ -4026,6 +3992,44 @@ document.addEventListener('DOMContentLoaded', async () => {
         showLogin();
     }
 });
+
+// Shared foreground/recovery path for all resume triggers (app-resumed, focus,
+// visibilitychange, pageshow, online). A single resume fires several of these at
+// once - previously each ran its own recovery concurrently. The debounce plus
+// P2P.healthCheckAndRecover's single-flight guard ensure exactly one recovery runs.
+let lastForegroundRecovery = 0;
+async function handleAppForeground(source) {
+    if (!currentUser) {
+        return;
+    }
+
+    // ALWAYS signal foreground - this clears the backend shutdown flag, which must
+    // happen even when the recovery below is debounced, or P2P commands stay blocked
+    try {
+        await TauriAPI.invoke('iroh_enter_foreground');
+    } catch (error) {
+        console.error(`[LIFECYCLE] iroh_enter_foreground failed (${source}):`, error);
+    }
+
+    const now = Date.now();
+    if (now - lastForegroundRecovery < 3000) {
+        return;
+    }
+    lastForegroundRecovery = now;
+
+    console.log(`[LIFECYCLE] Foreground trigger (${source}) - running P2P health check...`);
+    try {
+        // Runs recovery if unhealthy; also retries a failed launch-time initialization
+        const recovered = await P2P.healthCheckAndRecover();
+        if (recovered) {
+            console.log(`[LIFECYCLE] P2P healthy or recovered (${source})`);
+        } else {
+            console.warn(`[LIFECYCLE] P2P recovery had issues (${source}) - periodic health monitor will retry`);
+        }
+    } catch (error) {
+        console.error(`[LIFECYCLE] Failed to resume P2P (${source}):`, error);
+    }
+}
 
 function editMessage(messageId) {
     const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);

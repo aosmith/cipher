@@ -127,20 +127,25 @@ pub async fn create_post(
     attachments: Option<Vec<String>>,
     db: State<'_, Database>,
 ) -> Result<Post, String> {
-    println!("[CREATE_POST] Command called with user_id: {}, content length: {}, has_attachments: {}",
-        user_id, content.len(), attachments.is_some());
+    println!(
+        "[CREATE_POST] Command called with user_id: {}, content length: {}, has_attachments: {}",
+        user_id,
+        content.len(),
+        attachments.is_some()
+    );
 
     println!("[CREATE_POST] About to call db.create_post()...");
 
     // Create the post locally in the database
-    let post = db
-        .create_post(user_id, &content, false)
-        .map_err(|e| {
-            println!("[CREATE_POST] Error creating post: {}", e);
-            e.to_string()
-        })?;
+    let post = db.create_post(user_id, &content, false).map_err(|e| {
+        println!("[CREATE_POST] Error creating post: {}", e);
+        e.to_string()
+    })?;
 
-    println!("[CREATE_POST] Post created successfully with id: {}", post.id);
+    println!(
+        "[CREATE_POST] Post created successfully with id: {}",
+        post.id
+    );
 
     // Automatically broadcast the post to the P2P network
     // Access the global Iroh network instance
@@ -176,11 +181,14 @@ pub async fn create_post_with_id(
     _attachments: Option<Vec<String>>,
     db: State<'_, Database>,
 ) -> Result<Post, String> {
-    println!("[CREATE_POST_WITH_ID] Command called with post_id: {}, user_id: {}", post_id, user_id);
+    println!(
+        "[CREATE_POST_WITH_ID] Command called with post_id: {}, user_id: {}",
+        post_id, user_id
+    );
 
     // Parse the post_id
-    let parsed_post_id = SqliteUuid::parse_str(&post_id)
-        .map_err(|e| format!("Invalid post_id: {}", e))?;
+    let parsed_post_id =
+        SqliteUuid::parse_str(&post_id).map_err(|e| format!("Invalid post_id: {}", e))?;
 
     // Create the post with the specific ID
     let post = db
@@ -190,7 +198,10 @@ pub async fn create_post_with_id(
             e.to_string()
         })?;
 
-    println!("[CREATE_POST_WITH_ID] Post created/updated with id: {}", post.id);
+    println!(
+        "[CREATE_POST_WITH_ID] Post created/updated with id: {}",
+        post.id
+    );
     Ok(post)
 }
 
@@ -264,7 +275,10 @@ pub async fn accept_friend_request(
     friend_user_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<(), String> {
-    println!("[ACCEPT-CMD] accept_friend_request called: user={} friend={}", user_id, friend_user_id);
+    println!(
+        "[ACCEPT-CMD] accept_friend_request called: user={} friend={}",
+        user_id, friend_user_id
+    );
 
     // Clone db for use in spawn_blocking (Database is Clone)
     let db_clone = db.inner().clone();
@@ -295,7 +309,8 @@ pub async fn accept_friend_request(
         let our_user_id = user_id;
         let (friend_opt, our_enc_key) = tokio::task::spawn_blocking(move || {
             let friend = db_clone2.find_user_by_id(friend_user_id).ok().flatten();
-            let enc_key = db_clone2.get_user_encryption_public_key(our_user_id)
+            let enc_key = db_clone2
+                .get_user_encryption_public_key(our_user_id)
                 .ok()
                 .flatten()
                 .unwrap_or_default();
@@ -312,25 +327,32 @@ pub async fn accept_friend_request(
                 tokio::spawn(async move {
                     // Get our node address with a timeout
                     let endpoint_guard = network.endpoint.lock().await;
-                    let (node_id_str, relay_url_str) = if let Some(endpoint) = endpoint_guard.as_ref() {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(5),
-                            endpoint.node_addr()
-                        ).await {
-                            Ok(Ok(node_addr)) => {
-                                let node_id = node_addr.node_id.to_string();
-                                let relay_url = node_addr.relay_url()
-                                    .map(|url| url.to_string())
-                                    .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string());
-                                (node_id, relay_url)
+                    let (node_id_str, relay_url_str) =
+                        if let Some(endpoint) = endpoint_guard.as_ref() {
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                endpoint.node_addr(),
+                            )
+                            .await
+                            {
+                                Ok(Ok(node_addr)) => {
+                                    let node_id = node_addr.node_id.to_string();
+                                    let relay_url = node_addr
+                                        .relay_url()
+                                        .map(|url| url.to_string())
+                                        .unwrap_or_else(|| {
+                                            "https://euw1-1.relay.iroh.network.".to_string()
+                                        });
+                                    (node_id, relay_url)
+                                }
+                                _ => (
+                                    endpoint.node_id().to_string(),
+                                    "https://euw1-1.relay.iroh.network.".to_string(),
+                                ),
                             }
-                            _ => {
-                                (endpoint.node_id().to_string(), "https://euw1-1.relay.iroh.network.".to_string())
-                            }
-                        }
-                    } else {
-                        (String::new(), String::new())
-                    };
+                        } else {
+                            (String::new(), String::new())
+                        };
                     drop(endpoint_guard);
 
                     let message = iroh_network::P2PMessage::FriendAccepted {
@@ -344,10 +366,19 @@ pub async fn accept_friend_request(
                     };
 
                     // GLOBAL MESH: Publish to global content topic
-                    if let Err(e) = network.publish_message(iroh_network::CONTENT_TOPIC, message).await {
-                        println!("[FRIEND-ACCEPT] Warning: Failed to send FriendAccepted message: {}", e);
+                    if let Err(e) = network
+                        .publish_message(iroh_network::CONTENT_TOPIC, message)
+                        .await
+                    {
+                        println!(
+                            "[FRIEND-ACCEPT] Warning: Failed to send FriendAccepted message: {}",
+                            e
+                        );
                     } else {
-                        println!("[FRIEND-ACCEPT] Sent FriendAccepted via global mesh to {}", friend_key);
+                        println!(
+                            "[FRIEND-ACCEPT] Sent FriendAccepted via global mesh to {}",
+                            friend_key
+                        );
                     }
                 });
             }
@@ -365,12 +396,10 @@ pub async fn reject_friend_request(
     db: State<'_, Database>,
 ) -> Result<(), String> {
     let db_clone = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        db_clone.reject_friend_request(user_id, friend_user_id)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
-    .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || db_clone.reject_friend_request(user_id, friend_user_id))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| e.to_string())
 }
 
 /// Search for friends by display name
@@ -403,12 +432,10 @@ pub async fn cancel_friend_request(
     db: State<'_, Database>,
 ) -> Result<(), String> {
     let db_clone = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        db_clone.cancel_friend_request(user_id, friend_user_id)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
-    .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || db_clone.cancel_friend_request(user_id, friend_user_id))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -614,7 +641,6 @@ pub async fn generate_friend_qr_code(
     generate_qr_code(friend_url)
 }
 
-
 #[tauri::command]
 pub async fn upload_media_file(
     file_data: String, // base64 encoded file data
@@ -624,7 +650,12 @@ pub async fn upload_media_file(
     post_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<MediaAttachment, String> {
-    println!("[UPLOAD-MEDIA] Uploading media for post_id: {}, type: {}, data_len: {}", post_id, file_type, file_data.len());
+    println!(
+        "[UPLOAD-MEDIA] Uploading media for post_id: {}, type: {}, data_len: {}",
+        post_id,
+        file_type,
+        file_data.len()
+    );
 
     // Decode base64 data
     let file_bytes = general_purpose::STANDARD
@@ -644,7 +675,10 @@ pub async fn upload_media_file(
         params![attachment_id, post_id, &file_type, file_size, &file_bytes],
     ).map_err(|e| format!("Failed to save attachment to database: {}", e))?;
 
-    println!("[UPLOAD-MEDIA] ✓ Saved attachment {} for post {}", attachment_id, post_id);
+    println!(
+        "[UPLOAD-MEDIA] ✓ Saved attachment {} for post {}",
+        attachment_id, post_id
+    );
 
     Ok(MediaAttachment {
         id: attachment_id,
@@ -702,18 +736,29 @@ pub async fn save_media_to_downloads(
     // Sanitize filename
     let safe_filename = filename
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
 
     let file_path = save_dir.join(&safe_filename);
 
     // Write the file
-    let mut file = fs::File::create(&file_path)
-        .map_err(|e| format!("Failed to create file: {}", e))?;
+    let mut file =
+        fs::File::create(&file_path).map_err(|e| format!("Failed to create file: {}", e))?;
     file.write_all(&file_bytes)
         .map_err(|e| format!("Failed to write file: {}", e))?;
 
-    println!("[SAVE_MEDIA] Saved {} ({} bytes) to {:?}", safe_filename, file_bytes.len(), file_path);
+    println!(
+        "[SAVE_MEDIA] Saved {} ({} bytes) to {:?}",
+        safe_filename,
+        file_bytes.len(),
+        file_path
+    );
 
     Ok(file_path.to_string_lossy().to_string())
 }
@@ -1353,7 +1398,6 @@ pub async fn delete_message(
     Ok("Message deleted successfully".to_string())
 }
 
-
 // Cleanup expired messages
 #[tauri::command]
 pub async fn cleanup_expired_messages(db: State<'_, Database>) -> Result<usize, String> {
@@ -1837,26 +1881,16 @@ pub async fn get_app_settings(
 }
 
 #[tauri::command]
-pub async fn set_storage_limit(
-    limit_bytes: i64,
-    db: State<'_, Database>,
-) -> Result<(), String> {
+pub async fn set_storage_limit(limit_bytes: i64, db: State<'_, Database>) -> Result<(), String> {
     db.set_storage_limit(limit_bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn can_store_data(
-    bytes: i64,
-    db: State<'_, Database>,
-) -> Result<bool, String> {
+pub async fn can_store_data(bytes: i64, db: State<'_, Database>) -> Result<bool, String> {
     db.can_store(bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn add_storage_used(
-    bytes: i64,
-    db: State<'_, Database>,
-) -> Result<i64, String> {
+pub async fn add_storage_used(bytes: i64, db: State<'_, Database>) -> Result<i64, String> {
     db.add_storage_used(bytes).map_err(|e| e.to_string())
 }
-

@@ -7,8 +7,7 @@ use tempfile::TempDir;
 pub fn create_test_db() -> (Database, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = Database::new(&db_path.to_string_lossy())
-        .expect("Failed to create database");
+    let db = Database::new(&db_path.to_string_lossy()).expect("Failed to create database");
     (db, temp_dir)
 }
 

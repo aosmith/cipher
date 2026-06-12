@@ -5,15 +5,15 @@
 // - SealedEnvelope encryption/decryption
 
 // Import the actual crypto module for encryption tests
-use app::crypto::{ContentPayload as RealContentPayload, GossipEnvelope};
 use app::crypto::sealed_box::SealedBox;
+use app::crypto::{ContentPayload as RealContentPayload, GossipEnvelope};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose, Engine};
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
-    use base64::{engine::general_purpose, Engine};
     use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
     /// Simplified SqliteUuid for testing
@@ -72,7 +72,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&post).expect("Failed to serialize post");
-        let deserialized: ContentPayload = serde_json::from_str(&json).expect("Failed to deserialize post");
+        let deserialized: ContentPayload =
+            serde_json::from_str(&json).expect("Failed to deserialize post");
 
         assert_eq!(post, deserialized);
     }
@@ -88,7 +89,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&post).expect("Failed to serialize post with attachments");
-        let deserialized: ContentPayload = serde_json::from_str(&json).expect("Failed to deserialize");
+        let deserialized: ContentPayload =
+            serde_json::from_str(&json).expect("Failed to deserialize");
 
         if let ContentPayload::Post { attachments, .. } = deserialized {
             assert!(attachments.is_some());
@@ -180,7 +182,11 @@ mod tests {
         let json = serde_json::to_string(&comment).unwrap();
         let deserialized: ContentPayload = serde_json::from_str(&json).unwrap();
 
-        if let ContentPayload::PostComment { parent_comment_id: parent, .. } = deserialized {
+        if let ContentPayload::PostComment {
+            parent_comment_id: parent,
+            ..
+        } = deserialized
+        {
             assert!(parent.is_some());
             assert_eq!(parent.unwrap(), parent_comment_id);
         } else {
@@ -203,7 +209,12 @@ mod tests {
         let json = serde_json::to_string(&comment).unwrap();
         let deserialized: ContentPayload = serde_json::from_str(&json).unwrap();
 
-        if let ContentPayload::PostComment { comment_id: cid, post_id: pid, .. } = deserialized {
+        if let ContentPayload::PostComment {
+            comment_id: cid,
+            post_id: pid,
+            ..
+        } = deserialized
+        {
             // Verify they can be parsed back as UUIDs
             Uuid::parse_str(&cid).expect("comment_id should be valid UUID");
             Uuid::parse_str(&pid).expect("post_id should be valid UUID");
@@ -272,9 +283,13 @@ mod tests {
     fn test_reaction_compound_emojis() {
         // Test skin tone modifiers and compound emojis
         let compound_emojis = vec![
-            "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿",  // Skin tone variants
-            "👨‍👩‍👧‍👦",                              // Family emoji (ZWJ sequence)
-            "🏳️‍🌈",                                // Rainbow flag
+            "👍🏻",
+            "👍🏼",
+            "👍🏽",
+            "👍🏾",
+            "👍🏿", // Skin tone variants
+            "👨‍👩‍👧‍👦", // Family emoji (ZWJ sequence)
+            "🏳️‍🌈", // Rainbow flag
         ];
 
         for emoji in compound_emojis {
@@ -288,7 +303,11 @@ mod tests {
             let deserialized: ContentPayload = serde_json::from_str(&json).unwrap();
 
             if let ContentPayload::PostReaction { emoji: e, .. } = deserialized {
-                assert_eq!(e, emoji, "Compound emoji {} should survive serialization", emoji);
+                assert_eq!(
+                    e, emoji,
+                    "Compound emoji {} should survive serialization",
+                    emoji
+                );
             } else {
                 panic!("Expected PostReaction");
             }
@@ -391,14 +410,19 @@ mod tests {
         let encryption_key = "bKQ9Ygc49mR/rJ59BfUhkD2dIM/ngWC7dIZ3KlHXYUU=";
 
         // These are different keys!
-        assert_ne!(signing_key, encryption_key, "Signing and encryption keys should be different");
+        assert_ne!(
+            signing_key, encryption_key,
+            "Signing and encryption keys should be different"
+        );
 
         // User ID should be computed from SIGNING key
         let user_id_from_signing = TestUuid::from_public_key(signing_key);
         let user_id_from_encryption = TestUuid::from_public_key(encryption_key);
 
-        assert_ne!(user_id_from_signing, user_id_from_encryption,
-            "User IDs from different keys should be different");
+        assert_ne!(
+            user_id_from_signing, user_id_from_encryption,
+            "User IDs from different keys should be different"
+        );
 
         // In a GossipEnvelope, sender_public_key should be the SIGNING key
         let envelope = TestEnvelope {
@@ -411,8 +435,10 @@ mod tests {
 
         // Verify user_id computed from envelope matches expected
         let computed_user_id = TestUuid::from_public_key(&envelope.sender_public_key);
-        assert_eq!(computed_user_id, user_id_from_signing,
-            "Envelope sender should use signing key for consistent user_id");
+        assert_eq!(
+            computed_user_id, user_id_from_signing,
+            "Envelope sender should use signing key for consistent user_id"
+        );
     }
 
     // ===== Message Type Discrimination Tests =====
@@ -420,27 +446,48 @@ mod tests {
     #[test]
     fn test_content_type_discrimination() {
         let payloads: Vec<(&str, ContentPayload)> = vec![
-            ("Post", ContentPayload::Post { content: "test".to_string(), attachments: None }),
-            ("DirectMessage", ContentPayload::DirectMessage { content: "test".to_string(), thread_id: None }),
-            ("PostComment", ContentPayload::PostComment {
-                comment_id: "1".to_string(),
-                post_id: "2".to_string(),
-                content: "test".to_string(),
-                parent_comment_id: None
-            }),
-            ("PostReaction", ContentPayload::PostReaction {
-                post_id: "1".to_string(),
-                emoji: "👍".to_string(),
-                action: "add".to_string()
-            }),
+            (
+                "Post",
+                ContentPayload::Post {
+                    content: "test".to_string(),
+                    attachments: None,
+                },
+            ),
+            (
+                "DirectMessage",
+                ContentPayload::DirectMessage {
+                    content: "test".to_string(),
+                    thread_id: None,
+                },
+            ),
+            (
+                "PostComment",
+                ContentPayload::PostComment {
+                    comment_id: "1".to_string(),
+                    post_id: "2".to_string(),
+                    content: "test".to_string(),
+                    parent_comment_id: None,
+                },
+            ),
+            (
+                "PostReaction",
+                ContentPayload::PostReaction {
+                    post_id: "1".to_string(),
+                    emoji: "👍".to_string(),
+                    action: "add".to_string(),
+                },
+            ),
         ];
 
         for (expected_type, payload) in payloads {
             let json = serde_json::to_string(&payload).unwrap();
 
             // The JSON should contain the type discriminator
-            assert!(json.contains(&format!("\"type\":\"{}\"", expected_type)),
-                "JSON should contain type discriminator for {}", expected_type);
+            assert!(
+                json.contains(&format!("\"type\":\"{}\"", expected_type)),
+                "JSON should contain type discriminator for {}",
+                expected_type
+            );
 
             // Should deserialize back to the correct variant
             let deserialized: ContentPayload = serde_json::from_str(&json).unwrap();
@@ -450,7 +497,10 @@ mod tests {
                 ContentPayload::PostComment { .. } => "PostComment",
                 ContentPayload::PostReaction { .. } => "PostReaction",
             };
-            assert_eq!(type_name, expected_type, "Should deserialize to correct variant");
+            assert_eq!(
+                type_name, expected_type,
+                "Should deserialize to correct variant"
+            );
         }
     }
 
@@ -522,11 +572,10 @@ mod tests {
             blob_refs: vec![],
         };
 
-        let sealed = SealedBox::new(&payload, &pub_key, &priv_key)
-            .expect("Should create sealed box");
+        let sealed =
+            SealedBox::new(&payload, &pub_key, &priv_key).expect("Should create sealed box");
 
-        let decrypted = sealed.decrypt(&priv_key)
-            .expect("Should decrypt");
+        let decrypted = sealed.decrypt(&priv_key).expect("Should decrypt");
 
         match decrypted {
             RealContentPayload::Post { content, .. } => {
@@ -550,14 +599,18 @@ mod tests {
             parent_comment_id: None,
         };
 
-        let sealed = SealedBox::new(&payload, &pub_key, &priv_key)
-            .expect("Should create sealed box");
+        let sealed =
+            SealedBox::new(&payload, &pub_key, &priv_key).expect("Should create sealed box");
 
-        let decrypted = sealed.decrypt(&priv_key)
-            .expect("Should decrypt");
+        let decrypted = sealed.decrypt(&priv_key).expect("Should decrypt");
 
         match decrypted {
-            RealContentPayload::PostComment { comment_id: cid, post_id: pid, content, .. } => {
+            RealContentPayload::PostComment {
+                comment_id: cid,
+                post_id: pid,
+                content,
+                ..
+            } => {
                 assert_eq!(cid, comment_id);
                 assert_eq!(pid, post_id);
                 assert_eq!(content, "Great post!");
@@ -578,14 +631,17 @@ mod tests {
             action: "add".to_string(),
         };
 
-        let sealed = SealedBox::new(&payload, &pub_key, &priv_key)
-            .expect("Should create sealed box");
+        let sealed =
+            SealedBox::new(&payload, &pub_key, &priv_key).expect("Should create sealed box");
 
-        let decrypted = sealed.decrypt(&priv_key)
-            .expect("Should decrypt");
+        let decrypted = sealed.decrypt(&priv_key).expect("Should decrypt");
 
         match decrypted {
-            RealContentPayload::PostReaction { post_id: pid, emoji, action } => {
+            RealContentPayload::PostReaction {
+                post_id: pid,
+                emoji,
+                action,
+            } => {
                 assert_eq!(pid, post_id);
                 assert_eq!(emoji, "👍");
                 assert_eq!(action, "add");
@@ -614,7 +670,8 @@ mod tests {
             &[],
             &recipient_keys,
             &sender_priv,
-        ).expect("Should create envelope");
+        )
+        .expect("Should create envelope");
 
         // All recipients can decrypt
         let alice_result = envelope.try_decrypt(&alice_pub, &alice_priv);
@@ -655,7 +712,8 @@ mod tests {
             &[],
             &recipient_keys,
             &sender_priv,
-        ).expect("Should create envelope");
+        )
+        .expect("Should create envelope");
 
         // Eve (not a recipient) cannot decrypt
         let eve_result = envelope.try_decrypt(&eve_pub, &eve_priv);
@@ -678,7 +736,8 @@ mod tests {
             &[],
             &recipient_keys,
             &sender_priv,
-        ).expect("Should create envelope");
+        )
+        .expect("Should create envelope");
 
         // Alice's public key but Bob's private key should fail
         let result = envelope.try_decrypt(&alice_pub, &bob_priv);
@@ -700,7 +759,8 @@ mod tests {
             &[],
             &[alice_pub.clone()],
             &sender_priv,
-        ).expect("Should create envelope");
+        )
+        .expect("Should create envelope");
 
         let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
 
@@ -728,7 +788,8 @@ mod tests {
             &[],
             &[alice_pub.clone()],
             &sender_priv,
-        ).expect("Should create envelope");
+        )
+        .expect("Should create envelope");
 
         let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
 
@@ -758,7 +819,8 @@ mod tests {
             Some(parent_id.as_str()),
             &[alice_pub.clone()],
             &sender_priv,
-        ).expect("Should create comment envelope");
+        )
+        .expect("Should create comment envelope");
 
         let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
 
@@ -767,7 +829,7 @@ mod tests {
                 comment_id: cid,
                 post_id: pid,
                 content,
-                parent_comment_id
+                parent_comment_id,
             }) => {
                 assert_eq!(cid, comment_id);
                 assert_eq!(pid, post_id);
@@ -793,12 +855,17 @@ mod tests {
             "add",
             &[alice_pub.clone()],
             &sender_priv,
-        ).expect("Should create reaction envelope");
+        )
+        .expect("Should create reaction envelope");
 
         let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
 
         match decrypted {
-            Some(RealContentPayload::PostReaction { post_id: pid, emoji, action }) => {
+            Some(RealContentPayload::PostReaction {
+                post_id: pid,
+                emoji,
+                action,
+            }) => {
                 assert_eq!(pid, post_id);
                 assert_eq!(emoji, "❤️");
                 assert_eq!(action, "add");
@@ -822,12 +889,17 @@ mod tests {
             "remove",
             &[alice_pub.clone()],
             &sender_priv,
-        ).expect("Should create reaction remove envelope");
+        )
+        .expect("Should create reaction remove envelope");
 
         let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
 
         match decrypted {
-            Some(RealContentPayload::PostReaction { post_id: pid, emoji, action }) => {
+            Some(RealContentPayload::PostReaction {
+                post_id: pid,
+                emoji,
+                action,
+            }) => {
                 assert_eq!(pid, post_id);
                 assert_eq!(emoji, "👎");
                 assert_eq!(action, "remove");

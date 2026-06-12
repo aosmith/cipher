@@ -11,8 +11,8 @@
 use bytes::Bytes;
 use iroh::protocol::Router;
 use iroh_blobs::net_protocol::Blobs;
-use iroh_gossip::ALPN;
 use iroh_gossip::net::{Event as GossipNetEvent, GossipEvent, GossipReceiver, GossipSender};
+use iroh_gossip::ALPN;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -91,13 +91,13 @@ pub enum P2PMessage {
     /// Friend request sent when scanning QR code
     /// Broadcast to global mesh - only the target can process it
     FriendRequest {
-        from_public_key: String,            // Requester's signing public key (Ed25519)
+        from_public_key: String, // Requester's signing public key (Ed25519)
         from_encryption_public_key: String, // Requester's encryption public key (X25519)
-        from_user_id: SqliteUuid,           // Requester's user ID
-        from_display_name: String,          // Requester's display name
-        from_node_id: String,               // Requester's Iroh NodeId
-        from_relay_url: String,             // Requester's relay URL
-        to_public_key: String,              // Target's public key (for filtering)
+        from_user_id: SqliteUuid, // Requester's user ID
+        from_display_name: String, // Requester's display name
+        from_node_id: String,    // Requester's Iroh NodeId
+        from_relay_url: String,  // Requester's relay URL
+        to_public_key: String,   // Target's public key (for filtering)
         timestamp: i64,
     },
     /// Friend request acceptance
@@ -114,17 +114,17 @@ pub enum P2PMessage {
     /// Heartbeat message to verify peer is still connected
     /// Broadcast to global mesh for accurate peer counting
     Heartbeat {
-        node_id: String,              // Sender's Iroh NodeId
+        node_id: String, // Sender's Iroh NodeId
         timestamp: i64,
     },
     /// Unified content message for all content types (posts, comments, reactions)
     /// Single transport mechanism for all unencrypted content
     Content {
-        content_type: String,         // "post", "comment", "reaction"
+        content_type: String, // "post", "comment", "reaction"
         user_id: SqliteUuid,
         public_key: String,
-        node_id: String,              // Sender's NodeId for blob fetching
-        payload_json: String,         // Type-specific data as JSON
+        node_id: String,      // Sender's NodeId for blob fetching
+        payload_json: String, // Type-specific data as JSON
         timestamp: i64,
         device_id: Option<String>,
         blob_refs: Vec<BlobReference>,
@@ -208,9 +208,22 @@ pub struct IrohNetwork {
     last_presence_success: Arc<Mutex<Option<std::time::Instant>>>,
     /// Health tracking: last time heartbeat was successfully sent
     last_heartbeat_success: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Health tracking: last time a message was ACTUALLY broadcast to the gossip mesh.
+    /// The presence/heartbeat timestamps above only prove the message was queued into an
+    /// in-memory channel (publish_message always succeeds), so they stay fresh even when
+    /// the network is dead. This one is set by the stream handler on real broadcast success.
+    last_broadcast_success: Arc<Mutex<Option<std::time::Instant>>>,
     /// Flag to signal background loops should stop (for clean shutdown)
     /// Public so app lifecycle handlers can signal shutdown
     pub shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Handles of spawned background loops so recover()/shutdown() can abort them.
+    /// The loops only observe shutdown_flag at their next tick (15-30s, never while
+    /// the process is suspended on mobile), so flag-based stopping alone leaks a full
+    /// set of duplicate loops on every recover().
+    background_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// Guards against concurrent recover() calls (foreground event racing the
+    /// frontend health-check loop) each spawning their own set of loops
+    recovering: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl IrohNetwork {
@@ -250,7 +263,10 @@ impl IrohNetwork {
             db,
             last_presence_success: Arc::new(Mutex::new(None)),
             last_heartbeat_success: Arc::new(Mutex::new(None)),
+            last_broadcast_success: Arc::new(Mutex::new(None)),
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            background_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+            recovering: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -425,7 +441,10 @@ impl IrohNetwork {
             );
             for (node_id_str, relay_url_str) in &peer_addrs {
                 let relay_url_opt = Some(relay_url_str.as_str());
-                println!("[IROH] Processing peer address: node_id={}, relay={:?}", node_id_str, relay_url_opt);
+                println!(
+                    "[IROH] Processing peer address: node_id={}, relay={:?}",
+                    node_id_str, relay_url_opt
+                );
                 match node_id_str.parse::<iroh::NodeId>() {
                     Ok(peer_id) => {
                         println!("[IROH] Parsed peer NodeId: {}", peer_id);
@@ -439,7 +458,10 @@ impl IrohNetwork {
                         println!("[IROH] Peer is not self, attempting connection...");
                     }
                     Err(e) => {
-                        println!("[IROH] Failed to parse peer NodeId '{}': {}", node_id_str, e);
+                        println!(
+                            "[IROH] Failed to parse peer NodeId '{}': {}",
+                            node_id_str, e
+                        );
                         continue;
                     }
                 }
@@ -468,20 +490,29 @@ impl IrohNetwork {
                             println!("[IROH] Warning: Failed to add node address: {}", e);
                         }
 
-                        // Now try to connect with full addressing info
+                        // Now try to connect with full addressing info.
+                        // Bound the attempt - an unreachable peer otherwise stalls app
+                        // startup for the full QUIC handshake timeout per peer.
                         println!("[IROH] Attempting to connect to peer: {}", peer_id);
-                        match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
-                            Ok(_conn) => {
+                        match tokio::time::timeout(
+                            tokio::time::Duration::from_secs(5),
+                            endpoint.connect(peer_id, iroh_gossip::ALPN),
+                        )
+                        .await
+                        {
+                            Ok(Ok(_conn)) => {
                                 println!("[IROH] [OK] CONNECTED to peer {}!", peer_id);
-                                println!("[IROH]   Connected to peer: {}", peer_id);
                                 // Track this connection
                                 self.add_connected_peer(peer_id).await;
                                 // Keep this peer for gossip bootstrap
                                 peer_node_ids.push(node_id_str.clone());
                                 break; // One connection is enough to start
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 println!("[IROH] Failed to connect to {}: {}", peer_id, e);
+                            }
+                            Err(_) => {
+                                println!("[IROH] Connect to {} timed out after 5s", peer_id);
                             }
                         }
                     }
@@ -495,7 +526,10 @@ impl IrohNetwork {
         // Privacy is achieved through encryption, not topology
         println!("[IROH] ========================================");
         println!("[IROH] GLOBAL MESH ARCHITECTURE");
-        println!("[IROH] Subscribing to global content topic: {}", CONTENT_TOPIC);
+        println!(
+            "[IROH] Subscribing to global content topic: {}",
+            CONTENT_TOPIC
+        );
         println!("[IROH] All content will be broadcast to all peers");
         println!("[IROH] Only friends can decrypt your content");
         println!("[IROH] ========================================");
@@ -503,8 +537,14 @@ impl IrohNetwork {
         // Subscribe to the global content topic
         // If we have bootstrap peers from previous sessions, use them
         if !peer_node_ids.is_empty() {
-            println!("[IROH] Subscribing with {} bootstrap peers", peer_node_ids.len());
-            if let Err(e) = self.subscribe_topic_with_peers(CONTENT_TOPIC, peer_node_ids.clone()).await {
+            println!(
+                "[IROH] Subscribing with {} bootstrap peers",
+                peer_node_ids.len()
+            );
+            if let Err(e) = self
+                .subscribe_topic_with_peers(CONTENT_TOPIC, peer_node_ids.clone())
+                .await
+            {
                 println!("[IROH] Warning: Failed to subscribe with bootstrap: {}", e);
                 println!("[IROH] Falling back to root subscription...");
                 self.subscribe_topic(CONTENT_TOPIC).await?;
@@ -527,111 +567,12 @@ impl IrohNetwork {
         // peer addresses out-of-band (QR codes, messaging apps) and manually bootstrap
         self.start_active_peer_discovery();
 
-        // CRITICAL: Pre-populate endpoint with friend peer addresses for persistent connections
-        // This enables reconnection to friends after app restart
-        println!("[IROH] Loading saved friend peer addresses for persistent reconnection...");
-        match self.db.get_all_friend_peer_addresses(self.user_id) {
-            Ok(friend_peer_addrs) => {
-                if !friend_peer_addrs.is_empty() {
-                    println!(
-                        "[IROH] Found {} friend peer addresses in database",
-                        friend_peer_addrs.len()
-                    );
-                    for (node_id_str, relay_url) in &friend_peer_addrs {
-                        if let Ok(peer_id) = node_id_str.parse::<iroh::NodeId>() {
-                            if peer_id != node_id {
-                                // Construct NodeAddr with friend's relay URL
-                                let mut peer_node_addr = iroh::NodeAddr::new(peer_id);
-                                if let Ok(url) = relay_url.parse() {
-                                    peer_node_addr = peer_node_addr.with_relay_url(url);
-                                    println!(
-                                        "[IROH] Pre-populating friend peer {} with relay: {}",
-                                        peer_id, relay_url
-                                    );
-                                    // Add to endpoint
-                                    if let Err(e) = endpoint.add_node_addr(peer_node_addr) {
-                                        println!(
-                                            "[IROH] Warning: Failed to pre-populate friend peer {}: {}",
-                                            peer_id, e
-                                        );
-                                    } else {
-                                        println!("[IROH] [OK] Pre-populated friend peer {}", peer_id);
-                                        // Try to reconnect with retry logic (3 attempts with exponential backoff)
-                                        let max_attempts = 3;
-                                        let mut reconnected = false;
-
-                                        for attempt in 1..=max_attempts {
-                                            match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
-                                                Ok(conn) => {
-                                                    println!("[IROH] [OK] RECONNECTED to friend {} on attempt {}!", peer_id, attempt);
-                                                    println!(
-                                                        "[IROH]   Connected to peer: {}",
-                                                        peer_id
-                                                    );
-                                                    self.add_connected_peer(peer_id).await;
-
-                                                    // Hand off QUIC connection to gossip protocol.
-                                                    // Two-step process for OUTGOING connections:
-                                                    // 1. handle_connection() - tells gossip about the connection
-                                                    // 2. join_peers() - actively joins the peer to our topic mesh
-                                                    let gossip_guard = self.gossip.lock().await;
-                                                    if let Some(gossip) = gossip_guard.as_ref() {
-                                                        match gossip.handle_connection(conn).await {
-                                                            Ok(_) => println!("[IROH] [OK] Handed connection to gossip for friend {}", peer_id),
-                                                            Err(e) => println!("[IROH] Warning: Failed to hand connection to gossip: {}", e),
-                                                        }
-                                                    }
-                                                    drop(gossip_guard);
-
-                                                    // CRITICAL: Call join_peers() to form gossip mesh
-                                                    let topics_guard = self.topics.lock().await;
-                                                    if let Some(subscription) = topics_guard.get(CONTENT_TOPIC) {
-                                                        match subscription.gossip_sender.join_peers(vec![peer_id]).await {
-                                                            Ok(_) => println!("[IROH] [OK] Joined gossip mesh with friend {}", peer_id),
-                                                            Err(e) => println!("[IROH] Warning: Failed to join gossip mesh with friend: {}", e),
-                                                        }
-                                                    }
-                                                    drop(topics_guard);
-
-                                                    reconnected = true;
-                                                    break;
-                                                }
-                                                Err(e) => {
-                                                    println!(
-                                                        "[IROH] Reconnect attempt {}/{} to friend {} failed: {}",
-                                                        attempt, max_attempts, peer_id, e
-                                                    );
-
-                                                    if attempt < max_attempts {
-                                                        // Exponential backoff: 500ms, 1s
-                                                        let delay_ms = 500 * (1 << (attempt - 1));
-                                                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        if !reconnected {
-                                            println!(
-                                                "[IROH] Note: Friend peer {} not immediately reachable after {} attempts",
-                                                peer_id, max_attempts
-                                            );
-                                            println!("[IROH]   Will discover via gossip presence announcements");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    println!("[IROH] Friend peer address pre-population complete");
-                } else {
-                    println!("[IROH] No saved friend peer addresses yet");
-                }
-            }
-            Err(e) => {
-                println!("[IROH] Warning: Failed to load friend peer addresses: {}", e);
-            }
-        }
+        // Friend reconnection is handled by the active peer discovery loop started above:
+        // it pre-populates node addresses, connects with exponential backoff, and performs
+        // the handle_connection() + join_peers() handshake on success. Its first pass runs
+        // ~1s after spawn. Doing the same work inline here (serial, 3 attempts per friend,
+        // no per-connect timeout) used to block app startup for minutes when friends were
+        // offline.
 
         println!("[IROH] Initialization complete - DHT/relay discovery active");
         println!("[IROH] Using gossip topics for all Presence messages");
@@ -718,64 +659,33 @@ impl IrohNetwork {
             );
         }
 
-        // CRITICAL: ALWAYS use subscribe_and_join() - even with empty bootstrap list!
-        // This is required for proper gossip mesh formation per iroh-gossip chat example.
+        // ALWAYS use subscribe_and_join() for proper gossip mesh formation.
+        // With empty bootstrap, it returns immediately as a root node.
+        // With bootstrap peers, it waits for NeighborUp to confirm mesh formation.
         //
-        // Key insight:
-        // - subscribe_and_join() with empty bootstrap: Creates proper root node that CAN accept joins
-        // - subscribe() with empty bootstrap: Creates passive root that CANNOT accept joins
-        //
-        // When bootstrap list is empty, subscribe_and_join() will emit Joined([]) event immediately,
-        // making this peer a proper root that others can join.
-        let gossip_topic = if !bootstrap_peers.is_empty() {
-            println!("[IROH-GOSSIP] Calling gossip.subscribe_and_join() for topic '{}' with {} bootstrap peers (15s timeout)...", topic, bootstrap_peers.len());
-            println!("[IROH-GOSSIP]   subscribe_and_join() will wait for NeighborUp event from gossip protocol");
-            println!("[IROH-GOSSIP]   This indicates the gossip mesh has formed successfully");
+        // Key: subscribe_and_join() enables both sending AND receiving.
+        // The old subscribe() only enabled sending reliably.
+        println!("[IROH-GOSSIP] Calling gossip.subscribe_and_join() for topic '{}' with {} bootstrap peers...", topic, bootstrap_peers.len());
 
-            // Give the gossip protocol layer time to establish after QUIC connection
-            // QUIC connection succeeds quickly, but gossip protocol needs time to set up
+        // Give the gossip protocol layer time to establish after QUIC connection
+        if !bootstrap_peers.is_empty() {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
 
-            match tokio::time::timeout(
-                tokio::time::Duration::from_secs(15),
-                gossip.subscribe_and_join(topic_id, bootstrap_peers.clone())
-            ).await {
-                Ok(Ok(result)) => {
-                    println!("[IROH-GOSSIP] [OK] gossip.subscribe_and_join() completed for topic '{}'", topic);
-                    println!("[IROH-GOSSIP]   Successfully joined gossip mesh via {} bootstrap peers", bootstrap_peers.len());
-                    println!("[IROH-GOSSIP]   Gossip protocol neighbor relationship established!");
-                    result
-                }
-                Ok(Err(e)) => {
-                    println!("[IROH-GOSSIP] ✗ gossip.subscribe_and_join() failed: {}", e);
-                    return Err(format!("Failed to join gossip topic: {}", e));
-                }
-                Err(_) => {
-                    println!("[IROH-GOSSIP] ⏱  gossip.subscribe_and_join() timed out after 15s for topic '{}'", topic);
-                    println!("[IROH-GOSSIP]   Gossip protocol did not establish NeighborUp within timeout");
-                    println!("[IROH-GOSSIP]   This indicates the bootstrap peer may not be subscribed to this topic");
-                    return Err("Timed out joining gossip topic - gossip protocol did not form neighbor relationship".to_string());
-                }
+        // All nodes use subscribe() - mesh forms dynamically via join_peers() calls
+        // No "root" node concept - every peer is equal
+        println!("[IROH-GOSSIP] Creating gossip subscription...");
+        let gossip_topic = match gossip.subscribe(topic_id, bootstrap_peers.clone()) {
+            Ok(result) => {
+                println!(
+                    "[IROH-GOSSIP] [OK] Subscription created for topic '{}'",
+                    topic
+                );
+                result
             }
-        } else {
-            println!("[IROH-GOSSIP] Calling gossip.subscribe() for topic '{}' (root node - empty bootstrap)...", topic);
-            println!("[IROH-GOSSIP]   Using subscribe() instead of subscribe_and_join() for root nodes");
-            println!("[IROH-GOSSIP]   subscribe() returns immediately, subscribe_and_join() waits for peers");
-
-            // CRITICAL: Use subscribe() (NOT subscribe_and_join()) for root nodes!
-            // subscribe_and_join() calls .joined().await which WAITS for at least one connection
-            // With empty bootstrap and no peers, it will hang forever!
-            // subscribe() returns immediately and creates a proper root node that accepts joins
-            match gossip.subscribe(topic_id, bootstrap_peers.clone()) {
-                Ok(result) => {
-                    println!("[IROH-GOSSIP] [OK] gossip.subscribe() completed for topic '{}' (root node)", topic);
-                    println!("[IROH-GOSSIP]   Root node created - ready to accept joins from peers");
-                    result
-                }
-                Err(e) => {
-                    println!("[IROH-GOSSIP] ✗ gossip.subscribe() failed for root node: {}", e);
-                    return Err(format!("Failed to subscribe to gossip topic: {}", e));
-                }
+            Err(e) => {
+                println!("[IROH-GOSSIP] ✗ Failed to subscribe: {}", e);
+                return Err(format!("Failed to subscribe to gossip topic: {}", e));
             }
         };
 
@@ -792,21 +702,28 @@ impl IrohNetwork {
         let gossip_sender_arc = Arc::new(gossip_sender);
 
         // Store the channel sender AND gossip sender for publishing messages and managing peers
-        self.topics
-            .lock()
-            .await
-            .insert(topic.to_string(), TopicSubscription {
+        self.topics.lock().await.insert(
+            topic.to_string(),
+            TopicSubscription {
                 broadcast_tx,
                 gossip_sender: gossip_sender_arc.clone(),
-            });
+            },
+        );
 
         // Start listening to the receiver stream AND handle broadcast requests
         let network = Arc::new(self.clone_for_background());
         let topic_str = topic.to_string();
         let gossip_sender_for_handler = gossip_sender_arc.clone();
+        let bootstrap_peers_for_handler = bootstrap_peers.clone();
         tokio::spawn(async move {
             network
-                .handle_topic_stream(topic_str, gossip_sender_for_handler, gossip_receiver, broadcast_rx)
+                .handle_topic_stream(
+                    topic_str,
+                    gossip_sender_for_handler,
+                    gossip_receiver,
+                    broadcast_rx,
+                    bootstrap_peers_for_handler,
+                )
                 .await;
         });
 
@@ -821,11 +738,31 @@ impl IrohNetwork {
         gossip_sender: Arc<GossipSender>,
         mut gossip_receiver: GossipReceiver,
         mut broadcast_rx: tokio::sync::mpsc::UnboundedReceiver<Bytes>,
+        bootstrap_peers: Vec<iroh::NodeId>,
     ) {
         use futures::StreamExt;
 
-        println!("[IROH-STREAM] Starting message handler for topic: {}", topic);
+        println!(
+            "[IROH-STREAM] Starting message handler for topic: {}",
+            topic
+        );
         println!("[IROH-STREAM] Listening for gossip events and broadcast requests...");
+
+        // CRITICAL: Join bootstrap peers INSIDE the handler, right before the loop
+        // This ensures we're actively listening when join_peers() triggers events
+        if !bootstrap_peers.is_empty() {
+            println!(
+                "[IROH-STREAM] Joining {} bootstrap peers for bidirectional mesh...",
+                bootstrap_peers.len()
+            );
+            match gossip_sender.join_peers(bootstrap_peers).await {
+                Ok(_) => println!("[IROH-STREAM] [OK] Joined bootstrap peers - ready to receive"),
+                Err(e) => println!(
+                    "[IROH-STREAM] Warning: Failed to join bootstrap peers: {}",
+                    e
+                ),
+            }
+        }
 
         // Listen on both the gossip receiver stream (incoming) and broadcast channel (outgoing)
         loop {
@@ -840,8 +777,10 @@ impl IrohNetwork {
                                     // Gossip protocols may deliver the same message via multiple paths
                                     use std::hash::{Hash, Hasher};
                                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                    // Hash CONTENT ONLY - including delivered_from defeated the
+                                    // purpose, since the same message arriving via two paths has
+                                    // two different delivery peers and was processed twice
                                     msg.content.hash(&mut hasher);
-                                    msg.delivered_from.hash(&mut hasher);
                                     let msg_hash = hasher.finish();
 
                                     {
@@ -953,10 +892,14 @@ impl IrohNetwork {
                         }
                         Some(Err(e)) => {
                             println!("[IROH-STREAM] ✗ Error on topic {} stream: {}", topic, e);
+                            println!("[IROH-STREAM]   Removing topic from map so recover() will re-subscribe");
+                            self.topics.lock().await.remove(&topic);
                             break;
                         }
                         None => {
                             println!("[IROH-STREAM] Stream ended for topic: {}", topic);
+                            println!("[IROH-STREAM]   Removing topic from map so recover() will re-subscribe");
+                            self.topics.lock().await.remove(&topic);
                             break;
                         }
                     }
@@ -968,6 +911,8 @@ impl IrohNetwork {
                     match gossip_sender.broadcast(data.clone()).await {
                         Ok(_) => {
                             println!("[IROH-STREAM] [OK] Successfully broadcast message to topic '{}'", topic);
+                            // Record REAL broadcast success for health_check()
+                            *self.last_broadcast_success.lock().await = Some(std::time::Instant::now());
                         }
                         Err(e) => {
                             println!("[IROH-STREAM] ✗ Failed to broadcast message to topic '{}': {}", topic, e);
@@ -1012,8 +957,14 @@ impl IrohNetwork {
     /// to force a specific peer as bootstrap (e.g., for initial network setup).
     /// Calling this repeatedly causes duplicate stream handlers and NeighborDown loops.
     #[allow(dead_code)]
-    pub async fn join_gossip_mesh_with_peer(&self, bootstrap_peer: iroh::NodeId) -> Result<(), String> {
-        println!("[IROH-JOIN] Joining gossip mesh with peer: {} (atomic)", bootstrap_peer);
+    pub async fn join_gossip_mesh_with_peer(
+        &self,
+        bootstrap_peer: iroh::NodeId,
+    ) -> Result<(), String> {
+        println!(
+            "[IROH-JOIN] Joining gossip mesh with peer: {} (atomic)",
+            bootstrap_peer
+        );
 
         let gossip_guard = self.gossip.lock().await;
         let gossip = gossip_guard.as_ref().ok_or("Gossip not initialized")?;
@@ -1023,15 +974,20 @@ impl IrohNetwork {
 
         // Step 1: Create NEW subscription with bootstrap peer FIRST (before removing old one)
         // This ensures we always have an active subscription
-        println!("[IROH-JOIN] Creating new subscription with peer {} as bootstrap...", bootstrap_peer);
+        println!(
+            "[IROH-JOIN] Creating new subscription with peer {} as bootstrap...",
+            bootstrap_peer
+        );
 
         // Give gossip protocol time to use the QUIC connection we already have
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
         let gossip_topic = match tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
-            gossip.subscribe_and_join(topic_id, vec![bootstrap_peer])
-        ).await {
+            gossip.subscribe_and_join(topic_id, vec![bootstrap_peer]),
+        )
+        .await
+        {
             Ok(Ok(result)) => {
                 println!("[IROH-JOIN] [OK] New subscription created successfully!");
                 result
@@ -1062,24 +1018,37 @@ impl IrohNetwork {
             // Remove old subscription (if any) - the old stream handler will terminate
             topics_guard.remove(CONTENT_TOPIC);
             // Insert new subscription
-            topics_guard.insert(CONTENT_TOPIC.to_string(), TopicSubscription {
-                broadcast_tx,
-                gossip_sender: gossip_sender_arc.clone(),
-            });
+            topics_guard.insert(
+                CONTENT_TOPIC.to_string(),
+                TopicSubscription {
+                    broadcast_tx,
+                    gossip_sender: gossip_sender_arc.clone(),
+                },
+            );
         }
 
         // Step 4: Start new message handler for the new subscription
         let network = Arc::new(self.clone_for_background());
         let topic_str = CONTENT_TOPIC.to_string();
         let gossip_sender_for_handler = gossip_sender_arc.clone();
+        let bootstrap_peers_for_handler = vec![bootstrap_peer];
         tokio::spawn(async move {
             network
-                .handle_topic_stream(topic_str, gossip_sender_for_handler, gossip_receiver, broadcast_rx)
+                .handle_topic_stream(
+                    topic_str,
+                    gossip_sender_for_handler,
+                    gossip_receiver,
+                    broadcast_rx,
+                    bootstrap_peers_for_handler,
+                )
                 .await;
         });
 
         self.add_connected_peer(bootstrap_peer).await;
-        println!("[IROH-JOIN] [OK] Successfully joined gossip mesh with peer {}!", bootstrap_peer);
+        println!(
+            "[IROH-JOIN] [OK] Successfully joined gossip mesh with peer {}!",
+            bootstrap_peer
+        );
         Ok(())
     }
 
@@ -1146,9 +1115,7 @@ impl IrohNetwork {
         use iroh_blobs::store::Store;
 
         let blobs_guard = self.blobs.lock().await;
-        let blobs = blobs_guard
-            .as_ref()
-            .ok_or("Blob store not initialized")?;
+        let blobs = blobs_guard.as_ref().ok_or("Blob store not initialized")?;
 
         let store = blobs.store();
         let bytes = Bytes::from(data);
@@ -1177,11 +1144,12 @@ impl IrohNetwork {
         use iroh_blobs::store::{Map, MapEntry};
 
         let blobs_guard = self.blobs.lock().await;
-        let blobs = blobs_guard
-            .as_ref()
-            .ok_or("Blob store not initialized")?;
+        let blobs = blobs_guard.as_ref().ok_or("Blob store not initialized")?;
 
-        println!("[IROH-BLOBS] Fetching blob {} from peer {}", hash, from_node_id);
+        println!(
+            "[IROH-BLOBS] Fetching blob {} from peer {}",
+            hash, from_node_id
+        );
 
         // Queue the download request
         let downloader = blobs.downloader();
@@ -1220,7 +1188,11 @@ impl IrohNetwork {
             .await
             .map_err(|e| format!("Failed to read blob: {}", e))?;
 
-        println!("[IROH-BLOBS] [OK] Fetched blob, size: {} bytes (expected: {})", data.len(), size);
+        println!(
+            "[IROH-BLOBS] [OK] Fetched blob, size: {} bytes (expected: {})",
+            data.len(),
+            size
+        );
         Ok(data.to_vec())
     }
 
@@ -1318,7 +1290,7 @@ impl IrohNetwork {
         let shutdown_flag = self.shutdown_flag.clone();
         let last_success = self.last_presence_success.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
@@ -1345,6 +1317,7 @@ impl IrohNetwork {
                 network.resend_friend_accepted_if_needed().await;
             }
         });
+        self.track_background_task(handle);
 
         println!("[IROH] Started presence announcement loop (includes FriendAccepted retry)");
     }
@@ -1356,7 +1329,7 @@ impl IrohNetwork {
         let network = Arc::new(self.clone_for_background());
         let shutdown_flag = self.shutdown_flag.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Initial delay before first sync request
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
@@ -1376,6 +1349,7 @@ impl IrohNetwork {
                 network.request_device_sync().await;
             }
         });
+        self.track_background_task(handle);
 
         println!("[IROH] Started periodic device sync loop (every 30s)");
     }
@@ -1384,15 +1358,17 @@ impl IrohNetwork {
     /// All Cipher nodes publish to and query from a well-known rendezvous point
     fn start_active_peer_discovery(&self) {
         let network = Arc::new(self.clone_for_background());
+        let shutdown_flag = self.shutdown_flag.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Brief delay to allow endpoint initialization (reduced from 5s for faster reconnection)
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
             println!("[IROH-RENDEZVOUS] Starting Pkarr-based peer discovery...");
 
-            let endpoint_guard = network.endpoint.lock().await;
-            if let Some(endpoint) = endpoint_guard.as_ref() {
+            // Clone the endpoint so the lock isn't held across awaits
+            let endpoint_clone = network.endpoint.lock().await.clone();
+            if let Some(endpoint) = endpoint_clone.as_ref() {
                 let our_node_id = endpoint.node_id();
                 println!("[IROH-RENDEZVOUS] Our NodeId: {}", our_node_id);
 
@@ -1426,13 +1402,18 @@ impl IrohNetwork {
                     );
                 }
             }
-            drop(endpoint_guard);
 
             // Continuously try database peers with EXPONENTIAL BACKOFF
             // Reduces battery drain and network spam for unreachable peers
+            // Work-first ordering: the first reconnect pass runs ~1s after start
+            // (important after resume) instead of waiting a full interval.
             let interval = tokio::time::Duration::from_secs(10);
             loop {
-                tokio::time::sleep(interval).await;
+                // Check if we should stop (recover()/shutdown() also abort this task directly)
+                if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("[IROH-DISCOVERY] Discovery loop stopping due to shutdown flag");
+                    break;
+                }
 
                 // Check all friend peer addresses (NodeId + relay URL) in database and try to connect
                 if let Ok(peer_addrs) = network.db.get_all_friend_peer_addresses(network.user_id) {
@@ -1450,19 +1431,25 @@ impl IrohNetwork {
                                         continue;
                                     }
 
-                                    let endpoint_guard = network.endpoint.lock().await;
-                                    if let Some(endpoint) = endpoint_guard.as_ref() {
+                                    // Clone the endpoint and release the lock immediately.
+                                    // Holding it across the connect() await stalled presence,
+                                    // heartbeats and the gossip stream handler for the entire
+                                    // attempt (tens of seconds for unreachable peers).
+                                    let endpoint_clone = network.endpoint.lock().await.clone();
+                                    if let Some(endpoint) = endpoint_clone.as_ref() {
                                         let our_node_id = endpoint.node_id();
 
                                         // Skip if it's our own NodeId
                                         if peer_id == our_node_id {
-                                            drop(endpoint_guard);
                                             continue;
                                         }
 
                                         // CHECK EXPONENTIAL BACKOFF before attempting connection
-                                        let mut retry_states = network.peer_retry_counts.lock().await;
-                                        let retry_state = retry_states.entry(peer_id).or_insert_with(PeerRetryState::new);
+                                        let mut retry_states =
+                                            network.peer_retry_counts.lock().await;
+                                        let retry_state = retry_states
+                                            .entry(peer_id)
+                                            .or_insert_with(PeerRetryState::new);
 
                                         if !retry_state.should_retry() {
                                             let backoff_delay = retry_state.backoff_delay_secs();
@@ -1471,7 +1458,6 @@ impl IrohNetwork {
                                                 peer_id, retry_state.attempt_count + 1, backoff_delay
                                             );
                                             drop(retry_states);
-                                            drop(endpoint_guard);
                                             continue;
                                         }
 
@@ -1490,7 +1476,6 @@ impl IrohNetwork {
                                             println!("[IROH-DISCOVERY] Connecting to peer {} with relay: {}", peer_id, &relay_url);
                                         } else {
                                             println!("[IROH-DISCOVERY] Warning: Invalid relay URL for peer {}", peer_id);
-                                            drop(endpoint_guard);
                                             continue;
                                         }
 
@@ -1501,27 +1486,33 @@ impl IrohNetwork {
                                             println!("[IROH-DISCOVERY] Warning: Failed to add node address: {}", e);
                                         }
 
-                                        // Try to connect with full addressing info
+                                        // Try to connect with full addressing info.
+                                        // Bound the attempt so one unreachable peer can't
+                                        // monopolize the cycle for the full QUIC timeout.
                                         println!("[IROH-DISCOVERY] Discovering peer {} via DHT/DNS/Relay...", peer_id);
-                                        match endpoint.connect(peer_id, iroh_gossip::ALPN).await {
-                                            Ok(conn) => {
+                                        match tokio::time::timeout(
+                                            tokio::time::Duration::from_secs(15),
+                                            endpoint.connect(peer_id, iroh_gossip::ALPN),
+                                        )
+                                        .await
+                                        {
+                                            Ok(Ok(conn)) => {
                                                 println!(
                                                     "[IROH-DISCOVERY] [OK] Connected to peer {}!",
                                                     peer_id
                                                 );
-                                                println!(
-                                                    "[IROH-DISCOVERY]   Connected to: {}",
-                                                    peer_id
-                                                );
-                                                drop(endpoint_guard);
 
                                                 // Check if already connected - skip if so
-                                                let was_connected = network.is_peer_connected(peer_id).await;
+                                                let was_connected =
+                                                    network.is_peer_connected(peer_id).await;
                                                 network.add_connected_peer(peer_id).await;
 
                                                 // RESET backoff counter on successful connection
-                                                let mut retry_states = network.peer_retry_counts.lock().await;
-                                                if let Some(retry_state) = retry_states.get_mut(&peer_id) {
+                                                let mut retry_states =
+                                                    network.peer_retry_counts.lock().await;
+                                                if let Some(retry_state) =
+                                                    retry_states.get_mut(&peer_id)
+                                                {
                                                     println!("[IROH-DISCOVERY] [OK] Backoff reset for peer {} after successful connection", peer_id);
                                                     retry_state.reset();
                                                 }
@@ -1552,7 +1543,9 @@ impl IrohNetwork {
                                                 // a gossip neighbor relationship. Without this, messages
                                                 // won't be exchanged even though QUIC is connected.
                                                 let topics_guard = network.topics.lock().await;
-                                                if let Some(subscription) = topics_guard.get(CONTENT_TOPIC) {
+                                                if let Some(subscription) =
+                                                    topics_guard.get(CONTENT_TOPIC)
+                                                {
                                                     match subscription.gossip_sender.join_peers(vec![peer_id]).await {
                                                         Ok(_) => println!("[IROH-DISCOVERY] [OK] Joined gossip mesh with peer {}", peer_id),
                                                         Err(e) => println!("[IROH-DISCOVERY] Warning: Failed to join gossip mesh with peer: {}", e),
@@ -1561,7 +1554,10 @@ impl IrohNetwork {
                                                 drop(topics_guard);
 
                                                 if !was_connected {
-                                                    println!("[IROH-DISCOVERY] NEW peer {} connected!", peer_id);
+                                                    println!(
+                                                        "[IROH-DISCOVERY] NEW peer {} connected!",
+                                                        peer_id
+                                                    );
 
                                                     // RETRY pending messages when connection restored
                                                     println!("[IROH-DISCOVERY] Connection restored - attempting to resend pending messages...");
@@ -1569,14 +1565,17 @@ impl IrohNetwork {
 
                                                     // CRITICAL FIX: Check if this peer initiated a friendship we've accepted
                                                     // If so, resend FriendAccepted to ensure they know we accepted
-                                                    network.resend_friend_accepted_if_needed().await;
+                                                    network
+                                                        .resend_friend_accepted_if_needed()
+                                                        .await;
                                                 } else {
                                                     println!("[IROH-DISCOVERY] Peer {} already tracked - refreshed gossip connection", peer_id);
                                                 }
 
-                                                break;
+                                                // NOTE: no break here - keep reconnecting to ALL
+                                                // disconnected friends this cycle, not just one per 10s
                                             }
-                                            Err(e) => {
+                                            Ok(Err(e)) => {
                                                 println!(
                                                     "[IROH-DISCOVERY] Failed to connect to {} (attempt {}): {}",
                                                     peer_id, {
@@ -1584,11 +1583,14 @@ impl IrohNetwork {
                                                         retry_states.get(&peer_id).map(|s| s.attempt_count).unwrap_or(0)
                                                     }, e
                                                 );
-                                                drop(endpoint_guard);
+                                            }
+                                            Err(_) => {
+                                                println!(
+                                                    "[IROH-DISCOVERY] Connect to {} timed out after 15s",
+                                                    peer_id
+                                                );
                                             }
                                         }
-                                    } else {
-                                        drop(endpoint_guard);
                                     }
                                 }
                                 Err(e) => {
@@ -1601,8 +1603,11 @@ impl IrohNetwork {
                         }
                     }
                 }
+
+                tokio::time::sleep(interval).await;
             }
         });
+        self.track_background_task(handle);
 
         println!("[IROH] Started Pkarr rendezvous + database peer discovery");
     }
@@ -1625,7 +1630,10 @@ impl IrohNetwork {
                 let peer_node_id = node_addr.node_id;
                 println!(
                     "[IROH] Received presence from user {} ({}) device {} (NodeId: {})",
-                    display_name, &public_key[..8], device_id, peer_node_id
+                    display_name,
+                    &public_key[..8],
+                    device_id,
+                    peer_node_id
                 );
                 println!(
                     "[IROH]   Relay: {:?}, Direct addresses: {}",
@@ -1643,13 +1651,19 @@ impl IrohNetwork {
                         sig,
                     );
                     if valid {
-                        println!("[IROH] [SECURITY] Profile signature VERIFIED for {}", display_name);
+                        println!(
+                            "[IROH] [SECURITY] Profile signature VERIFIED for {}",
+                            display_name
+                        );
                     } else {
                         println!("[IROH] [SECURITY] WARNING: Profile signature INVALID for {} - possible tampering!", display_name);
                     }
                     valid
                 } else {
-                    println!("[IROH] [SECURITY] No profile signature provided by {}", display_name);
+                    println!(
+                        "[IROH] [SECURITY] No profile signature provided by {}",
+                        display_name
+                    );
                     false
                 };
 
@@ -1685,7 +1699,11 @@ impl IrohNetwork {
                 // running cleanup would delete OUR OWN device entry since it would match the
                 // "different device_id, different node_id" criteria.
                 if public_key != self.public_key {
-                    match self.db.cleanup_stale_devices_for_user(&public_key, &device_id, &node_id_str) {
+                    match self.db.cleanup_stale_devices_for_user(
+                        &public_key,
+                        &device_id,
+                        &node_id_str,
+                    ) {
                         Ok(stale_node_ids) if !stale_node_ids.is_empty() => {
                             println!(
                                 "[IROH] Cleaned up {} stale device entries for user {}",
@@ -1696,12 +1714,17 @@ impl IrohNetwork {
                             for stale_node_id in stale_node_ids {
                                 if let Ok(stale_id) = stale_node_id.parse::<iroh::NodeId>() {
                                     self.remove_connected_peer(stale_id).await;
-                                    println!("[IROH] Removed stale peer {} from connected set", stale_node_id);
+                                    println!(
+                                        "[IROH] Removed stale peer {} from connected set",
+                                        stale_node_id
+                                    );
                                 }
                             }
                         }
                         Ok(_) => {} // No stale entries
-                        Err(e) => println!("[IROH] Warning: Failed to cleanup stale devices: {}", e),
+                        Err(e) => {
+                            println!("[IROH] Warning: Failed to cleanup stale devices: {}", e)
+                        }
                     }
                 }
 
@@ -1727,7 +1750,10 @@ impl IrohNetwork {
 
                 // Track this peer as connected (we received their presence via gossip!)
                 self.add_connected_peer(peer_node_id).await;
-                println!("[IROH] [OK] Peer {} is connected via gossip mesh (received their presence)", peer_node_id);
+                println!(
+                    "[IROH] [OK] Peer {} is connected via gossip mesh (received their presence)",
+                    peer_node_id
+                );
 
                 // Create friendship in database (CRITICAL for friends list to work!)
                 // Skip if this is the same user (different device)
@@ -1831,7 +1857,10 @@ impl IrohNetwork {
                     // Do NOT auto-create friendships - that should happen via FriendRequest flow
                     // Check both directions since connection could be stored either way
                     // NOTE: Using lock() instead of try_lock() - connection status check must not be skipped
-                    println!("[IROH] Checking existing connection status for peer {}", peer_user_id);
+                    println!(
+                        "[IROH] Checking existing connection status for peer {}",
+                        peer_user_id
+                    );
                     let existing_status: Option<String> = {
                         let conn = self.db.conn.lock().unwrap();
                         conn.query_row(
@@ -1841,10 +1870,16 @@ impl IrohNetwork {
                             |row| row.get(0)
                         ).ok()
                     };
-                    println!("[IROH] Existing status query returned: {:?}", existing_status);
+                    println!(
+                        "[IROH] Existing status query returned: {:?}",
+                        existing_status
+                    );
 
                     if let Some(status) = existing_status {
-                        println!("[IROH] Existing connection with peer {} has status: {}", peer_user_id, status);
+                        println!(
+                            "[IROH] Existing connection with peer {} has status: {}",
+                            peer_user_id, status
+                        );
 
                         // CRITICAL: Always update NodeId for reconnection - even if relay_url is missing
                         // This ensures the discovery loop has the correct NodeId after peer wipes/restarts
@@ -1857,7 +1892,10 @@ impl IrohNetwork {
                                 &node_id_str,
                                 &relay_url_str,
                             ) {
-                                println!("[IROH] Warning: Failed to save friend peer address: {}", e);
+                                println!(
+                                    "[IROH] Warning: Failed to save friend peer address: {}",
+                                    e
+                                );
                             } else {
                                 println!("[IROH] [OK] Friend peer address saved for reconnection: NodeId={}, Relay={}", node_id_str, relay_url_str);
                             }
@@ -1870,7 +1908,10 @@ impl IrohNetwork {
                             ) {
                                 println!("[IROH] Warning: Failed to update friend NodeId: {}", e);
                             } else {
-                                println!("[IROH] [OK] Friend NodeId updated for reconnection: {}", node_id_str);
+                                println!(
+                                    "[IROH] [OK] Friend NodeId updated for reconnection: {}",
+                                    node_id_str
+                                );
                             }
                         }
 
@@ -1897,32 +1938,42 @@ impl IrohNetwork {
                                 // Use try_lock to avoid blocking the gossip stream handler if endpoint is busy
                                 let endpoint_clone = match tokio::time::timeout(
                                     tokio::time::Duration::from_millis(100),
-                                    self.endpoint.lock()
-                                ).await {
+                                    self.endpoint.lock(),
+                                )
+                                .await
+                                {
                                     Ok(guard) => guard.clone(),
                                     Err(_) => {
-                                        println!("[IROH] Skipping FriendAccepted resend - endpoint busy");
+                                        println!(
+                                            "[IROH] Skipping FriendAccepted resend - endpoint busy"
+                                        );
                                         None
                                     }
                                 };
-                                let (our_node_id, our_relay_url) = if let Some(endpoint) = endpoint_clone.as_ref() {
-                                    match tokio::time::timeout(
-                                        tokio::time::Duration::from_millis(500),
-                                        endpoint.node_addr()
-                                    ).await {
-                                        Ok(Ok(addr)) => (
-                                            addr.node_id.to_string(),
-                                            addr.relay_url().map(|u| u.to_string()).unwrap_or_default()
-                                        ),
-                                        _ => (String::new(), String::new())
-                                    }
-                                } else {
-                                    (String::new(), String::new())
-                                };
+                                let (our_node_id, our_relay_url) =
+                                    if let Some(endpoint) = endpoint_clone.as_ref() {
+                                        match tokio::time::timeout(
+                                            tokio::time::Duration::from_millis(500),
+                                            endpoint.node_addr(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(Ok(addr)) => (
+                                                addr.node_id.to_string(),
+                                                addr.relay_url()
+                                                    .map(|u| u.to_string())
+                                                    .unwrap_or_default(),
+                                            ),
+                                            _ => (String::new(), String::new()),
+                                        }
+                                    } else {
+                                        (String::new(), String::new())
+                                    };
 
                                 if !our_node_id.is_empty() {
                                     // Get our encryption public key for sealed envelope encryption
-                                    let our_encryption_public_key = self.get_user_encryption_public_key().unwrap_or_default();
+                                    let our_encryption_public_key =
+                                        self.get_user_encryption_public_key().unwrap_or_default();
 
                                     let friend_accepted = P2PMessage::FriendAccepted {
                                         from_user_id: self.user_id,
@@ -1934,8 +1985,13 @@ impl IrohNetwork {
                                         to_public_key: public_key.clone(),
                                     };
 
-                                    if let Err(e) = self.publish_message(CONTENT_TOPIC, friend_accepted).await {
-                                        println!("[IROH] Warning: Failed to resend FriendAccepted: {}", e);
+                                    if let Err(e) =
+                                        self.publish_message(CONTENT_TOPIC, friend_accepted).await
+                                    {
+                                        println!(
+                                            "[IROH] Warning: Failed to resend FriendAccepted: {}",
+                                            e
+                                        );
                                     } else {
                                         println!("[IROH] [OK] Resent FriendAccepted to {} (ensuring they know we accepted)", public_key);
                                     }
@@ -1965,21 +2021,25 @@ impl IrohNetwork {
                                 // Get our node address for the FriendRequest message
                                 // Clone endpoint first to avoid holding lock during await
                                 let endpoint_clone = self.endpoint.lock().await.clone();
-                                let (our_node_id, our_relay_url) = if let Some(endpoint) = endpoint_clone.as_ref() {
-                                    match endpoint.node_addr().await {
-                                        Ok(addr) => (
-                                            addr.node_id.to_string(),
-                                            addr.relay_url().map(|u| u.to_string()).unwrap_or_default()
-                                        ),
-                                        Err(_) => (String::new(), String::new())
-                                    }
-                                } else {
-                                    (String::new(), String::new())
-                                };
+                                let (our_node_id, our_relay_url) =
+                                    if let Some(endpoint) = endpoint_clone.as_ref() {
+                                        match endpoint.node_addr().await {
+                                            Ok(addr) => (
+                                                addr.node_id.to_string(),
+                                                addr.relay_url()
+                                                    .map(|u| u.to_string())
+                                                    .unwrap_or_default(),
+                                            ),
+                                            Err(_) => (String::new(), String::new()),
+                                        }
+                                    } else {
+                                        (String::new(), String::new())
+                                    };
 
                                 if !our_node_id.is_empty() {
                                     // Get our encryption public key for sealed envelope encryption
-                                    let our_encryption_public_key = self.get_user_encryption_public_key().unwrap_or_default();
+                                    let our_encryption_public_key =
+                                        self.get_user_encryption_public_key().unwrap_or_default();
 
                                     let friend_request = P2PMessage::FriendRequest {
                                         from_user_id: self.user_id,
@@ -1992,8 +2052,13 @@ impl IrohNetwork {
                                         timestamp: chrono::Utc::now().timestamp(),
                                     };
 
-                                    if let Err(e) = self.publish_message(CONTENT_TOPIC, friend_request).await {
-                                        println!("[IROH] Warning: Failed to resend FriendRequest: {}", e);
+                                    if let Err(e) =
+                                        self.publish_message(CONTENT_TOPIC, friend_request).await
+                                    {
+                                        println!(
+                                            "[IROH] Warning: Failed to resend FriendRequest: {}",
+                                            e
+                                        );
                                     } else {
                                         println!("[IROH] [OK] Resent FriendRequest to {} (in case they lost our original request)", public_key);
                                     }
@@ -2080,7 +2145,9 @@ impl IrohNetwork {
                                     };
 
                                     // Publish to global mesh - target device will filter by public_key
-                                    if let Err(e) = self.publish_message(CONTENT_TOPIC, response).await {
+                                    if let Err(e) =
+                                        self.publish_message(CONTENT_TOPIC, response).await
+                                    {
                                         println!(
                                             "[IROH] Failed to send device sync response: {}",
                                             e
@@ -2191,7 +2258,10 @@ impl IrohNetwork {
                 ref device_id,
                 ref attachments,
             } => {
-                println!("[IROH] Received post from user {} ({})", user_id, public_key);
+                println!(
+                    "[IROH] Received post from user {} ({})",
+                    user_id, public_key
+                );
 
                 // Skip our own posts (they're already in DB)
                 if public_key == &self.public_key {
@@ -2240,7 +2310,6 @@ impl IrohNetwork {
             }
 
             // PostWithBlobs removed - all posts use SealedEnvelope (encrypted)
-
             P2PMessage::SealedEnvelope { envelope_json } => {
                 // PHASE 2: Sealed box encryption
                 // Try to decrypt the envelope using our encryption private key
@@ -2256,13 +2325,14 @@ impl IrohNetwork {
                 };
 
                 // Parse the envelope
-                let envelope: super::crypto::GossipEnvelope = match serde_json::from_str(&envelope_json) {
-                    Ok(env) => env,
-                    Err(e) => {
-                        println!("[IROH] Failed to parse envelope: {}", e);
-                        return;
-                    }
-                };
+                let envelope: super::crypto::GossipEnvelope =
+                    match serde_json::from_str(&envelope_json) {
+                        Ok(env) => env,
+                        Err(e) => {
+                            println!("[IROH] Failed to parse envelope: {}", e);
+                            return;
+                        }
+                    };
 
                 // Quick check: does this envelope have any boxes for us?
                 let our_encryption_public_key = match self.get_user_encryption_public_key() {
@@ -2280,15 +2350,26 @@ impl IrohNetwork {
                 }
 
                 // Try to decrypt
-                match envelope.try_decrypt(&our_encryption_public_key, &our_encryption_private_key) {
+                match envelope.try_decrypt(&our_encryption_public_key, &our_encryption_private_key)
+                {
                     Some(payload) => {
-                        println!("[IROH] [OK] Successfully decrypted envelope from {}", envelope.sender_public_key);
+                        println!(
+                            "[IROH] [OK] Successfully decrypted envelope from {}",
+                            envelope.sender_public_key
+                        );
 
                         // Process the decrypted content
                         match payload {
-                            super::crypto::ContentPayload::Post { post_id, content, node_id, blob_refs } => {
+                            super::crypto::ContentPayload::Post {
+                                post_id,
+                                content,
+                                node_id,
+                                blob_refs,
+                            } => {
                                 // Get sender's user_id from their public key
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(
+                                    &envelope.sender_public_key,
+                                );
 
                                 // Ensure sender exists in database
                                 // NOTE: Using lock() instead of try_lock() for data integrity
@@ -2336,9 +2417,14 @@ impl IrohNetwork {
                                 println!("[IROH] [OK] Emitted decrypted post to UI");
                             }
                             super::crypto::ContentPayload::DirectMessage { content, thread_id } => {
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
-                                println!("[IROH] Received encrypted DM from {}: {} chars",
-                                    envelope.sender_public_key, content.len());
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(
+                                    &envelope.sender_public_key,
+                                );
+                                println!(
+                                    "[IROH] Received encrypted DM from {}: {} chars",
+                                    envelope.sender_public_key,
+                                    content.len()
+                                );
 
                                 #[derive(serde::Serialize, Clone)]
                                 struct DecryptedDMEvent {
@@ -2367,18 +2453,25 @@ impl IrohNetwork {
                                 attachments,
                                 show_in_main_feed,
                             } => {
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
-                                println!("[IROH] Received community post in '{}' from {}: {} chars",
-                                    community_name, envelope.sender_public_key, content.len());
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(
+                                    &envelope.sender_public_key,
+                                );
+                                println!(
+                                    "[IROH] Received community post in '{}' from {}: {} chars",
+                                    community_name,
+                                    envelope.sender_public_key,
+                                    content.len()
+                                );
 
                                 // Parse community_id from string
-                                let community_uuid = match super::types::SqliteUuid::parse_str(&community_id) {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        println!("[IROH] Failed to parse community_id: {}", e);
-                                        return;
-                                    }
-                                };
+                                let community_uuid =
+                                    match super::types::SqliteUuid::parse_str(&community_id) {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            println!("[IROH] Failed to parse community_id: {}", e);
+                                            return;
+                                        }
+                                    };
 
                                 // Ensure sender exists in database
                                 // NOTE: Using lock() instead of try_lock() for data integrity
@@ -2403,7 +2496,11 @@ impl IrohNetwork {
                                 match self.db.create_post(sender_user_id, &content, false) {
                                     Ok(post) => {
                                         // Link it to the community
-                                        if let Err(e) = self.db.create_community_post(community_uuid, post.id, show_in_main_feed) {
+                                        if let Err(e) = self.db.create_community_post(
+                                            community_uuid,
+                                            post.id,
+                                            show_in_main_feed,
+                                        ) {
                                             println!("[IROH] Warning: Failed to link post to community: {}", e);
                                         }
 
@@ -2418,7 +2515,8 @@ impl IrohNetwork {
                                             content: String,
                                             show_in_main_feed: bool,
                                             timestamp: i64,
-                                            attachments: Option<Vec<super::types::MediaAttachmentWithData>>,
+                                            attachments:
+                                                Option<Vec<super::types::MediaAttachmentWithData>>,
                                         }
 
                                         let _ = self.app_handle.emit(
@@ -2448,20 +2546,25 @@ impl IrohNetwork {
                                 new_member_public_key,
                                 new_member_display_name,
                             } => {
-                                println!("[IROH] Received community member added: {} joined '{}'",
-                                    new_member_display_name, community_name);
+                                println!(
+                                    "[IROH] Received community member added: {} joined '{}'",
+                                    new_member_display_name, community_name
+                                );
 
                                 // Parse community_id from string
-                                let community_uuid = match super::types::SqliteUuid::parse_str(&community_id) {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        println!("[IROH] Failed to parse community_id: {}", e);
-                                        return;
-                                    }
-                                };
+                                let community_uuid =
+                                    match super::types::SqliteUuid::parse_str(&community_id) {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            println!("[IROH] Failed to parse community_id: {}", e);
+                                            return;
+                                        }
+                                    };
 
                                 // Get or create user_id for the new member
-                                let new_member_user_id = super::types::SqliteUuid::from_public_key(&new_member_public_key);
+                                let new_member_user_id = super::types::SqliteUuid::from_public_key(
+                                    &new_member_public_key,
+                                );
 
                                 // Ensure the new member user exists in database
                                 // NOTE: Using lock() instead of try_lock() for data integrity
@@ -2493,7 +2596,10 @@ impl IrohNetwork {
                                 ) {
                                     // Ignore duplicate errors
                                     if !e.to_string().contains("UNIQUE constraint failed") {
-                                        println!("[IROH] Warning: Failed to add community member: {}", e);
+                                        println!(
+                                            "[IROH] Warning: Failed to add community member: {}",
+                                            e
+                                        );
                                     }
                                 }
 
@@ -2525,28 +2631,34 @@ impl IrohNetwork {
                                 content,
                                 parent_comment_id,
                             } => {
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
-                                println!("[IROH] Received post comment from {} on post {}",
-                                    envelope.sender_public_key, post_id);
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(
+                                    &envelope.sender_public_key,
+                                );
+                                println!(
+                                    "[IROH] Received post comment from {} on post {}",
+                                    envelope.sender_public_key, post_id
+                                );
 
                                 // Parse IDs
-                                let comment_uuid = match super::types::SqliteUuid::parse_str(&comment_id) {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        println!("[IROH] Failed to parse comment_id: {}", e);
-                                        return;
-                                    }
-                                };
-                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id) {
+                                let comment_uuid =
+                                    match super::types::SqliteUuid::parse_str(&comment_id) {
+                                        Ok(id) => id,
+                                        Err(e) => {
+                                            println!("[IROH] Failed to parse comment_id: {}", e);
+                                            return;
+                                        }
+                                    };
+                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id)
+                                {
                                     Ok(id) => id,
                                     Err(e) => {
                                         println!("[IROH] Failed to parse post_id: {}", e);
                                         return;
                                     }
                                 };
-                                let parent_uuid = parent_comment_id.as_ref().and_then(|id| {
-                                    super::types::SqliteUuid::parse_str(id).ok()
-                                });
+                                let parent_uuid = parent_comment_id
+                                    .as_ref()
+                                    .and_then(|id| super::types::SqliteUuid::parse_str(id).ok());
 
                                 // Ensure sender exists and save comment
                                 // NOTE: Using lock() instead of try_lock() - CRITICAL for comment persistence
@@ -2607,12 +2719,17 @@ impl IrohNetwork {
                                 emoji,
                                 action,
                             } => {
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(&envelope.sender_public_key);
-                                println!("[IROH] Received post reaction from {}: {} {} on post {}",
-                                    envelope.sender_public_key, action, emoji, post_id);
+                                let sender_user_id = super::types::SqliteUuid::from_public_key(
+                                    &envelope.sender_public_key,
+                                );
+                                println!(
+                                    "[IROH] Received post reaction from {}: {} {} on post {}",
+                                    envelope.sender_public_key, action, emoji, post_id
+                                );
 
                                 // Parse post ID
-                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id) {
+                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id)
+                                {
                                     Ok(id) => id,
                                     Err(e) => {
                                         println!("[IROH] Failed to parse post_id: {}", e);
@@ -2697,14 +2814,17 @@ impl IrohNetwork {
             P2PMessage::FriendRequest {
                 from_public_key,
                 from_encryption_public_key,
-                from_user_id: _from_user_id,  // Unused - we compute from public_key for consistency
+                from_user_id: _from_user_id, // Unused - we compute from public_key for consistency
                 from_display_name,
                 from_node_id,
                 from_relay_url,
                 to_public_key,
                 timestamp: _,
             } => {
-                println!("[IROH] Received FriendRequest from {} ({}) (global mesh)", from_display_name, from_public_key);
+                println!(
+                    "[IROH] Received FriendRequest from {} ({}) (global mesh)",
+                    from_display_name, from_public_key
+                );
 
                 // GLOBAL MESH: Filter messages - only process if intended for us
                 if to_public_key != self.public_key {
@@ -2718,12 +2838,18 @@ impl IrohNetwork {
                     return;
                 }
 
-                println!("[IROH] Processing friend request from {} ({})", from_display_name, from_public_key);
+                println!(
+                    "[IROH] Processing friend request from {} ({})",
+                    from_display_name, from_public_key
+                );
 
                 // CRITICAL: Compute friend's user_id from their public key to ensure consistency
                 // Don't trust from_user_id from the message - derive it deterministically
                 let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
-                println!("[IROH] Computed friend_user_id {} from public_key", friend_user_id);
+                println!(
+                    "[IROH] Computed friend_user_id {} from public_key",
+                    friend_user_id
+                );
 
                 // 1. Ensure the friend user exists in database with their actual display name and encryption key
                 // Use ON CONFLICT(public_key) since that's the reliable unique identifier
@@ -2732,7 +2858,11 @@ impl IrohNetwork {
                 {
                     let conn = self.db.conn.lock().unwrap();
                     // Use empty string check since encryption_public_key might be "" for old clients
-                    let enc_key = if from_encryption_public_key.is_empty() { None } else { Some(&from_encryption_public_key) };
+                    let enc_key = if from_encryption_public_key.is_empty() {
+                        None
+                    } else {
+                        Some(&from_encryption_public_key)
+                    };
                     if let Err(e) = conn.execute(
                         "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -2777,16 +2907,24 @@ impl IrohNetwork {
                     match existing {
                         Some((status, _)) if status == "accepted" => {
                             // Already friends - just update their node info
-                            println!("[IROH] Already friends with {}, updating node info", from_public_key);
+                            println!(
+                                "[IROH] Already friends with {}, updating node info",
+                                from_public_key
+                            );
                             let _ = conn.execute(
                                 "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                  WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
                                 rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
                             );
                         }
-                        Some((status, initiated_by)) if status == "pending" && initiated_by == self.user_id => {
+                        Some((status, initiated_by))
+                            if status == "pending" && initiated_by == self.user_id =>
+                        {
                             // We already sent THEM a request and they're sending us one - auto-accept!
-                            println!("[IROH] Mutual friend request detected! Auto-accepting with {}", from_public_key);
+                            println!(
+                                "[IROH] Mutual friend request detected! Auto-accepting with {}",
+                                from_public_key
+                            );
                             let _ = conn.execute(
                                 "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                  WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
@@ -2796,7 +2934,10 @@ impl IrohNetwork {
                         }
                         Some((status, _)) if status == "pending" => {
                             // They already sent us a request (we haven't accepted) - update their node info
-                            println!("[IROH] Already have pending request from {}, updating node info", from_public_key);
+                            println!(
+                                "[IROH] Already have pending request from {}, updating node info",
+                                from_public_key
+                            );
                             let _ = conn.execute(
                                 "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                  WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
@@ -2833,18 +2974,24 @@ impl IrohNetwork {
 
                 // Emit acceptance event AFTER releasing the database lock
                 if auto_accepted {
-                    let _ = self.app_handle.emit("friend-request-accepted", serde_json::json!({
-                        "friend_user_id": friend_user_id.to_string(),
-                        "friend_public_key": from_public_key,
-                    }));
+                    let _ = self.app_handle.emit(
+                        "friend-request-accepted",
+                        serde_json::json!({
+                            "friend_user_id": friend_user_id.to_string(),
+                            "friend_public_key": from_public_key,
+                        }),
+                    );
                 }
 
                 // Emit event to UI so it can show the pending request
-                let _ = self.app_handle.emit("friend-request-received", serde_json::json!({
-                    "from_user_id": friend_user_id.to_string(),
-                    "from_public_key": from_public_key,
-                    "from_node_id": from_node_id,
-                }));
+                let _ = self.app_handle.emit(
+                    "friend-request-received",
+                    serde_json::json!({
+                        "from_user_id": friend_user_id.to_string(),
+                        "from_public_key": from_public_key,
+                        "from_node_id": from_node_id,
+                    }),
+                );
 
                 // 3. Add friend's node address to endpoint for direct connection
                 if let Ok(peer_node_id) = from_node_id.parse::<iroh::NodeId>() {
@@ -2858,7 +3005,10 @@ impl IrohNetwork {
                         let endpoint_guard = self.endpoint.lock().await;
                         if let Some(endpoint) = endpoint_guard.as_ref() {
                             if let Err(e) = endpoint.add_node_addr(node_addr) {
-                                println!("[IROH] Warning: Failed to add friend's node address: {}", e);
+                                println!(
+                                    "[IROH] Warning: Failed to add friend's node address: {}",
+                                    e
+                                );
                             } else {
                                 println!("[IROH] [OK] Added friend's node address to endpoint");
                             }
@@ -2885,7 +3035,10 @@ impl IrohNetwork {
                 from_relay_url,
                 to_public_key,
             } => {
-                println!("[IROH] Received FriendAccepted from {} ({}) (global mesh)", from_display_name, from_public_key);
+                println!(
+                    "[IROH] Received FriendAccepted from {} ({}) (global mesh)",
+                    from_display_name, from_public_key
+                );
 
                 // GLOBAL MESH: Filter messages - only process if intended for us
                 if to_public_key != self.public_key {
@@ -2902,7 +3055,10 @@ impl IrohNetwork {
                 // CRITICAL: Compute friend_user_id deterministically from public key
                 // This ensures it matches exactly how it was stored when the outgoing request was created
                 let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
-                println!("[IROH] Computed friend_user_id from public key: {}", friend_user_id);
+                println!(
+                    "[IROH] Computed friend_user_id from public key: {}",
+                    friend_user_id
+                );
 
                 // Ensure the friend user exists with their proper display name and encryption key
                 // CRITICAL: Store encryption_public_key so we can encrypt comments/reactions to them
@@ -2911,7 +3067,11 @@ impl IrohNetwork {
                 {
                     let conn = self.db.conn.lock().unwrap();
                     // Use empty string check since encryption_public_key might be "" for old clients
-                    let enc_key = if from_encryption_public_key.is_empty() { None } else { Some(&from_encryption_public_key) };
+                    let enc_key = if from_encryption_public_key.is_empty() {
+                        None
+                    } else {
+                        Some(&from_encryption_public_key)
+                    };
                     if let Err(e) = conn.execute(
                         "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -2941,7 +3101,10 @@ impl IrohNetwork {
                 {
                     let conn = self.db.conn.lock().unwrap();
                     let now = chrono::Utc::now().to_rfc3339();
-                    println!("[IROH] Updating p2p_connections: user_id={}, friend_user_id={}", self.user_id, friend_user_id);
+                    println!(
+                        "[IROH] Updating p2p_connections: user_id={}, friend_user_id={}",
+                        self.user_id, friend_user_id
+                    );
 
                     // First try to update existing pending request (check both directions)
                     let rows_affected = match conn.execute(
@@ -2963,7 +3126,10 @@ impl IrohNetwork {
                     };
 
                     if rows_affected > 0 {
-                        println!("[IROH] [OK] Friend request accepted by {}, {} row(s) updated", from_public_key, rows_affected);
+                        println!(
+                            "[IROH] [OK] Friend request accepted by {}, {} row(s) updated",
+                            from_public_key, rows_affected
+                        );
                     } else {
                         // No pending request found - check if already accepted or need to create
                         // Check both directions since connection could be stored either way
@@ -2985,7 +3151,10 @@ impl IrohNetwork {
                                 );
                             }
                             Some(status) => {
-                                println!("[IROH] Unexpected status '{}', forcing to accepted", status);
+                                println!(
+                                    "[IROH] Unexpected status '{}', forcing to accepted",
+                                    status
+                                );
                                 let _ = conn.execute(
                                     "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                      WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
@@ -3038,10 +3207,13 @@ impl IrohNetwork {
                 }
 
                 // Emit event to UI so it can refresh the friends list
-                let _ = self.app_handle.emit("friend-accepted", serde_json::json!({
-                    "from_user_id": friend_user_id.to_string(),
-                    "from_public_key": from_public_key,
-                }));
+                let _ = self.app_handle.emit(
+                    "friend-accepted",
+                    serde_json::json!({
+                        "from_user_id": friend_user_id.to_string(),
+                        "from_public_key": from_public_key,
+                    }),
+                );
 
                 // Add their node address to endpoint for direct connection
                 if let Ok(peer_node_id) = from_node_id.parse::<iroh::NodeId>() {
@@ -3055,7 +3227,10 @@ impl IrohNetwork {
                         let endpoint_guard = self.endpoint.lock().await;
                         if let Some(endpoint) = endpoint_guard.as_ref() {
                             if let Err(e) = endpoint.add_node_addr(node_addr) {
-                                println!("[IROH] Warning: Failed to add friend's node address: {}", e);
+                                println!(
+                                    "[IROH] Warning: Failed to add friend's node address: {}",
+                                    e
+                                );
                             } else {
                                 println!("[IROH] [OK] Added friend's node address to endpoint");
                             }
@@ -3071,10 +3246,16 @@ impl IrohNetwork {
                     }
                 }
 
-                println!("[IROH] [OK] Friendship fully established with {}!", from_public_key);
+                println!(
+                    "[IROH] [OK] Friendship fully established with {}!",
+                    from_public_key
+                );
             }
 
-            P2PMessage::Heartbeat { node_id, timestamp: _ } => {
+            P2PMessage::Heartbeat {
+                node_id,
+                timestamp: _,
+            } => {
                 // Parse the node_id from string
                 match node_id.parse::<iroh::NodeId>() {
                     Ok(peer_node_id) => {
@@ -3104,7 +3285,10 @@ impl IrohNetwork {
                 device_id,
                 blob_refs,
             } => {
-                println!("[IROH] Received Content({}) from {}", content_type, public_key);
+                println!(
+                    "[IROH] Received Content({}) from {}",
+                    content_type, public_key
+                );
 
                 // Ensure sender exists in database
                 {
@@ -3159,11 +3343,14 @@ impl IrohNetwork {
                             parent_comment_id: Option<String>,
                         }
                         if let Ok(payload) = serde_json::from_str::<CommentPayload>(&payload_json) {
-                            let comment_uuid = super::types::SqliteUuid::parse_str(&payload.comment_id).ok();
-                            let post_uuid = super::types::SqliteUuid::parse_str(&payload.post_id).ok();
-                            let parent_uuid = payload.parent_comment_id.as_ref().and_then(|id| {
-                                super::types::SqliteUuid::parse_str(id).ok()
-                            });
+                            let comment_uuid =
+                                super::types::SqliteUuid::parse_str(&payload.comment_id).ok();
+                            let post_uuid =
+                                super::types::SqliteUuid::parse_str(&payload.post_id).ok();
+                            let parent_uuid = payload
+                                .parent_comment_id
+                                .as_ref()
+                                .and_then(|id| super::types::SqliteUuid::parse_str(id).ok());
 
                             if let (Some(comment_id), Some(post_id)) = (comment_uuid, post_uuid) {
                                 // Save comment
@@ -3206,8 +3393,11 @@ impl IrohNetwork {
                             emoji: String,
                             action: String,
                         }
-                        if let Ok(payload) = serde_json::from_str::<ReactionPayload>(&payload_json) {
-                            if let Ok(post_uuid) = super::types::SqliteUuid::parse_str(&payload.post_id) {
+                        if let Ok(payload) = serde_json::from_str::<ReactionPayload>(&payload_json)
+                        {
+                            if let Ok(post_uuid) =
+                                super::types::SqliteUuid::parse_str(&payload.post_id)
+                            {
                                 // Save or remove reaction
                                 {
                                     let conn = self.db.conn.lock().unwrap();
@@ -3292,7 +3482,9 @@ impl IrohNetwork {
                                                 pending_msg.id
                                             );
                                             // Remove from queue
-                                            if let Err(e) = self.db.mark_message_sent(pending_msg.id) {
+                                            if let Err(e) =
+                                                self.db.mark_message_sent(pending_msg.id)
+                                            {
                                                 println!(
                                                     "[QUEUE] Warning: Failed to remove sent message: {}",
                                                     e
@@ -3308,12 +3500,23 @@ impl IrohNetwork {
                                                 pending_msg.max_retries
                                             );
 
-                                            if pending_msg.retry_count + 1 >= pending_msg.max_retries {
-                                                println!("[QUEUE] Max retries reached, removing message");
-                                                if let Err(e) = self.db.remove_pending_message(pending_msg.id) {
-                                                    println!("[QUEUE] Warning: Failed to remove: {}", e);
+                                            if pending_msg.retry_count + 1
+                                                >= pending_msg.max_retries
+                                            {
+                                                println!(
+                                                    "[QUEUE] Max retries reached, removing message"
+                                                );
+                                                if let Err(e) =
+                                                    self.db.remove_pending_message(pending_msg.id)
+                                                {
+                                                    println!(
+                                                        "[QUEUE] Warning: Failed to remove: {}",
+                                                        e
+                                                    );
                                                 }
-                                            } else if let Err(e) = self.db.increment_retry_count(pending_msg.id) {
+                                            } else if let Err(e) =
+                                                self.db.increment_retry_count(pending_msg.id)
+                                            {
                                                 println!("[QUEUE] Warning: Failed to update retry count: {}", e);
                                             }
                                             failed += 1;
@@ -3348,7 +3551,9 @@ impl IrohNetwork {
     /// Resend FriendAccepted for any accepted connections where the peer initiated
     /// This handles the case where our original FriendAccepted was lost due to gossip mesh instability
     pub async fn resend_friend_accepted_if_needed(&self) {
-        println!("[FRIEND-RESEND] Checking for accepted friendships that need FriendAccepted resend...");
+        println!(
+            "[FRIEND-RESEND] Checking for accepted friendships that need FriendAccepted resend..."
+        );
 
         // Query for connections where status='accepted' and initiated_by != our user_id
         // These are connections where someone else sent us a friend request and we accepted
@@ -3359,7 +3564,7 @@ impl IrohNetwork {
             let stmt_result = conn.prepare(
                 "SELECT p.friend_user_id, u.public_key FROM p2p_connections p
                  JOIN users u ON p.friend_user_id = u.id
-                 WHERE p.user_id = ?1 AND p.status = 'accepted' AND p.initiated_by != ?1"
+                 WHERE p.user_id = ?1 AND p.status = 'accepted' AND p.initiated_by != ?1",
             );
 
             match stmt_result {
@@ -3388,7 +3593,10 @@ impl IrohNetwork {
             return;
         }
 
-        println!("[FRIEND-RESEND] Found {} accepted connections to resend FriendAccepted", accepted_connections.len());
+        println!(
+            "[FRIEND-RESEND] Found {} accepted connections to resend FriendAccepted",
+            accepted_connections.len()
+        );
 
         // Get our node address for the FriendAccepted message
         // Clone endpoint to avoid holding lock during await
@@ -3397,7 +3605,7 @@ impl IrohNetwork {
             match endpoint.node_addr().await {
                 Ok(addr) => (
                     addr.node_id.to_string(),
-                    addr.relay_url().map(|u| u.to_string()).unwrap_or_default()
+                    addr.relay_url().map(|u| u.to_string()).unwrap_or_default(),
                 ),
                 Err(e) => {
                     println!("[FRIEND-RESEND] Failed to get node address: {}", e);
@@ -3413,7 +3621,10 @@ impl IrohNetwork {
         let our_encryption_public_key = self.get_user_encryption_public_key().unwrap_or_default();
 
         for (friend_user_id, friend_public_key) in accepted_connections {
-            println!("[FRIEND-RESEND] Resending FriendAccepted to {} ({})", friend_user_id, friend_public_key);
+            println!(
+                "[FRIEND-RESEND] Resending FriendAccepted to {} ({})",
+                friend_user_id, friend_public_key
+            );
 
             let friend_accepted = P2PMessage::FriendAccepted {
                 from_user_id: self.user_id,
@@ -3426,7 +3637,10 @@ impl IrohNetwork {
             };
 
             if let Err(e) = self.publish_message(CONTENT_TOPIC, friend_accepted).await {
-                println!("[FRIEND-RESEND] Warning: Failed to resend FriendAccepted to {}: {}", friend_public_key, e);
+                println!(
+                    "[FRIEND-RESEND] Warning: Failed to resend FriendAccepted to {}: {}",
+                    friend_public_key, e
+                );
             } else {
                 println!("[FRIEND-RESEND] [OK] Resent FriendAccepted to {} (ensuring they know we accepted)", friend_public_key);
             }
@@ -3455,7 +3669,28 @@ impl IrohNetwork {
             db: self.db.clone(),
             last_presence_success: self.last_presence_success.clone(),
             last_heartbeat_success: self.last_heartbeat_success.clone(),
+            last_broadcast_success: self.last_broadcast_success.clone(),
             shutdown_flag: self.shutdown_flag.clone(),
+            background_tasks: self.background_tasks.clone(),
+            recovering: self.recovering.clone(),
+        }
+    }
+
+    /// Track a background loop so recover()/shutdown() can abort it
+    fn track_background_task(&self, handle: tokio::task::JoinHandle<()>) {
+        self.background_tasks.lock().unwrap().push(handle);
+    }
+
+    /// Abort all tracked background loops immediately.
+    /// Must be called before spawning a replacement generation of loops.
+    fn stop_background_tasks(&self) {
+        let mut tasks = self.background_tasks.lock().unwrap();
+        let count = tasks.len();
+        for handle in tasks.drain(..) {
+            handle.abort();
+        }
+        if count > 0 {
+            println!("[IROH] Aborted {} background loops", count);
         }
     }
 
@@ -3480,7 +3715,10 @@ impl IrohNetwork {
         for topic in topics_to_subscribe {
             println!("[IROH] Processing pending subscription: {}", topic);
             if let Err(e) = self.subscribe_topic(&topic).await {
-                println!("[IROH] Warning: Failed to subscribe to queued topic {}: {}", topic, e);
+                println!(
+                    "[IROH] Warning: Failed to subscribe to queued topic {}: {}",
+                    topic, e
+                );
             } else {
                 println!("[IROH] [OK] Subscribed to queued topic: {}", topic);
             }
@@ -3523,7 +3761,10 @@ impl IrohNetwork {
         let count = peers.len();
         peers.clear();
         if count > 0 {
-            println!("[IROH] Cleared {} stale peer connections on initialization", count);
+            println!(
+                "[IROH] Cleared {} stale peer connections on initialization",
+                count
+            );
         }
     }
 
@@ -3593,16 +3834,23 @@ impl IrohNetwork {
         };
 
         // DEBUG: Log all p2p_connections for this user
-        println!("[DEBUG-KEYS] Looking up encryption keys for user_id: {}", self.user_id);
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT friend_user_id, status FROM p2p_connections WHERE user_id = ?1"
-        ) {
+        println!(
+            "[DEBUG-KEYS] Looking up encryption keys for user_id: {}",
+            self.user_id
+        );
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT friend_user_id, status FROM p2p_connections WHERE user_id = ?1")
+        {
             if let Ok(rows) = stmt.query_map(rusqlite::params![self.user_id], |row| {
                 Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?))
             }) {
                 for row in rows.flatten() {
-                    let friend_id = super::types::SqliteUuid::from_bytes(row.0.try_into().unwrap_or([0u8; 16]));
-                    println!("[DEBUG-KEYS]   p2p_connection: friend_user_id={}, status={}", friend_id, row.1);
+                    let friend_id =
+                        super::types::SqliteUuid::from_bytes(row.0.try_into().unwrap_or([0u8; 16]));
+                    println!(
+                        "[DEBUG-KEYS]   p2p_connection: friend_user_id={}, status={}",
+                        friend_id, row.1
+                    );
                 }
             }
         }
@@ -3630,7 +3878,7 @@ impl IrohNetwork {
              INNER JOIN p2p_connections p ON
                 (u.id = p.friend_user_id AND p.user_id = ?1) OR
                 (u.id = p.user_id AND p.friend_user_id = ?1)
-             WHERE p.status = 'accepted' AND u.encryption_public_key IS NOT NULL AND u.id != ?1"
+             WHERE p.status = 'accepted' AND u.encryption_public_key IS NOT NULL AND u.id != ?1",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -3639,14 +3887,18 @@ impl IrohNetwork {
             }
         };
 
-        let result: Vec<String> = match stmt.query_map(rusqlite::params![self.user_id], |row| row.get(0)) {
-            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-            Err(e) => {
-                println!("[DEBUG-KEYS] Query failed: {}", e);
-                vec![]
-            }
-        };
-        println!("[DEBUG-KEYS] Final result: {} encryption keys found", result.len());
+        let result: Vec<String> =
+            match stmt.query_map(rusqlite::params![self.user_id], |row| row.get(0)) {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(e) => {
+                    println!("[DEBUG-KEYS] Query failed: {}", e);
+                    vec![]
+                }
+            };
+        println!(
+            "[DEBUG-KEYS] Final result: {} encryption keys found",
+            result.len()
+        );
         result
     }
 
@@ -3676,7 +3928,10 @@ impl IrohNetwork {
         let peer_ids: Vec<String> = connected_peers.iter().map(|k| k.to_string()).collect();
         // Debug: Log the actual peer IDs when count > 1 to help debug phantom peers
         if connected_count > 1 {
-            println!("[IROH-DEBUG] connected_peers count={}, ids={:?}", connected_count, peer_ids);
+            println!(
+                "[IROH-DEBUG] connected_peers count={}, ids={:?}",
+                connected_count, peer_ids
+            );
         }
         drop(connected_peers);
 
@@ -3711,7 +3966,7 @@ impl IrohNetwork {
         let shutdown_flag = self.shutdown_flag.clone();
         let last_success = self.last_heartbeat_success.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Wait a bit for initialization
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
@@ -3757,6 +4012,7 @@ impl IrohNetwork {
                 }
             }
         });
+        self.track_background_task(handle);
 
         println!("[HEARTBEAT] Started heartbeat sender (15s interval)");
     }
@@ -3766,7 +4022,7 @@ impl IrohNetwork {
         let network = Arc::new(self.clone_for_background());
         let shutdown_flag = self.shutdown_flag.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Wait a bit for initialization
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
@@ -3784,13 +4040,13 @@ impl IrohNetwork {
 
                 let now = std::time::Instant::now();
                 let heartbeats = network.peer_heartbeats.lock().await;
-                let connected_peers = network.connected_peers.lock().await.clone();
-                drop(connected_peers);
 
                 // Find stale peers (no heartbeat in 45 seconds)
                 let stale_peers: Vec<iroh::NodeId> = heartbeats
                     .iter()
-                    .filter(|(_, &last_heartbeat)| now.duration_since(last_heartbeat) > heartbeat_timeout)
+                    .filter(|(_, &last_heartbeat)| {
+                        now.duration_since(last_heartbeat) > heartbeat_timeout
+                    })
                     .map(|(peer_id, _)| *peer_id)
                     .collect();
 
@@ -3798,7 +4054,10 @@ impl IrohNetwork {
 
                 // Remove stale peers
                 if !stale_peers.is_empty() {
-                    println!("[HEARTBEAT] Found {} stale peers (no heartbeat in 45s)", stale_peers.len());
+                    println!(
+                        "[HEARTBEAT] Found {} stale peers (no heartbeat in 45s)",
+                        stale_peers.len()
+                    );
                     for peer_id in stale_peers {
                         println!("[HEARTBEAT] Removing stale peer: {}", peer_id);
                         network.remove_connected_peer(peer_id).await;
@@ -3813,6 +4072,7 @@ impl IrohNetwork {
                 }
             }
         });
+        self.track_background_task(handle);
 
         println!("[HEARTBEAT] Started heartbeat monitor (checks every 30s, timeout 45s)");
     }
@@ -3862,9 +4122,25 @@ impl IrohNetwork {
         let heartbeat_age_secs = heartbeat_guard.map(|t| now.duration_since(t).as_secs());
         drop(heartbeat_guard);
 
-        // Determine health
-        let is_healthy = has_endpoint && has_gossip && has_content_topic && relay_connected && !presence_stale && !heartbeat_stale;
-        let needs_reconnect = !has_endpoint || !has_gossip || !has_content_topic || !relay_connected;
+        // Check last REAL gossip broadcast. The presence/heartbeat timestamps only prove
+        // a message was queued locally (publish_message succeeds even on a dead network),
+        // which made the old health check blind to dead connections after suspend or a
+        // network change. Heartbeats broadcast every 15s, so >60s without a real
+        // broadcast means the stream handler is dead or the network is gone.
+        let broadcast_guard = self.last_broadcast_success.lock().await;
+        let broadcast_stale = match *broadcast_guard {
+            Some(last) => now.duration_since(last) > max_stale_time,
+            None => true, // Never succeeded
+        };
+        let broadcast_age_secs = broadcast_guard.map(|t| now.duration_since(t).as_secs());
+        drop(broadcast_guard);
+
+        // Determine health.
+        // NOTE: relay_connected is informational only. Relays are an optional NAT-traversal
+        // helper by design; requiring one made health_check demand reconnects forever in
+        // relay-blocked environments, triggering an endless recover() loop.
+        let is_healthy = has_endpoint && has_gossip && has_content_topic && !broadcast_stale;
+        let needs_reconnect = !has_endpoint || !has_gossip || !has_content_topic || broadcast_stale;
 
         let status = serde_json::json!({
             "healthy": is_healthy,
@@ -3877,9 +4153,14 @@ impl IrohNetwork {
             "presence_age_secs": presence_age_secs,
             "heartbeat_stale": heartbeat_stale,
             "heartbeat_age_secs": heartbeat_age_secs,
+            "broadcast_stale": broadcast_stale,
+            "broadcast_age_secs": broadcast_age_secs,
         });
 
-        println!("[IROH-HEALTH] Health check: healthy={}, needs_reconnect={}", is_healthy, needs_reconnect);
+        println!(
+            "[IROH-HEALTH] Health check: healthy={}, needs_reconnect={}",
+            is_healthy, needs_reconnect
+        );
         if !is_healthy {
             println!("[IROH-HEALTH] Details: {:?}", status);
         }
@@ -3911,10 +4192,42 @@ impl IrohNetwork {
     /// Recover network connectivity without full reinitialization
     /// This is faster than full shutdown+init and preserves NAT traversal state
     pub async fn recover(&self) -> Result<(), String> {
+        // Single-flight guard: foreground events and the frontend health-check loop can
+        // race into recover() concurrently, each spawning its own set of loops.
+        // ClearOnDrop also resets the flag if the caller's timeout drops this future.
+        struct ClearOnDrop(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for ClearOnDrop {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        if self
+            .recovering
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            println!("[IROH-RECOVER] Recovery already in progress - skipping duplicate call");
+            return Ok(());
+        }
+        let _recovering_guard = ClearOnDrop(self.recovering.clone());
+
         println!("[IROH-RECOVER] Starting network recovery...");
 
+        // Abort the previous generation of background loops BEFORE resetting the shutdown
+        // flag. The old loops only check the flag at their next tick (15-30s away, and
+        // never while suspended on mobile); resetting the flag first meant they never
+        // exited, so every recover() doubled the number of running loops.
+        self.stop_background_tasks();
+
         // Reset shutdown flag to allow new background loops
-        self.shutdown_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.shutdown_flag
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // Drop stale connection state. After a suspend or network change these still
+        // contain peers whose QUIC paths are dead; the discovery loop skips peers it
+        // believes are connected, so stale entries blocked reconnection entirely.
+        self.clear_connected_peers().await;
+        self.peer_heartbeats.lock().await.clear();
+        self.peer_retry_counts.lock().await.clear();
 
         // Check if we need to re-subscribe to the content topic
         let topics_guard = self.topics.lock().await;
@@ -3926,23 +4239,26 @@ impl IrohNetwork {
             self.subscribe_topic(CONTENT_TOPIC).await?;
         }
 
-        // Restart background loops (they check shutdown_flag and will start fresh)
+        // Restart background loops (the old generation was aborted above)
         println!("[IROH-RECOVER] Restarting background loops...");
         self.start_presence_loop();
         self.start_heartbeat_sender();
         self.start_heartbeat_monitor();
         self.start_periodic_device_sync();
 
+        // Try to reconnect to known peers (first pass runs ~1s after spawn)
+        self.start_active_peer_discovery();
+
         // Announce presence immediately
         if let Err(e) = self.announce_presence().await {
-            println!("[IROH-RECOVER] Warning: Initial presence announcement failed: {}", e);
+            println!(
+                "[IROH-RECOVER] Warning: Initial presence announcement failed: {}",
+                e
+            );
             // Don't fail recovery for this - background loop will retry
         } else {
             println!("[IROH-RECOVER] [OK] Initial presence announced");
         }
-
-        // Try to reconnect to known peers
-        self.start_active_peer_discovery();
 
         // Send device sync request to catch up on any missed content
         // This ensures we sync even if we missed presence announcements while disconnected
@@ -3957,10 +4273,12 @@ impl IrohNetwork {
         println!("[IROH] Shutting down Iroh network...");
 
         // Signal background loops to stop
-        self.shutdown_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.shutdown_flag
+            .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        // Give background loops a moment to notice the flag
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Abort them immediately - waiting for the flag to be observed takes up to a
+        // full 30s tick, far longer than callers' shutdown timeout
+        self.stop_background_tasks();
 
         // Close all topic subscriptions
         self.topics.lock().await.clear();

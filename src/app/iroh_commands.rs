@@ -9,9 +9,9 @@ use chacha20poly1305::{
 use lazy_static::lazy_static;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, State};
 
 use super::iroh_network::{IrohNetwork, P2PMessage, CONTENT_TOPIC};
@@ -64,19 +64,16 @@ macro_rules! with_timeout {
             return Err("App is shutting down".to_string());
         }
 
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs($timeout_secs),
-            $operation
-        ).await {
+        match tokio::time::timeout(tokio::time::Duration::from_secs($timeout_secs), $operation)
+            .await
+        {
             Ok(result) => {
                 if is_app_shutting_down() {
                     return Err("App shutdown during operation".to_string());
                 }
                 result
             }
-            Err(_) => {
-                Err("Operation timed out".to_string())
-            }
+            Err(_) => Err("Operation timed out".to_string()),
         }
     }};
 }
@@ -98,6 +95,29 @@ pub async fn iroh_initialize(
     println!("   Public Key: {}", public_key);
     println!("   Device ID: {:?}", device_id);
     println!("========================================");
+
+    // Clear the global shutdown flag. After logout (iroh_shutdown sets it) nothing else
+    // resets it - iroh_enter_foreground's debounce skips the reset while the app stays
+    // foregrounded - so every P2P command after re-login failed with "App is shutting down".
+    reset_app_shutdown();
+
+    // Tear down any previous network instance (logout/login, forced re-init). Replacing
+    // it without shutdown leaks the old endpoint and its background tasks, leaving two
+    // live nodes with the SAME NodeId (shared device keypair) fighting over discovery.
+    let previous = IROH_NETWORK.lock().unwrap().take();
+    if let Some(old_network) = previous {
+        println!("[IROH-INIT] Shutting down previous network instance before re-init");
+        match tokio::time::timeout(tokio::time::Duration::from_secs(2), old_network.shutdown())
+            .await
+        {
+            Ok(Ok(())) => println!("[IROH-INIT] Previous network shut down cleanly"),
+            Ok(Err(e)) => println!("[IROH-INIT] Previous network shutdown error: {}", e),
+            Err(_) => println!("[IROH-INIT] Previous network shutdown timed out, continuing"),
+        }
+        // shutdown() sets the old instance's flag; clear the global one again so the
+        // new instance starts clean
+        reset_app_shutdown();
+    }
 
     // Device-specific Ed25519 keypair - persistent across sessions
     // Independent of user identity - any user can log in on this device
@@ -159,7 +179,10 @@ pub async fn iroh_initialize(
 
     // GLOBAL MESH: Node is now subscribed to cipher/content/v1
     // All discovery, presence, and content flows through the single global topic
-    println!("[IROH-INIT] Global mesh initialized - node joined {}", CONTENT_TOPIC);
+    println!(
+        "[IROH-INIT] Global mesh initialized - node joined {}",
+        CONTENT_TOPIC
+    );
 
     println!("[IROH-INIT] Storing network globally...");
     let network_arc = Arc::new(network);
@@ -189,12 +212,21 @@ pub async fn iroh_subscribe_friend(
 
     // GLOBAL MESH: No per-friend topics needed
     // All content is broadcast to cipher/content/v1
-    println!("[IROH] iroh_subscribe_friend called for {} - using global mesh", friend_public_key);
+    println!(
+        "[IROH] iroh_subscribe_friend called for {} - using global mesh",
+        friend_public_key
+    );
 
     // Still try to add friend's node address for better connectivity
-    let peer_info = db.get_friend_peer_info_by_public_key(network.user_id, &friend_public_key).ok().flatten();
+    let peer_info = db
+        .get_friend_peer_info_by_public_key(network.user_id, &friend_public_key)
+        .ok()
+        .flatten();
     if let Some((node_id, relay_url)) = peer_info {
-        println!("[IROH] Adding friend peer info: NodeId={}, Relay={}", node_id, relay_url);
+        println!(
+            "[IROH] Adding friend peer info: NodeId={}, Relay={}",
+            node_id, relay_url
+        );
         if let Ok(peer_node_id) = node_id.parse::<iroh::NodeId>() {
             if let Ok(relay_url_parsed) = relay_url.parse::<url::Url>() {
                 let node_addr = iroh::NodeAddr::from_parts(
@@ -246,7 +278,10 @@ pub async fn iroh_send_message(
     };
 
     // GLOBAL MESH: Broadcast to all nodes, recipient filters by to_user_id
-    with_timeout!(P2P_OPERATION_TIMEOUT_SECS, network.publish_message(CONTENT_TOPIC, message))?;
+    with_timeout!(
+        P2P_OPERATION_TIMEOUT_SECS,
+        network.publish_message(CONTENT_TOPIC, message)
+    )?;
 
     Ok(message_id)
 }
@@ -259,7 +294,10 @@ pub async fn iroh_publish_post(
     post_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<String, String> {
-    println!("[PUBLISH-POST] === START iroh_publish_post for post_id: {} ===", post_id);
+    println!(
+        "[PUBLISH-POST] === START iroh_publish_post for post_id: {} ===",
+        post_id
+    );
 
     if is_app_shutting_down() {
         println!("[PUBLISH-POST] App is shutting down, skipping");
@@ -278,7 +316,10 @@ pub async fn iroh_publish_post(
     // Get post attachments from database
     println!("[PUBLISH-POST] Step 2: Getting post attachments from DB...");
     let attachments = db.get_post_media(post_id).ok();
-    println!("[PUBLISH-POST] Step 2: DONE - Got {} attachments", attachments.as_ref().map(|a| a.len()).unwrap_or(0));
+    println!(
+        "[PUBLISH-POST] Step 2: DONE - Got {} attachments",
+        attachments.as_ref().map(|a| a.len()).unwrap_or(0)
+    );
 
     // Get our encryption keys (public key fetched for future use with multi-device sync)
     println!("[PUBLISH-POST] Step 3: Getting encryption public key from DB...");
@@ -298,12 +339,18 @@ pub async fn iroh_publish_post(
     // Get friend encryption public keys
     println!("[PUBLISH-POST] Step 5: Getting friend encryption keys...");
     let friend_encryption_keys = network.get_friend_encryption_public_keys();
-    println!("[PUBLISH-POST] Step 5: DONE - Got {} friend encryption keys", friend_encryption_keys.len());
+    println!(
+        "[PUBLISH-POST] Step 5: DONE - Got {} friend encryption keys",
+        friend_encryption_keys.len()
+    );
 
     // Get our node ID for blob fetching (needed for both paths)
     println!("[PUBLISH-POST] Step 6: Getting node_id...");
     let node_id = network.get_node_id().await;
-    println!("[PUBLISH-POST] Step 6: DONE - Got node_id: {}", &node_id[..8.min(node_id.len())]);
+    println!(
+        "[PUBLISH-POST] Step 6: DONE - Got node_id: {}",
+        &node_id[..8.min(node_id.len())]
+    );
 
     // Store attachments as blobs (same path for both encrypted and unencrypted)
     let mut blob_refs = Vec::new();
@@ -331,7 +378,8 @@ pub async fn iroh_publish_post(
 
             println!(
                 "[IROH] Storing attachment {} ({} bytes) as blob...",
-                attachment.id, data.len()
+                attachment.id,
+                data.len()
             );
 
             // Check storage quota before storing
@@ -382,7 +430,9 @@ pub async fn iroh_publish_post(
 
             println!(
                 "[IROH] Encrypted attachment {} ({} bytes -> {} bytes)",
-                attachment.id, data.len(), encrypted_data.len()
+                attachment.id,
+                data.len(),
+                encrypted_data.len()
             );
 
             // Store encrypted blob
@@ -425,7 +475,10 @@ pub async fn iroh_publish_post(
     }
 
     // PHASE 2: Create sealed envelope with boxes for each friend
-    println!("[PUBLISH-POST] Step 7 (PHASE 2): Creating sealed envelope for {} friends...", friend_encryption_keys.len());
+    println!(
+        "[PUBLISH-POST] Step 7 (PHASE 2): Creating sealed envelope for {} friends...",
+        friend_encryption_keys.len()
+    );
 
     // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
     // The encryption key is only used for creating the sealed boxes
@@ -437,14 +490,18 @@ pub async fn iroh_publish_post(
         &blob_refs,
         &friend_encryption_keys,
         &our_encryption_private_key,
-    ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
     println!("[PUBLISH-POST] Step 6 (PHASE 2): DONE - Envelope created");
 
     // Serialize envelope to JSON
     println!("[PUBLISH-POST] Step 7 (PHASE 2): Serializing envelope to JSON...");
     let envelope_json = serde_json::to_string(&envelope)
         .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
-    println!("[PUBLISH-POST] Step 7 (PHASE 2): DONE - Serialized ({} bytes)", envelope_json.len());
+    println!(
+        "[PUBLISH-POST] Step 7 (PHASE 2): DONE - Serialized ({} bytes)",
+        envelope_json.len()
+    );
 
     // Create SealedEnvelope message
     let message = P2PMessage::SealedEnvelope { envelope_json };
@@ -467,7 +524,10 @@ pub async fn iroh_publish_post_comment(
     parent_comment_id: Option<SqliteUuid>,
     db: State<'_, Database>,
 ) -> Result<String, String> {
-    println!("[PUBLISH-COMMENT] Publishing comment {} on post {}", comment_id, post_id);
+    println!(
+        "[PUBLISH-COMMENT] Publishing comment {} on post {}",
+        comment_id, post_id
+    );
 
     if is_app_shutting_down() {
         return Err("App is shutting down".to_string());
@@ -524,10 +584,14 @@ pub async fn iroh_publish_post_comment(
         &comment_id.to_string(),
         &post_id.to_string(),
         &content,
-        parent_comment_id.as_ref().map(|id| id.to_string()).as_deref(),
+        parent_comment_id
+            .as_ref()
+            .map(|id| id.to_string())
+            .as_deref(),
         &friend_encryption_keys,
         &our_encryption_private_key,
-    ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
 
     let envelope_json = serde_json::to_string(&envelope)
         .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
@@ -548,7 +612,10 @@ pub async fn iroh_publish_post_reaction(
     action: String,
     db: State<'_, Database>,
 ) -> Result<String, String> {
-    println!("[PUBLISH-REACTION] Publishing reaction {} {} on post {}", action, emoji, post_id);
+    println!(
+        "[PUBLISH-REACTION] Publishing reaction {} {} on post {}",
+        action, emoji, post_id
+    );
 
     if is_app_shutting_down() {
         return Err("App is shutting down".to_string());
@@ -606,7 +673,8 @@ pub async fn iroh_publish_post_reaction(
         &action,
         &friend_encryption_keys,
         &our_encryption_private_key,
-    ).map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
 
     let envelope_json = serde_json::to_string(&envelope)
         .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
@@ -644,14 +712,16 @@ pub async fn iroh_get_connection_status() -> Result<serde_json::Value, String> {
     // Use timeout for status check
     match tokio::time::timeout(
         tokio::time::Duration::from_secs(P2P_OPERATION_TIMEOUT_SECS),
-        network.get_connection_status()
-    ).await {
+        network.get_connection_status(),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_) => Ok(serde_json::json!({
             "listening": false,
             "connected_peers": 0,
             "error": "Status check timed out"
-        }))
+        })),
     }
 }
 
@@ -665,10 +735,7 @@ pub async fn iroh_shutdown() -> Result<String, String> {
 
     if let Some(network) = network_opt {
         // Give a short timeout for shutdown - don't wait forever
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs(2),
-            network.shutdown()
-        ).await {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(2), network.shutdown()).await {
             Ok(result) => result?,
             Err(_) => {
                 println!("[IROH] Shutdown timed out, forcing close");
@@ -726,24 +793,21 @@ pub async fn iroh_health_check() -> Result<serde_json::Value, String> {
     // Use timeout for health check
     let result = tokio::time::timeout(
         tokio::time::Duration::from_secs(P2P_OPERATION_TIMEOUT_SECS),
-        network.health_check()
-    ).await;
+        network.health_check(),
+    )
+    .await;
 
     match result {
-        Ok((is_healthy, needs_reconnect, status)) => {
-            Ok(serde_json::json!({
-                "healthy": is_healthy,
-                "needs_reconnect": needs_reconnect,
-                "details": status
-            }))
-        }
-        Err(_) => {
-            Ok(serde_json::json!({
-                "healthy": false,
-                "needs_reconnect": true,
-                "error": "Health check timed out"
-            }))
-        }
+        Ok((is_healthy, needs_reconnect, status)) => Ok(serde_json::json!({
+            "healthy": is_healthy,
+            "needs_reconnect": needs_reconnect,
+            "details": status
+        })),
+        Err(_) => Ok(serde_json::json!({
+            "healthy": false,
+            "needs_reconnect": true,
+            "error": "Health check timed out"
+        })),
     }
 }
 
@@ -804,15 +868,15 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     let _relay_url = node_addr.relay_url().map(|url| url.to_string());
 
     // V2 format: [32 pubkey][32 node][1 name_len][name] - includes display name
+    use base64::engine::general_purpose::STANDARD;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
 
     // Decode keys to binary
-    let pubkey_bytes = STANDARD.decode(&network.public_key)
+    let pubkey_bytes = STANDARD
+        .decode(&network.public_key)
         .map_err(|e| format!("Invalid public key base64: {}", e))?;
-    let node_bytes = hex::decode(&node_id)
-        .map_err(|e| format!("Invalid node id hex: {}", e))?;
+    let node_bytes = hex::decode(&node_id).map_err(|e| format!("Invalid node id hex: {}", e))?;
 
     // Get display name (truncate to 255 bytes max)
     let display_name = network.display_name.clone();
@@ -821,9 +885,9 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
 
     // Build binary payload: [32 pubkey][32 node][1 name_len][name]
     let mut payload = Vec::new();
-    payload.extend_from_slice(&pubkey_bytes);           // 32 bytes
-    payload.extend_from_slice(&node_bytes);             // 32 bytes
-    payload.push(name_len);                             // 1 byte
+    payload.extend_from_slice(&pubkey_bytes); // 32 bytes
+    payload.extend_from_slice(&node_bytes); // 32 bytes
+    payload.push(name_len); // 1 byte
     payload.extend_from_slice(&name_bytes[..name_len as usize]); // N bytes
 
     // Encode as base64url
@@ -857,7 +921,10 @@ pub struct ParsedInvite {
 /// Legacy: cipher://add-friend?key=...&node=...&relay=...&name=...&sig=...
 #[tauri::command]
 pub fn parse_invite_code(invite_code: String) -> Result<ParsedInvite, String> {
-    println!("[IROH] Parsing invite code: {}...", &invite_code[..invite_code.len().min(50)]);
+    println!(
+        "[IROH] Parsing invite code: {}...",
+        &invite_code[..invite_code.len().min(50)]
+    );
 
     if invite_code.starts_with("cipher://i/") {
         // V2 minimal format (no relay, no signature)
@@ -878,20 +945,25 @@ pub fn parse_invite_code(invite_code: String) -> Result<ParsedInvite, String> {
 /// Optional legacy: [32 pubkey][32 node][1 name_len][name][64 sig]
 /// No relay (discovered via DHT/DNS), no compression
 fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
-    use base64::engine::general_purpose::{URL_SAFE_NO_PAD, STANDARD};
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
     use base64::Engine;
 
     // Extract base64url data after cipher://i/
-    let encoded = invite_code.strip_prefix("cipher://i/")
+    let encoded = invite_code
+        .strip_prefix("cipher://i/")
         .ok_or("Invalid v2 invite format")?;
 
     // Decode base64url directly (no compression)
-    let payload = URL_SAFE_NO_PAD.decode(encoded)
+    let payload = URL_SAFE_NO_PAD
+        .decode(encoded)
         .map_err(|e| format!("Failed to decode base64url: {}", e))?;
 
     // Minimum size: 32 + 32 = 64 bytes (ultra-minimal)
     if payload.len() < 64 {
-        return Err(format!("Payload too short: {} bytes (need at least 64)", payload.len()));
+        return Err(format!(
+            "Payload too short: {} bytes (need at least 64)",
+            payload.len()
+        ));
     }
 
     let mut pos = 0;
@@ -933,8 +1005,18 @@ fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
     println!("[IROH] ✓ Parsed v2 invite (ultra-minimal):");
     println!("[IROH]   Public Key: {}", public_key);
     println!("[IROH]   Node ID: {}", node_id);
-    println!("[IROH]   Display Name: {:?} (from FriendRequest if None)", display_name);
-    println!("[IROH]   Signature: {}", if signature.is_some() { "present" } else { "from FriendRequest" });
+    println!(
+        "[IROH]   Display Name: {:?} (from FriendRequest if None)",
+        display_name
+    );
+    println!(
+        "[IROH]   Signature: {}",
+        if signature.is_some() {
+            "present"
+        } else {
+            "from FriendRequest"
+        }
+    );
 
     Ok(ParsedInvite {
         public_key,
@@ -953,17 +1035,20 @@ fn parse_compressed_invite(invite_code: &str) -> Result<ParsedInvite, String> {
     use std::io::Read;
 
     // Extract base64url data after cipher://f/
-    let encoded = invite_code.strip_prefix("cipher://f/")
+    let encoded = invite_code
+        .strip_prefix("cipher://f/")
         .ok_or("Invalid compressed invite format")?;
 
     // Decode base64url
-    let compressed = URL_SAFE_NO_PAD.decode(encoded)
+    let compressed = URL_SAFE_NO_PAD
+        .decode(encoded)
         .map_err(|e| format!("Failed to decode base64url: {}", e))?;
 
     // Decompress DEFLATE
     let mut decoder = DeflateDecoder::new(&compressed[..]);
     let mut payload = Vec::new();
-    decoder.read_to_end(&mut payload)
+    decoder
+        .read_to_end(&mut payload)
         .map_err(|e| format!("Failed to decompress: {}", e))?;
 
     // Parse binary format: [32 pubkey][32 node][1 relay_len][relay][1 name_len][name][64 sig]
@@ -992,8 +1077,10 @@ fn parse_compressed_invite(invite_code: &str) -> Result<ParsedInvite, String> {
         return Err("Invalid relay URL length".to_string());
     }
     let relay_url = if relay_len > 0 {
-        Some(String::from_utf8(payload[pos..pos + relay_len].to_vec())
-            .map_err(|_| "Invalid relay URL encoding")?)
+        Some(
+            String::from_utf8(payload[pos..pos + relay_len].to_vec())
+                .map_err(|_| "Invalid relay URL encoding")?,
+        )
     } else {
         None
     };
@@ -1006,8 +1093,10 @@ fn parse_compressed_invite(invite_code: &str) -> Result<ParsedInvite, String> {
         return Err("Invalid display name length".to_string());
     }
     let display_name = if name_len > 0 {
-        Some(String::from_utf8(payload[pos..pos + name_len].to_vec())
-            .map_err(|_| "Invalid display name encoding")?)
+        Some(
+            String::from_utf8(payload[pos..pos + name_len].to_vec())
+                .map_err(|_| "Invalid display name encoding")?,
+        )
     } else {
         None
     };
@@ -1037,7 +1126,8 @@ fn parse_compressed_invite(invite_code: &str) -> Result<ParsedInvite, String> {
 
 /// Parse old URL parameter format: cipher://add-friend?key=...&node=...&relay=...&name=...&sig=...
 fn parse_legacy_invite(invite_code: &str) -> Result<ParsedInvite, String> {
-    let query_part = invite_code.strip_prefix("cipher://add-friend?")
+    let query_part = invite_code
+        .strip_prefix("cipher://add-friend?")
         .ok_or("Invalid legacy invite format")?;
 
     let mut public_key = None;
@@ -1092,9 +1182,17 @@ pub async fn iroh_add_friend_by_public_key(
     signature: Option<String>,
     db: State<'_, Database>,
 ) -> Result<String, String> {
-    println!("[IROH] Adding friend by public key: {} (global mesh)", friend_public_key);
-    println!("[IROH] Parameters: node_id={:?}, relay_url={:?}, display_name={:?}, signature={:?}",
-        node_id, relay_url, display_name, signature.as_ref().map(|s| &s[..20.min(s.len())]));
+    println!(
+        "[IROH] Adding friend by public key: {} (global mesh)",
+        friend_public_key
+    );
+    println!(
+        "[IROH] Parameters: node_id={:?}, relay_url={:?}, display_name={:?}, signature={:?}",
+        node_id,
+        relay_url,
+        display_name,
+        signature.as_ref().map(|s| &s[..20.min(s.len())])
+    );
 
     let network = IROH_NETWORK
         .lock()
@@ -1118,7 +1216,10 @@ pub async fn iroh_add_friend_by_public_key(
             // Verify signature: "cipher-name:{display_name}:{public_key}"
             let sign_message = format!("cipher-name:{}:{}", name, friend_public_key);
             if Database::verify_signature(&sign_message, sig, &friend_public_key) {
-                println!("[IROH] ✓ Display name '{}' verified with valid signature", name);
+                println!(
+                    "[IROH] ✓ Display name '{}' verified with valid signature",
+                    name
+                );
                 name.clone()
             } else {
                 println!("[IROH] ⚠ Signature verification failed - using fallback name");
@@ -1127,7 +1228,10 @@ pub async fn iroh_add_friend_by_public_key(
         }
         (Some(name), None) => {
             // Name provided but no signature - use with warning
-            println!("[IROH] ⚠ Display name '{}' not verified (no signature)", name);
+            println!(
+                "[IROH] ⚠ Display name '{}' not verified (no signature)",
+                name
+            );
             name.clone()
         }
         _ => {
@@ -1137,7 +1241,10 @@ pub async fn iroh_add_friend_by_public_key(
     };
 
     // 1. Create stub user in database (if not exists)
-    println!("[IROH] Creating stub user in database with name: {}", verified_display_name);
+    println!(
+        "[IROH] Creating stub user in database with name: {}",
+        verified_display_name
+    );
     db.conn
         .lock()
         .unwrap()
@@ -1177,7 +1284,9 @@ pub async fn iroh_add_friend_by_public_key(
         // Parse NodeId
         if let Ok(peer_node_id) = node_id_str.parse::<iroh::NodeId>() {
             // Parse relay URL if provided (optional)
-            let relay_url_parsed = relay_url.as_ref().and_then(|url| url.parse::<url::Url>().ok());
+            let relay_url_parsed = relay_url
+                .as_ref()
+                .and_then(|url| url.parse::<url::Url>().ok());
 
             // Construct NodeAddr - relay is optional, DHT will discover it
             let node_addr = iroh::NodeAddr::from_parts(
@@ -1192,8 +1301,13 @@ pub async fn iroh_add_friend_by_public_key(
                 if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
                     println!("[IROH] Warning: Failed to add node address: {}", e);
                 } else {
-                    println!("[IROH] ✓ Node address added to endpoint (relay: {})",
-                        relay_url.as_ref().map(|_| "provided").unwrap_or("DHT discovery"));
+                    println!(
+                        "[IROH] ✓ Node address added to endpoint (relay: {})",
+                        relay_url
+                            .as_ref()
+                            .map(|_| "provided")
+                            .unwrap_or("DHT discovery")
+                    );
                 }
             }
             drop(endpoint_guard);
@@ -1233,7 +1347,6 @@ pub async fn iroh_add_friend_by_public_key(
     let endpoint_clone = network.endpoint.lock().await.clone();
     if let Some(endpoint) = endpoint_clone.as_ref() {
         if let Ok(our_node_addr) = endpoint.node_addr().await {
-
             // Get our encryption public key for sealed envelope encryption (comments, reactions)
             let our_encryption_public_key = db
                 .get_user_encryption_public_key(network.user_id)
@@ -1280,8 +1393,17 @@ pub async fn iroh_add_friend_by_public_key(
 ///
 /// Note: Uses spawn_blocking to work around the non-Send AsyncSliceReader issue
 #[tauri::command]
-pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: Option<String>) -> Result<String, String> {
-    println!("[BLOB-READ] Reading blob {} from node {} (encrypted: {})", blob_hash, node_id, encryption_key.is_some());
+pub async fn iroh_read_blob(
+    node_id: String,
+    blob_hash: String,
+    encryption_key: Option<String>,
+) -> Result<String, String> {
+    println!(
+        "[BLOB-READ] Reading blob {} from node {} (encrypted: {})",
+        blob_hash,
+        node_id,
+        encryption_key.is_some()
+    );
 
     let network = IROH_NETWORK
         .lock()
@@ -1291,8 +1413,7 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: 
         .clone();
 
     // Parse blob hash
-    let hash_bytes = hex::decode(&blob_hash)
-        .map_err(|e| format!("Invalid blob hash: {}", e))?;
+    let hash_bytes = hex::decode(&blob_hash).map_err(|e| format!("Invalid blob hash: {}", e))?;
 
     if hash_bytes.len() != 32 {
         return Err("Blob hash must be 32 bytes".to_string());
@@ -1303,7 +1424,8 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: 
     let hash = iroh_blobs::Hash::from_bytes(hash_arr);
 
     // Parse sender's NodeId for downloading
-    let sender_node_id = node_id.parse::<iroh::NodeId>()
+    let sender_node_id = node_id
+        .parse::<iroh::NodeId>()
         .map_err(|e| format!("Invalid node_id: {}", e))?;
 
     // First, try to download the blob from the remote peer
@@ -1323,7 +1445,10 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: 
             // Wait for download with timeout (30 seconds for larger files)
             match tokio::time::timeout(std::time::Duration::from_secs(30), handle).await {
                 Ok(Ok(stats)) => {
-                    println!("[BLOB-READ] Blob downloaded successfully ({} bytes)", stats.bytes_read);
+                    println!(
+                        "[BLOB-READ] Blob downloaded successfully ({} bytes)",
+                        stats.bytes_read
+                    );
                 }
                 Ok(Err(e)) => {
                     println!("[BLOB-READ] Download failed: {} - will try local store", e);
@@ -1384,7 +1509,9 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: 
         let _ = tx.send(result);
     });
 
-    let encrypted_data = rx.await.map_err(|_| "Blob read task failed".to_string())??;
+    let encrypted_data = rx
+        .await
+        .map_err(|_| "Blob read task failed".to_string())??;
 
     // Decrypt if encryption key provided
     let final_data = if let Some(key_b64) = encryption_key {
@@ -1415,7 +1542,11 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: 
             .decrypt(nonce, ciphertext)
             .map_err(|_| "Blob decryption failed - invalid key or corrupted data")?;
 
-        println!("[BLOB-READ] Decrypted {} bytes -> {} bytes", encrypted_data.len(), plaintext.len());
+        println!(
+            "[BLOB-READ] Decrypted {} bytes -> {} bytes",
+            encrypted_data.len(),
+            plaintext.len()
+        );
         plaintext
     } else {
         // No encryption key - return raw data (legacy or unencrypted blob)
@@ -1425,7 +1556,10 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: 
 
     // Return as base64
     let base64_data = general_purpose::STANDARD.encode(&final_data);
-    println!("[BLOB-READ] Successfully read blob, base64 length: {}", base64_data.len());
+    println!(
+        "[BLOB-READ] Successfully read blob, base64 length: {}",
+        base64_data.len()
+    );
     Ok(base64_data)
 }
 
@@ -1435,13 +1569,20 @@ pub async fn iroh_read_blob(node_id: String, blob_hash: String, encryption_key: 
 pub async fn iroh_enter_background(db: State<'_, Database>) -> Result<String, String> {
     println!("[IROH] App entering background - pausing operations");
 
-    // Mark as not in foreground (enables next foreground call)
-    APP_IN_FOREGROUND.store(false, Ordering::Relaxed);
+    // MOBILE ONLY: the OS may suspend or kill us at any point once backgrounded, so
+    // stop new P2P operations to avoid async IPC writes to a destroyed WebView.
+    //
+    // On DESKTOP this command also fires on minimize/occlusion (visibilitychange),
+    // where the app must STAY connected - shutting down P2P here made a minimized
+    // window stop heartbeating, so peers marked us stale within 45s.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        // Mark as not in foreground (enables next foreground call)
+        APP_IN_FOREGROUND.store(false, Ordering::Relaxed);
 
-    // Signal shutdown to prevent new operations from starting
-    // This helps avoid the race condition where async IPC responses
-    // try to write to a destroyed WebView during termination
-    signal_app_shutdown();
+        // Signal shutdown to prevent new operations from starting
+        signal_app_shutdown();
+    }
 
     // Checkpoint SQLite WAL to ensure all data is persisted to main database file
     // This prevents data loss if the app is terminated while backgrounded
@@ -1456,6 +1597,11 @@ pub async fn iroh_enter_background(db: State<'_, Database>) -> Result<String, St
 /// Call this when visibilitychange fires with hidden=false or on pageshow
 #[tauri::command]
 pub async fn iroh_enter_foreground() -> Result<String, String> {
+    // ALWAYS clear the shutdown flag first - even on the debounced path. Returning
+    // early with the flag still set (e.g. after a backgrounding signal that was never
+    // paired with a foreground transition) blocked every P2P command indefinitely.
+    reset_app_shutdown();
+
     // Debounce: skip if already in foreground
     if APP_IN_FOREGROUND.swap(true, Ordering::Relaxed) {
         println!("[IROH] App already in foreground - skipping duplicate call");
@@ -1464,21 +1610,22 @@ pub async fn iroh_enter_foreground() -> Result<String, String> {
 
     println!("[IROH] App entering foreground - resuming operations");
 
-    // Reset shutdown flag to allow operations again
-    reset_app_shutdown();
-
-    // Try to recover network if it was paused
+    // Perform full network recovery (restarts background loops, triggers sync)
     let network_opt = IROH_NETWORK.lock().unwrap().clone();
     if let Some(network) = network_opt {
-        // Also reset the network's shutdown flag
-        network.shutdown_flag.store(false, Ordering::Relaxed);
-
-        // Don't wait for recovery - let it happen in background
-        // Just trigger it if we can
-        let _ = tokio::time::timeout(
-            tokio::time::Duration::from_secs(1),
-            network.announce_presence()
-        ).await;
+        // Call full recover() which restarts all background loops and triggers device sync
+        // Use 10 second timeout - recovery needs time for peer discovery
+        match tokio::time::timeout(tokio::time::Duration::from_secs(10), network.recover()).await {
+            Ok(Ok(())) => {
+                println!("[IROH] Full recovery completed on foreground");
+            }
+            Ok(Err(e)) => {
+                println!("[IROH] Recovery failed on foreground: {}", e);
+            }
+            Err(_) => {
+                println!("[IROH] Recovery timed out on foreground (continuing in background)");
+            }
+        }
     }
 
     Ok("Foreground mode entered".to_string())

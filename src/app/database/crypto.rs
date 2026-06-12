@@ -24,7 +24,6 @@ impl Database {
         hasher.finalize().into()
     }
 
-
     pub fn generate_signing_keypair_from_seed(seed: &[u8; 32]) -> (String, String) {
         let signing_key = SigningKey::from_bytes(seed);
         let verifying_key = signing_key.verifying_key();
@@ -327,12 +326,7 @@ impl Database {
     ) -> Result<String, String> {
         // Create canonical format for signing
         // Using pipe separator and explicit empty strings for null values
-        let data_to_sign = format!(
-            "profile_v1|{}|{}|{}",
-            display_name,
-            bio,
-            profile_picture
-        );
+        let data_to_sign = format!("profile_v1|{}|{}|{}", display_name, bio, profile_picture);
 
         Self::sign_message(&data_to_sign, private_key_b64)
     }
@@ -348,12 +342,7 @@ impl Database {
         signature_b64: &str,
     ) -> bool {
         // Recreate the canonical format
-        let data_to_verify = format!(
-            "profile_v1|{}|{}|{}",
-            display_name,
-            bio,
-            profile_picture
-        );
+        let data_to_verify = format!("profile_v1|{}|{}|{}", display_name, bio, profile_picture);
 
         Self::verify_signature(&data_to_verify, signature_b64, public_key_b64)
     }
@@ -369,7 +358,7 @@ impl Database {
     pub fn hash_recovery_phrase_secure(phrase: &str) -> Result<String, String> {
         use argon2::{
             password_hash::{PasswordHasher, SaltString},
-            Argon2, Algorithm, Params, Version
+            Algorithm, Argon2, Params, Version,
         };
 
         // Use Argon2id with production-ready parameters
@@ -379,14 +368,15 @@ impl Database {
             Algorithm::Argon2id,
             Version::V0x13,
             Params::new(65536, 3, 4, None)
-                .map_err(|e| format!("Failed to create Argon2 params: {}", e))?
+                .map_err(|e| format!("Failed to create Argon2 params: {}", e))?,
         );
 
         // Generate a cryptographically secure random salt
         let salt = SaltString::generate(&mut rand::thread_rng());
 
         // Hash the recovery phrase
-        argon2.hash_password(phrase.as_bytes(), &salt)
+        argon2
+            .hash_password(phrase.as_bytes(), &salt)
             .map(|hash| hash.to_string())
             .map_err(|e| format!("Failed to hash recovery phrase: {}", e))
     }
@@ -396,8 +386,8 @@ impl Database {
     pub fn verify_recovery_phrase(phrase: &str, hash: &str) -> Result<bool, String> {
         use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
-        let parsed_hash = PasswordHash::new(hash)
-            .map_err(|e| format!("Invalid hash format: {}", e))?;
+        let parsed_hash =
+            PasswordHash::new(hash).map_err(|e| format!("Invalid hash format: {}", e))?;
 
         Ok(Argon2::default()
             .verify_password(phrase.as_bytes(), &parsed_hash)
@@ -453,7 +443,8 @@ pub fn encrypt_for_user(
         return Err("Invalid key length".to_string());
     }
 
-    let recipient_public = X25519PublicKey::from(<[u8; 32]>::try_from(recipient_pub_bytes).unwrap());
+    let recipient_public =
+        X25519PublicKey::from(<[u8; 32]>::try_from(recipient_pub_bytes).unwrap());
     let sender_private = StaticSecret::from(<[u8; 32]>::try_from(sender_priv_bytes).unwrap());
 
     // Perform ECDH
@@ -534,14 +525,13 @@ pub fn generate_recovery_phrase() -> String {
 #[allow(dead_code)]
 pub fn hash_recovery_phrase(phrase: &str) -> String {
     // Use the secure method from Database
-    Database::hash_recovery_phrase_secure(phrase)
-        .unwrap_or_else(|_| {
-            // Fallback to SHA256 if Argon2 fails (should rarely happen)
-            use sha2::{Sha256, Digest};
-            let mut hasher = Sha256::new();
-            hasher.update(phrase.as_bytes());
-            hex::encode(hasher.finalize())
-        })
+    Database::hash_recovery_phrase_secure(phrase).unwrap_or_else(|_| {
+        // Fallback to SHA256 if Argon2 fails (should rarely happen)
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(phrase.as_bytes());
+        hex::encode(hasher.finalize())
+    })
 }
 
 #[allow(dead_code)]

@@ -195,12 +195,14 @@ impl Database {
 
         // Check if there's already a pending request FROM the other user TO us
         // If so, auto-accept it instead of creating a duplicate
-        let existing_request: Option<SqliteUuid> = conn.query_row(
-            "SELECT id FROM p2p_connections
+        let existing_request: Option<SqliteUuid> = conn
+            .query_row(
+                "SELECT id FROM p2p_connections
              WHERE user_id = ?1 AND friend_user_id = ?2 AND status = 'pending'",
-            params![friend_user_id, user_id],
-            |row| row.get(0),
-        ).optional()?;
+                params![friend_user_id, user_id],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         if let Some(existing_id) = existing_request {
             // Other user already sent us a request - auto-accept it
@@ -211,11 +213,11 @@ impl Database {
 
             return Ok(P2pConnection {
                 id: existing_id,
-                user_id: friend_user_id,  // The original requester
-                friend_user_id: user_id,  // Us
+                user_id: friend_user_id, // The original requester
+                friend_user_id: user_id, // Us
                 status: "accepted".to_string(),
                 initiated_by: friend_user_id,
-                created_at: now.clone(),  // Not accurate but we don't have original
+                created_at: now.clone(), // Not accurate but we don't have original
                 updated_at: now,
             });
         }
@@ -231,7 +233,10 @@ impl Database {
         if existing_any > 0 {
             // Already have some connection - return error to prevent duplicates
             return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
-                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Connection already exists"),
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "Connection already exists",
+                ),
             )));
         }
 
@@ -259,11 +264,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
 
         // Debug: count connections
-        let conn_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM p2p_connections WHERE user_id = ?1 OR friend_user_id = ?1",
-            [user_id],
-            |row| row.get(0)
-        ).unwrap_or(0);
+        let conn_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM p2p_connections WHERE user_id = ?1 OR friend_user_id = ?1",
+                [user_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
         println!("[DB] Total p2p_connections for user: {}", conn_count);
 
         let mut stmt = conn.prepare(
@@ -303,7 +310,10 @@ impl Database {
 
     /// Get pending incoming friend requests (requests TO this user that they haven't accepted yet)
     pub fn get_pending_friend_requests(&self, user_id: SqliteUuid) -> SqliteResult<Vec<User>> {
-        println!("[DB] get_pending_friend_requests called for user_id: {}", user_id);
+        println!(
+            "[DB] get_pending_friend_requests called for user_id: {}",
+            user_id
+        );
         let conn = self.conn.lock().unwrap();
 
         // NEW CONVENTION: user_id is ALWAYS the local user, friend_user_id is ALWAYS the friend
@@ -348,8 +358,15 @@ impl Database {
     }
 
     /// Accept a friend request - updates status to 'accepted'
-    pub fn accept_friend_request(&self, user_id: SqliteUuid, friend_user_id: SqliteUuid) -> SqliteResult<()> {
-        println!("[DB] accept_friend_request: user {} accepting friend {}", user_id, friend_user_id);
+    pub fn accept_friend_request(
+        &self,
+        user_id: SqliteUuid,
+        friend_user_id: SqliteUuid,
+    ) -> SqliteResult<()> {
+        println!(
+            "[DB] accept_friend_request: user {} accepting friend {}",
+            user_id, friend_user_id
+        );
         let conn = self.conn.lock().unwrap();
 
         // Debug: Show all pending connections for this user
@@ -369,8 +386,10 @@ impl Database {
             println!("[DB] All connections for user {}:", user_id);
             for row in rows {
                 if let Ok((id, uid, fuid, status, initiated)) = row {
-                    println!("[DB]   - id={}, user_id={}, friend_user_id={}, status={}, initiated_by={}",
-                        id, uid, fuid, status, initiated);
+                    println!(
+                        "[DB]   - id={}, user_id={}, friend_user_id={}, status={}, initiated_by={}",
+                        id, uid, fuid, status, initiated
+                    );
                 }
             }
         }
@@ -387,7 +406,10 @@ impl Database {
             rusqlite::params![&now, user_id, friend_user_id],
         )?;
 
-        println!("[DB] Tried to update where user_id={} AND friend_user_id={} AND status='pending'", user_id, friend_user_id);
+        println!(
+            "[DB] Tried to update where user_id={} AND friend_user_id={} AND status='pending'",
+            user_id, friend_user_id
+        );
         println!("[DB] Updated {} rows to accepted", rows_updated);
         if rows_updated == 0 {
             println!("[DB] WARNING: No rows updated! The pending request may not exist or IDs don't match.");
@@ -396,8 +418,15 @@ impl Database {
     }
 
     /// Reject/delete a friend request
-    pub fn reject_friend_request(&self, user_id: SqliteUuid, friend_user_id: SqliteUuid) -> SqliteResult<()> {
-        println!("[DB] reject_friend_request: user {} rejecting friend {}", user_id, friend_user_id);
+    pub fn reject_friend_request(
+        &self,
+        user_id: SqliteUuid,
+        friend_user_id: SqliteUuid,
+    ) -> SqliteResult<()> {
+        println!(
+            "[DB] reject_friend_request: user {} rejecting friend {}",
+            user_id, friend_user_id
+        );
         let conn = self.conn.lock().unwrap();
 
         // NEW CONVENTION: user_id is ALWAYS the local user, friend_user_id is ALWAYS the friend
@@ -414,7 +443,10 @@ impl Database {
 
     /// Get outgoing pending friend requests (requests FROM this user that haven't been accepted yet)
     pub fn get_outgoing_friend_requests(&self, user_id: SqliteUuid) -> SqliteResult<Vec<User>> {
-        println!("[DB] get_outgoing_friend_requests called for user_id: {}", user_id);
+        println!(
+            "[DB] get_outgoing_friend_requests called for user_id: {}",
+            user_id
+        );
         let conn = self.conn.lock().unwrap();
 
         // Find pending requests where:
@@ -457,8 +489,15 @@ impl Database {
     }
 
     /// Cancel an outgoing friend request (delete a pending request that we initiated)
-    pub fn cancel_friend_request(&self, user_id: SqliteUuid, friend_user_id: SqliteUuid) -> SqliteResult<()> {
-        println!("[DB] cancel_friend_request: user {} canceling request to {}", user_id, friend_user_id);
+    pub fn cancel_friend_request(
+        &self,
+        user_id: SqliteUuid,
+        friend_user_id: SqliteUuid,
+    ) -> SqliteResult<()> {
+        println!(
+            "[DB] cancel_friend_request: user {} canceling request to {}",
+            user_id, friend_user_id
+        );
         let conn = self.conn.lock().unwrap();
 
         // Only delete if we initiated it (initiated_by = user_id)
@@ -631,6 +670,113 @@ impl Database {
             .collect::<Result<Vec<(String, String)>, _>>()?;
 
         Ok(peer_addrs)
+    }
+
+    /// Search friends by display name (case-insensitive partial match)
+    pub fn search_friends(&self, user_id: SqliteUuid, query: &str) -> SqliteResult<Vec<User>> {
+        let conn = self.conn.lock().unwrap();
+        let search_pattern = format!("%{}%", query.to_lowercase());
+
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT u.id, u.display_name, u.public_key, u.encryption_public_key,
+                    u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
+             FROM users u
+             INNER JOIN p2p_connections p ON ((p.user_id = ?1 AND p.friend_user_id = u.id)
+                                          OR (p.friend_user_id = ?1 AND p.user_id = u.id))
+             WHERE p.status = 'accepted' AND LOWER(u.display_name) LIKE ?2",
+        )?;
+
+        let user_iter = stmt.query_map(params![user_id, &search_pattern], |row| {
+            Ok(User {
+                id: row.get("id")?,
+                display_name: row.get("display_name")?,
+                public_key: row.get("public_key")?,
+                private_key: None,
+                encryption_public_key: row.get("encryption_public_key")?,
+                encryption_private_key: None,
+                device_id: row.get("device_id")?,
+                bio: row.get("bio")?,
+                profile_picture: row.get("profile_picture")?,
+                profile_signature: None,
+                recovery_phrase_hash: None,
+                recovery_phrase_shown: false,
+                created_at: row.get("created_at")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })?;
+
+        let mut users = Vec::new();
+        for user in user_iter {
+            users.push(user?);
+        }
+        Ok(users)
+    }
+
+    /// Update recent contact interaction timestamp
+    pub fn update_recent_contact(
+        &self,
+        user_id: SqliteUuid,
+        contact_user_id: SqliteUuid,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let id = SqliteUuid::new();
+
+        conn.execute(
+            "INSERT INTO recent_contacts (id, user_id, contact_user_id, last_interaction, interaction_count)
+             VALUES (?1, ?2, ?3, ?4, 1)
+             ON CONFLICT(user_id, contact_user_id) DO UPDATE SET
+                last_interaction = excluded.last_interaction,
+                interaction_count = interaction_count + 1",
+            params![id, user_id, contact_user_id, &now],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get recent contacts sorted by last interaction
+    pub fn get_recent_contacts(
+        &self,
+        user_id: SqliteUuid,
+        limit: Option<i32>,
+    ) -> SqliteResult<Vec<User>> {
+        let conn = self.conn.lock().unwrap();
+        let limit_val = limit.unwrap_or(10);
+
+        let mut stmt = conn.prepare(
+            "SELECT u.id, u.display_name, u.public_key, u.encryption_public_key,
+                    u.device_id, u.bio, u.profile_picture, u.created_at, u.updated_at
+             FROM users u
+             INNER JOIN recent_contacts r ON r.contact_user_id = u.id
+             WHERE r.user_id = ?1
+             ORDER BY r.last_interaction DESC
+             LIMIT ?2",
+        )?;
+
+        let user_iter = stmt.query_map(params![user_id, limit_val], |row| {
+            Ok(User {
+                id: row.get("id")?,
+                display_name: row.get("display_name")?,
+                public_key: row.get("public_key")?,
+                private_key: None,
+                encryption_public_key: row.get("encryption_public_key")?,
+                encryption_private_key: None,
+                device_id: row.get("device_id")?,
+                bio: row.get("bio")?,
+                profile_picture: row.get("profile_picture")?,
+                profile_signature: None,
+                recovery_phrase_hash: None,
+                recovery_phrase_shown: false,
+                created_at: row.get("created_at")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })?;
+
+        let mut users = Vec::new();
+        for user in user_iter {
+            users.push(user?);
+        }
+        Ok(users)
     }
 
     /// Get a friend's node ID and relay URL by their public key

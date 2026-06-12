@@ -70,7 +70,8 @@ mod tests {
             from_public_key: alice_pub_key.clone(),
             from_user_id: alice_user_id,
             from_display_name: "Alice".to_string(),
-            from_node_id: "a0540bcbbbcb5b184c33bf36ef9f7d1fe5b0e9a7335688436177e277fa291e55".to_string(),
+            from_node_id: "a0540bcbbbcb5b184c33bf36ef9f7d1fe5b0e9a7335688436177e277fa291e55"
+                .to_string(),
             from_relay_url: "https://aps1-1.relay.iroh.network./".to_string(),
             to_public_key: bob_pub_key.clone(),
             timestamp: 1234567890,
@@ -85,7 +86,10 @@ mod tests {
         let deserialized: TestP2PMessage =
             serde_json::from_str(&json).expect("Failed to deserialize FriendRequest");
 
-        assert_eq!(request, deserialized, "FriendRequest should survive serialization round-trip");
+        assert_eq!(
+            request, deserialized,
+            "FriendRequest should survive serialization round-trip"
+        );
     }
 
     #[test]
@@ -98,7 +102,8 @@ mod tests {
             from_user_id: bob_user_id,
             from_public_key: bob_pub_key.clone(),
             from_display_name: "Bob".to_string(),
-            from_node_id: "67d2e9e195fa9f95e16ea57edaa87493cd125f3ce595c75d058c2616a08d2153".to_string(),
+            from_node_id: "67d2e9e195fa9f95e16ea57edaa87493cd125f3ce595c75d058c2616a08d2153"
+                .to_string(),
             from_relay_url: "https://aps1-1.relay.iroh.network./".to_string(),
             to_public_key: alice_pub_key.clone(),
         };
@@ -112,7 +117,10 @@ mod tests {
         let deserialized: TestP2PMessage =
             serde_json::from_str(&json).expect("Failed to deserialize FriendAccepted");
 
-        assert_eq!(accepted, deserialized, "FriendAccepted should survive serialization round-trip");
+        assert_eq!(
+            accepted, deserialized,
+            "FriendAccepted should survive serialization round-trip"
+        );
     }
 
     #[test]
@@ -122,12 +130,12 @@ mod tests {
         let friend_accepted_json = r#"{"type":"FriendAccepted","from_user_id":"550e8400-e29b-41d4-a716-446655440000","from_public_key":"key1","from_display_name":"Bob","from_node_id":"node1","from_relay_url":"relay1","to_public_key":"key2"}"#;
         let heartbeat_json = r#"{"type":"Heartbeat","node_id":"node1","timestamp":123}"#;
 
-        let request: TestP2PMessage = serde_json::from_str(friend_request_json)
-            .expect("Failed to parse FriendRequest");
-        let accepted: TestP2PMessage = serde_json::from_str(friend_accepted_json)
-            .expect("Failed to parse FriendAccepted");
-        let heartbeat: TestP2PMessage = serde_json::from_str(heartbeat_json)
-            .expect("Failed to parse Heartbeat");
+        let request: TestP2PMessage =
+            serde_json::from_str(friend_request_json).expect("Failed to parse FriendRequest");
+        let accepted: TestP2PMessage =
+            serde_json::from_str(friend_accepted_json).expect("Failed to parse FriendAccepted");
+        let heartbeat: TestP2PMessage =
+            serde_json::from_str(heartbeat_json).expect("Failed to parse Heartbeat");
 
         // Verify correct type discrimination
         assert!(matches!(request, TestP2PMessage::FriendRequest { .. }));
@@ -156,7 +164,10 @@ mod tests {
         let my_public_key = &alice_pub_key;
         if let TestP2PMessage::FriendAccepted { to_public_key, .. } = &accepted {
             let is_for_me = to_public_key == my_public_key;
-            assert!(is_for_me, "Alice should receive FriendAccepted intended for her");
+            assert!(
+                is_for_me,
+                "Alice should receive FriendAccepted intended for her"
+            );
         } else {
             panic!("Expected FriendAccepted");
         }
@@ -182,7 +193,10 @@ mod tests {
         let my_public_key = &charlie_pub_key;
         if let TestP2PMessage::FriendAccepted { to_public_key, .. } = &accepted {
             let is_for_me = to_public_key == my_public_key;
-            assert!(!is_for_me, "Charlie should NOT receive FriendAccepted intended for Alice");
+            assert!(
+                !is_for_me,
+                "Charlie should NOT receive FriendAccepted intended for Alice"
+            );
         } else {
             panic!("Expected FriendAccepted");
         }
@@ -204,7 +218,10 @@ mod tests {
 
         // Bob should filter out messages from himself
         let my_public_key = &bob_pub_key;
-        if let TestP2PMessage::FriendAccepted { from_public_key, .. } = &accepted {
+        if let TestP2PMessage::FriendAccepted {
+            from_public_key, ..
+        } = &accepted
+        {
             let is_from_me = from_public_key == my_public_key;
             assert!(is_from_me, "Bob should detect this message is from himself");
             // In real code, we'd skip processing if from_public_key == self.public_key
@@ -223,7 +240,10 @@ mod tests {
         let user_id_1 = TestUuid::from_public_key(public_key);
         let user_id_2 = TestUuid::from_public_key(public_key);
 
-        assert_eq!(user_id_1, user_id_2, "User ID should be deterministic from public key");
+        assert_eq!(
+            user_id_1, user_id_2,
+            "User ID should be deterministic from public key"
+        );
     }
 
     #[test]
@@ -234,7 +254,10 @@ mod tests {
         let alice_id = TestUuid::from_public_key(alice_key);
         let bob_id = TestUuid::from_public_key(bob_key);
 
-        assert_ne!(alice_id, bob_id, "Different public keys should produce different user IDs");
+        assert_ne!(
+            alice_id, bob_id,
+            "Different public keys should produce different user IDs"
+        );
     }
 
     #[test]
@@ -257,9 +280,17 @@ mod tests {
         let deserialized: TestP2PMessage = serde_json::from_str(&json).unwrap();
 
         // Extract the user_id and verify it matches recomputation
-        if let TestP2PMessage::FriendRequest { from_public_key, from_user_id, .. } = deserialized {
+        if let TestP2PMessage::FriendRequest {
+            from_public_key,
+            from_user_id,
+            ..
+        } = deserialized
+        {
             let recomputed_id = TestUuid::from_public_key(&from_public_key);
-            assert_eq!(from_user_id, recomputed_id, "User ID should match after round-trip");
+            assert_eq!(
+                from_user_id, recomputed_id,
+                "User ID should match after round-trip"
+            );
         } else {
             panic!("Expected FriendRequest");
         }
@@ -290,7 +321,12 @@ mod tests {
         // Step 2: Bob receives and processes
         let received_request: TestP2PMessage = serde_json::from_str(&request_json).unwrap();
         let mut should_process_request = false;
-        if let TestP2PMessage::FriendRequest { to_public_key, from_public_key, .. } = &received_request {
+        if let TestP2PMessage::FriendRequest {
+            to_public_key,
+            from_public_key,
+            ..
+        } = &received_request
+        {
             // Bob checks if intended for him
             if *to_public_key == bob_pub_key {
                 // Bob checks it's not from himself
@@ -299,7 +335,10 @@ mod tests {
                 }
             }
         }
-        assert!(should_process_request, "Bob should process the friend request");
+        assert!(
+            should_process_request,
+            "Bob should process the friend request"
+        );
 
         // Step 3: Bob accepts and sends FriendAccepted
         let friend_accepted = TestP2PMessage::FriendAccepted {
@@ -317,7 +356,12 @@ mod tests {
         // Step 4: Alice receives and processes
         let received_accepted: TestP2PMessage = serde_json::from_str(&accepted_json).unwrap();
         let mut should_process_accepted = false;
-        if let TestP2PMessage::FriendAccepted { to_public_key, from_public_key, .. } = &received_accepted {
+        if let TestP2PMessage::FriendAccepted {
+            to_public_key,
+            from_public_key,
+            ..
+        } = &received_accepted
+        {
             // Alice checks if intended for her
             if *to_public_key == alice_pub_key {
                 // Alice checks it's not from herself
@@ -326,7 +370,10 @@ mod tests {
                 }
             }
         }
-        assert!(should_process_accepted, "Alice should process the friend accepted");
+        assert!(
+            should_process_accepted,
+            "Alice should process the friend accepted"
+        );
     }
 
     // ===== Edge Case Tests =====
@@ -344,7 +391,8 @@ mod tests {
 
         // Should still serialize/deserialize without error
         let json = serde_json::to_string(&accepted).expect("Empty fields should serialize");
-        let _deserialized: TestP2PMessage = serde_json::from_str(&json).expect("Empty fields should deserialize");
+        let _deserialized: TestP2PMessage =
+            serde_json::from_str(&json).expect("Empty fields should deserialize");
     }
 
     #[test]
@@ -361,7 +409,10 @@ mod tests {
         let json = serde_json::to_string(&accepted).unwrap();
         let deserialized: TestP2PMessage = serde_json::from_str(&json).unwrap();
 
-        if let TestP2PMessage::FriendAccepted { from_display_name, .. } = deserialized {
+        if let TestP2PMessage::FriendAccepted {
+            from_display_name, ..
+        } = deserialized
+        {
             assert_eq!(from_display_name, "日本語 🎉 émojis");
         } else {
             panic!("Expected FriendAccepted");
@@ -394,7 +445,8 @@ mod tests {
             from_public_key: "xoBMiqq7ZFD6V10RZrl6RFHqgfUYI52kDMAp09BvcQc=".to_string(),
             from_user_id: TestUuid::from_public_key("xoBMiqq7ZFD6V10RZrl6RFHqgfUYI52kDMAp09BvcQc="),
             from_display_name: "Alice".to_string(),
-            from_node_id: "a0540bcbbbcb5b184c33bf36ef9f7d1fe5b0e9a7335688436177e277fa291e55".to_string(),
+            from_node_id: "a0540bcbbbcb5b184c33bf36ef9f7d1fe5b0e9a7335688436177e277fa291e55"
+                .to_string(),
             from_relay_url: "https://aps1-1.relay.iroh.network./".to_string(),
             to_public_key: "kQgclgotvTIvtTDkdwmvI/YSdGppOmSNvoI3HtBAABs=".to_string(),
             timestamp: 1737405566,
@@ -404,7 +456,8 @@ mod tests {
             from_user_id: TestUuid::from_public_key("kQgclgotvTIvtTDkdwmvI/YSdGppOmSNvoI3HtBAABs="),
             from_public_key: "kQgclgotvTIvtTDkdwmvI/YSdGppOmSNvoI3HtBAABs=".to_string(),
             from_display_name: "Bob".to_string(),
-            from_node_id: "67d2e9e195fa9f95e16ea57edaa87493cd125f3ce595c75d058c2616a08d2153".to_string(),
+            from_node_id: "67d2e9e195fa9f95e16ea57edaa87493cd125f3ce595c75d058c2616a08d2153"
+                .to_string(),
             from_relay_url: "https://aps1-1.relay.iroh.network./".to_string(),
             to_public_key: "xoBMiqq7ZFD6V10RZrl6RFHqgfUYI52kDMAp09BvcQc=".to_string(),
         };
@@ -424,8 +477,20 @@ mod tests {
 
         // From logs: FriendRequest ~389 bytes, FriendAccepted ~365 bytes, Heartbeat ~115 bytes
         // Our test messages should be in similar ballpark
-        assert!(request_size > 300 && request_size < 500, "FriendRequest size unexpected: {}", request_size);
-        assert!(accepted_size > 300 && accepted_size < 500, "FriendAccepted size unexpected: {}", accepted_size);
-        assert!(heartbeat_size > 50 && heartbeat_size < 200, "Heartbeat size unexpected: {}", heartbeat_size);
+        assert!(
+            request_size > 300 && request_size < 500,
+            "FriendRequest size unexpected: {}",
+            request_size
+        );
+        assert!(
+            accepted_size > 300 && accepted_size < 500,
+            "FriendAccepted size unexpected: {}",
+            accepted_size
+        );
+        assert!(
+            heartbeat_size > 50 && heartbeat_size < 200,
+            "Heartbeat size unexpected: {}",
+            heartbeat_size
+        );
     }
 }

@@ -188,7 +188,11 @@ impl Database {
     /// This handles the case where a device was wiped and got a new node ID
     /// Returns the number of stale entries cleared
     #[allow(dead_code)]
-    pub fn clear_stale_node_ids_for_device(&self, device_id: &str, current_node_id: &str) -> SqliteResult<usize> {
+    pub fn clear_stale_node_ids_for_device(
+        &self,
+        device_id: &str,
+        current_node_id: &str,
+    ) -> SqliteResult<usize> {
         let conn = self.conn.lock().unwrap();
 
         // First, get any old node IDs for this device that don't match the current one
@@ -212,16 +216,16 @@ impl Database {
     #[allow(dead_code)]
     pub fn delete_device_by_node_id(&self, node_id: &str) -> SqliteResult<usize> {
         let conn = self.conn.lock().unwrap();
-        let deleted = conn.execute(
-            "DELETE FROM devices WHERE iroh_node_id = ?",
-            [node_id],
-        )?;
+        let deleted = conn.execute("DELETE FROM devices WHERE iroh_node_id = ?", [node_id])?;
         Ok(deleted)
     }
 
     /// Get all node IDs for a user (to find stale ones)
     #[allow(dead_code)]
-    pub fn get_node_ids_for_user(&self, user_public_key: &str) -> SqliteResult<Vec<(String, String)>> {
+    pub fn get_node_ids_for_user(
+        &self,
+        user_public_key: &str,
+    ) -> SqliteResult<Vec<(String, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, iroh_node_id FROM devices WHERE user_public_key = ? AND iroh_node_id IS NOT NULL",
@@ -254,13 +258,17 @@ impl Database {
         )?;
 
         let stale_devices: Vec<(String, String)> = stmt
-            .query_map([user_public_key, current_device_id, current_node_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
+            .query_map(
+                [user_public_key, current_device_id, current_node_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?
             .filter_map(|r| r.ok())
             .collect();
 
-        let stale_node_ids: Vec<String> = stale_devices.iter().map(|(_, node_id)| node_id.clone()).collect();
+        let stale_node_ids: Vec<String> = stale_devices
+            .iter()
+            .map(|(_, node_id)| node_id.clone())
+            .collect();
 
         // Delete stale device entries
         for (device_id, _) in &stale_devices {

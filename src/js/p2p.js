@@ -22,12 +22,26 @@ const P2P = {
     },
 
     // Initialize Iroh network (called on login)
+    // Single-flight: concurrent callers (login + resume handlers + health recovery)
+    // share one in-flight initialization instead of racing duplicate iroh_initialize
+    // calls that each replace the Rust-side network.
     async initialize(userId, displayName, publicKey, deviceId, force = false) {
         if (this.initialized && !force) {
             console.log('P2P already initialized');
             return;
         }
 
+        if (this.initializeInFlight) {
+            console.log('P2P initialization already in flight, waiting for it');
+            return this.initializeInFlight;
+        }
+
+        this.initializeInFlight = this._doInitialize(userId, displayName, publicKey, deviceId)
+            .finally(() => { this.initializeInFlight = null; });
+        return this.initializeInFlight;
+    },
+
+    async _doInitialize(userId, displayName, publicKey, deviceId) {
         // Store credentials for potential re-initialization
         this.userId = userId;
         this.displayName = displayName;
@@ -35,11 +49,9 @@ const P2P = {
         this.deviceId = deviceId;
 
         // Create a promise that other methods can wait on
-        if (!this.initializationPromise || force) {
-            this.initializationPromise = new Promise((resolve) => {
-                this.initializationResolve = resolve;
-            });
-        }
+        this.initializationPromise = new Promise((resolve) => {
+            this.initializationResolve = resolve;
+        });
 
         try {
             this.updateStatus('connecting');
@@ -94,6 +106,10 @@ const P2P = {
 
             // Listen for peer connection events
             this.setupEventListeners();
+
+            // Periodic self-heal: recover from dead connections even when no
+            // focus/visibility event ever fires (e.g. app left foregrounded overnight)
+            this.startHealthMonitoring();
 
             console.log('Iroh P2P system initialized');
 
@@ -202,6 +218,13 @@ const P2P = {
 
     // Start polling for connected peers
     startPeerPolling() {
+        // Clear any existing interval first - recovery and re-init call this again,
+        // and overwriting the handle leaked a permanent extra polling loop each time
+        if (this.peerPollInterval) {
+            clearInterval(this.peerPollInterval);
+            this.peerPollInterval = null;
+        }
+
         // Start with 1 second polling (assume offline initially)
         this.currentPollInterval = 1000;
         this.peerPollInterval = setInterval(async () => {
@@ -219,6 +242,12 @@ const P2P = {
 
     // Start periodic presence broadcasting with adaptive intervals
     startPresencePolling() {
+        // Clear any existing interval first (same leak as startPeerPolling)
+        if (this.presencePollInterval) {
+            clearInterval(this.presencePollInterval);
+            this.presencePollInterval = null;
+        }
+
         // Start with 5 second polling (aggressive when no peers)
         this.currentPresenceInterval = 5000;
         this.presencePollInterval = setInterval(async () => {
@@ -261,6 +290,14 @@ const P2P = {
 
     // Setup event listeners for real-time peer updates
     async setupEventListeners() {
+        // Idempotence guard: initialize() runs this on every (re-)init, and listen()
+        // registrations are never unsubscribed - without the guard every recovery
+        // permanently added another copy of each handler
+        if (this.eventListenersSetup) {
+            return;
+        }
+        this.eventListenersSetup = true;
+
         // Import Tauri event listener (if not already available)
         if (window.__TAURI__?.event) {
             const { listen } = window.__TAURI__.event;
@@ -329,35 +366,66 @@ const P2P = {
             return;
         }
 
+        // Reset JS state FIRST and unconditionally. If iroh_shutdown throws and
+        // initialized stayed true, the next login's initialize() early-returned
+        // ("already initialized") with no polling and no network - permanently offline.
+        if (this.peerPollInterval) {
+            clearInterval(this.peerPollInterval);
+            this.peerPollInterval = null;
+        }
+
+        if (this.presencePollInterval) {
+            clearInterval(this.presencePollInterval);
+            this.presencePollInterval = null;
+        }
+
+        if (this.healthMonitorInterval) {
+            clearInterval(this.healthMonitorInterval);
+            this.healthMonitorInterval = null;
+        }
+
+        if (this.presenceRetryTimer) {
+            clearTimeout(this.presenceRetryTimer);
+            this.presenceRetryTimer = null;
+        }
+
+        this.peers.clear();
+        this.initialized = false;
+        this.connectedPeers = 0;
+        this.presenceRetryCount = 0;
+        this.connectionStartTime = null;
+        this.initializationPromise = null;
+        this.initializationResolve = null;
+        this.updateStatus('offline');
+
         try {
-            if (this.peerPollInterval) {
-                clearInterval(this.peerPollInterval);
-            }
-
-            if (this.presencePollInterval) {
-                clearInterval(this.presencePollInterval);
-            }
-
-            if (this.presenceRetryTimer) {
-                clearTimeout(this.presenceRetryTimer);
-                this.presenceRetryTimer = null;
-            }
-
             await TauriAPI.invoke('iroh_shutdown');
-
-            this.peers.clear();
-            this.initialized = false;
-            this.connectedPeers = 0;
-            this.presenceRetryCount = 0;
-            this.connectionStartTime = null;
-            this.updateStatus('offline');
             console.log('P2P system shut down');
-
             return true;
         } catch (error) {
-            console.error('Failed to shutdown P2P:', error);
+            console.error('Failed to shutdown P2P backend (JS state already reset):', error);
             throw error;
         }
+    },
+
+    // Periodic self-heal loop. Catches dead connections that no focus/visibility
+    // event will ever report (laptop lid wake with window focused, network change,
+    // app left foregrounded). healthCheckAndRecover() is single-flight, so this
+    // never stacks recoveries on top of resume-triggered ones.
+    startHealthMonitoring() {
+        if (this.healthMonitorInterval) {
+            clearInterval(this.healthMonitorInterval);
+            this.healthMonitorInterval = null;
+        }
+
+        this.healthMonitorInterval = setInterval(async () => {
+            if (!this.initialized) {
+                clearInterval(this.healthMonitorInterval);
+                this.healthMonitorInterval = null;
+                return;
+            }
+            await this.healthCheckAndRecover();
+        }, 60000);
     },
 
     // Subscribe to a friend's topic
@@ -571,9 +639,35 @@ const P2P = {
 
     // Comprehensive health check and recovery for app resume
     // This is more thorough than ensureInitialized - it checks actual network health
+    // Single-flight: resume can fire app-resumed + visibilitychange + focus at once,
+    // and 2-3 concurrent recoveries used to race iroh_recover/forced re-inits.
     async healthCheckAndRecover() {
+        if (this.recoveryInFlight) {
+            console.log('[P2P-HEALTH] Recovery already in flight, joining it');
+            return this.recoveryInFlight;
+        }
+
+        this.recoveryInFlight = this._doHealthCheckAndRecover()
+            .finally(() => { this.recoveryInFlight = null; });
+        return this.recoveryInFlight;
+    },
+
+    async _doHealthCheckAndRecover() {
         if (!this.initialized) {
-            console.log('[P2P-HEALTH] Not initialized, skipping health check');
+            // A failed launch-time init used to leave the app permanently offline
+            // because every recovery path bailed here. If we have credentials,
+            // retry initialization instead of giving up.
+            if (this.userId && this.publicKey) {
+                console.log('[P2P-HEALTH] Not initialized but credentials present - attempting initialization');
+                try {
+                    await this.initialize(this.userId, this.displayName, this.publicKey, this.deviceId, true);
+                    return true;
+                } catch (error) {
+                    console.error('[P2P-HEALTH] Initialization retry failed:', error);
+                    return false;
+                }
+            }
+            console.log('[P2P-HEALTH] Not initialized and no credentials, skipping health check');
             return false;
         }
 

@@ -3,12 +3,12 @@
 // This module provides utilities for testing the Iroh-based P2P networking stack.
 // It creates isolated test networks with multiple nodes that can communicate.
 
+use futures_lite::StreamExt;
 use iroh::{Endpoint, NodeAddr, NodeId, RelayMode, SecretKey};
 use iroh_gossip::{
     net::{Event, Gossip, GossipEvent, GOSSIP_ALPN},
     proto::TopicId,
 };
-use futures_lite::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -135,7 +135,9 @@ impl TestNode {
             .get(topic_name)
             .ok_or_else(|| anyhow::anyhow!("Not subscribed to topic {}", topic_name))?;
 
-        sub.sender.broadcast(bytes::Bytes::from(message.to_vec())).await?;
+        sub.sender
+            .broadcast(bytes::Bytes::from(message.to_vec()))
+            .await?;
         Ok(())
     }
 
@@ -315,7 +317,9 @@ impl TestNetwork {
         timeout: Duration,
     ) -> anyhow::Result<()> {
         // Send from the specified node
-        self.nodes[sender_idx].broadcast(topic_name, message).await?;
+        self.nodes[sender_idx]
+            .broadcast(topic_name, message)
+            .await?;
 
         // Verify all other nodes receive it
         for (i, node) in self.nodes.iter().enumerate() {
@@ -381,7 +385,10 @@ mod tests {
         let id3 = topic_name_to_id("other/topic");
 
         assert_eq!(id1, id2, "Same topic name should produce same ID");
-        assert_ne!(id1, id3, "Different topic names should produce different IDs");
+        assert_ne!(
+            id1, id3,
+            "Different topic names should produce different IDs"
+        );
     }
 
     #[tokio::test]

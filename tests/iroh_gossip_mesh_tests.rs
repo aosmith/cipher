@@ -1,11 +1,14 @@
 // Test to verify subscribe() vs subscribe_and_join() mesh formation
 // This reproduces the issue we're seeing in v0.36.0/v0.37.0
 
-use iroh::{Endpoint, RelayMode};
-use iroh_gossip::{net::{Gossip, Event, GossipEvent, GOSSIP_ALPN}, proto::TopicId};
 use futures_lite::StreamExt;
-use std::time::Duration;
+use iroh::{Endpoint, RelayMode};
+use iroh_gossip::{
+    net::{Event, Gossip, GossipEvent, GOSSIP_ALPN},
+    proto::TopicId,
+};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 #[tokio::test]
@@ -19,7 +22,7 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
     let alice_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
     let alice_endpoint = Endpoint::builder()
         .secret_key(alice_secret.clone())
-        .relay_mode(RelayMode::Default)  // Use relay servers for real network testing
+        .relay_mode(RelayMode::Default) // Use relay servers for real network testing
         .bind()
         .await?;
     let alice_node_id = alice_endpoint.node_id();
@@ -68,7 +71,7 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
     let bob_secret = iroh::SecretKey::generate(rand::rngs::OsRng);
     let bob_endpoint = Endpoint::builder()
         .secret_key(bob_secret)
-        .relay_mode(RelayMode::Default)  // Use relay servers for real network testing
+        .relay_mode(RelayMode::Default) // Use relay servers for real network testing
         .bind()
         .await?;
     let bob_node_id = bob_endpoint.node_id();
@@ -104,8 +107,9 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
 
     let join_result = tokio::time::timeout(
         Duration::from_secs(10),
-        bob_gossip.subscribe_and_join(topic, vec![alice_node_id])
-    ).await;
+        bob_gossip.subscribe_and_join(topic, vec![alice_node_id]),
+    )
+    .await;
 
     match join_result {
         Ok(Ok(bob_topic)) => {
@@ -129,7 +133,10 @@ async fn test_subscribe_root_vs_subscribe_and_join() -> anyhow::Result<()> {
             // Check if Bob receives
             match tokio::time::timeout(Duration::from_secs(2), bob_receiver.try_next()).await {
                 Ok(Ok(Some(Event::Gossip(GossipEvent::Received(msg))))) => {
-                    println!("Bob: ✓ Received Alice's message: {} bytes", msg.content.len());
+                    println!(
+                        "Bob: ✓ Received Alice's message: {} bytes",
+                        msg.content.len()
+                    );
                 }
                 Ok(Ok(Some(event))) => {
                     println!("Bob: Received other event: {:?}", event);
@@ -220,7 +227,10 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
     let alice_join = tokio::spawn(async move {
         println!("Alice: Starting subscribe_and_join()...");
         let result = alice_gossip.subscribe_and_join(topic, vec![]).await;
-        println!("Alice: subscribe_and_join() completed: {:?}", result.is_ok());
+        println!(
+            "Alice: subscribe_and_join() completed: {:?}",
+            result.is_ok()
+        );
         result
     });
 
@@ -229,7 +239,9 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
 
     let bob_join = tokio::spawn(async move {
         println!("Bob: Starting subscribe_and_join()...");
-        let result = bob_gossip.subscribe_and_join(topic, vec![alice_node_id]).await;
+        let result = bob_gossip
+            .subscribe_and_join(topic, vec![alice_node_id])
+            .await;
         println!("Bob: subscribe_and_join() completed: {:?}", result.is_ok());
         result
     });
@@ -239,7 +251,9 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
         let alice_result = alice_join.await??;
         let bob_result = bob_join.await??;
         Ok::<_, anyhow::Error>((alice_result, bob_result))
-    }).await {
+    })
+    .await
+    {
         Ok(Ok((alice_topic, bob_topic))) => {
             println!("\n✓ TEST PASSED: Both subscribe_and_join() calls succeeded!");
             println!("   Alice and Bob formed a gossip mesh");
@@ -248,7 +262,9 @@ async fn test_both_use_subscribe_and_join() -> anyhow::Result<()> {
             let (alice_sender, _) = alice_topic.split();
             let (bob_sender, mut bob_receiver) = bob_topic.split();
 
-            alice_sender.broadcast(bytes::Bytes::from("Hello from Alice!")).await?;
+            alice_sender
+                .broadcast(bytes::Bytes::from("Hello from Alice!"))
+                .await?;
             println!("Alice: Sent message");
 
             match tokio::time::timeout(Duration::from_secs(2), bob_receiver.try_next()).await {
@@ -378,8 +394,16 @@ async fn test_resubscribe_after_qr_scan() -> anyhow::Result<()> {
     println!("\n--- Both nodes are now isolated ---");
     println!("Alice peers: {}", *alice_peer_count.lock().await);
     println!("Bob peers: {}", *bob_peer_count.lock().await);
-    assert_eq!(*alice_peer_count.lock().await, 0, "Alice should have 0 peers initially");
-    assert_eq!(*bob_peer_count.lock().await, 0, "Bob should have 0 peers initially");
+    assert_eq!(
+        *alice_peer_count.lock().await,
+        0,
+        "Alice should have 0 peers initially"
+    );
+    assert_eq!(
+        *bob_peer_count.lock().await,
+        0,
+        "Bob should have 0 peers initially"
+    );
 
     // === QR CODE SCAN SIMULATION ===
     println!("\n=== Bob scans Alice's QR code ===");
@@ -387,9 +411,11 @@ async fn test_resubscribe_after_qr_scan() -> anyhow::Result<()> {
 
     // Get Alice's address (this is what the QR code contains)
     let alice_addr = alice_endpoint.node_addr().await?;
-    println!("Bob: Alice's address: NodeId={}, Relay={:?}",
+    println!(
+        "Bob: Alice's address: NodeId={}, Relay={:?}",
         alice_addr.node_id,
-        alice_addr.relay_url());
+        alice_addr.relay_url()
+    );
 
     // Add Alice's address to Bob's endpoint
     bob_endpoint.add_node_addr(alice_addr)?;
@@ -402,8 +428,9 @@ async fn test_resubscribe_after_qr_scan() -> anyhow::Result<()> {
     // Bob resubscribes using subscribe_and_join() with Alice as bootstrap
     let bob_topic_new = tokio::time::timeout(
         Duration::from_secs(10),
-        bob_gossip.subscribe_and_join(topic, vec![alice_node_id])
-    ).await;
+        bob_gossip.subscribe_and_join(topic, vec![alice_node_id]),
+    )
+    .await;
 
     match bob_topic_new {
         Ok(Ok(new_topic)) => {

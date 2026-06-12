@@ -2,7 +2,7 @@
 // This module is imported by all test files
 
 pub use app::database::Database;
-pub use app::types::{User, SqliteUuid};
+pub use app::types::{SqliteUuid, User};
 pub use tempfile::TempDir;
 
 // Re-export test suite functionality

@@ -29,7 +29,10 @@ fn test_recovery_phrase_deterministic_keys() {
         .expect("Should derive key");
 
     // Same phrase should produce same key
-    assert_eq!(private_key1, private_key2, "Key derivation should be deterministic");
+    assert_eq!(
+        private_key1, private_key2,
+        "Key derivation should be deterministic"
+    );
 }
 
 #[test]
@@ -43,7 +46,10 @@ fn test_different_phrases_different_keys() {
         .expect("Should derive key");
 
     // Different phrases should produce different keys
-    assert_ne!(private_key1, private_key2, "Different phrases should produce different keys");
+    assert_ne!(
+        private_key1, private_key2,
+        "Different phrases should produce different keys"
+    );
 }
 
 #[test]
@@ -74,12 +80,11 @@ fn test_sign_and_verify() {
     let message = "Test message to sign";
 
     // Sign
-    let signature = crypto::sign_message(message, &private_key)
-        .expect("Should sign");
+    let signature = crypto::sign_message(message, &private_key).expect("Should sign");
 
     // Verify with correct public key
-    let is_valid = crypto::verify_signature(message, &signature, &public_key)
-        .expect("Should verify");
+    let is_valid =
+        crypto::verify_signature(message, &signature, &public_key).expect("Should verify");
     assert!(is_valid, "Signature should be valid");
 }
 
@@ -97,12 +102,11 @@ fn test_verify_wrong_key_fails() {
     let message = "Test message";
 
     // Sign with key1
-    let signature = crypto::sign_message(message, &private_key1)
-        .expect("Should sign");
+    let signature = crypto::sign_message(message, &private_key1).expect("Should sign");
 
     // Verify with key2's public key should fail
-    let is_valid = crypto::verify_signature(message, &signature, &public_key2)
-        .expect("Should verify");
+    let is_valid =
+        crypto::verify_signature(message, &signature, &public_key2).expect("Should verify");
     assert!(!is_valid, "Signature should be invalid with wrong key");
 }
 
@@ -117,13 +121,15 @@ fn test_verify_wrong_message_fails() {
     let wrong_message = "Tampered message";
 
     // Sign original
-    let signature = crypto::sign_message(message, &private_key)
-        .expect("Should sign");
+    let signature = crypto::sign_message(message, &private_key).expect("Should sign");
 
     // Verify with wrong message should fail
-    let is_valid = crypto::verify_signature(wrong_message, &signature, &public_key)
-        .expect("Should verify");
-    assert!(!is_valid, "Signature should be invalid for different message");
+    let is_valid =
+        crypto::verify_signature(wrong_message, &signature, &public_key).expect("Should verify");
+    assert!(
+        !is_valid,
+        "Signature should be invalid for different message"
+    );
 }
 
 // ===== Encryption Tests =====
@@ -133,15 +139,17 @@ fn test_encrypt_decrypt_for_user() {
     // Use two different users with database to get encryption keys
     let temp_dir = tempfile::TempDir::new().expect("Should create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = app::database::Database::new(&db_path.to_string_lossy())
-        .expect("Should create database");
+    let db =
+        app::database::Database::new(&db_path.to_string_lossy()).expect("Should create database");
 
     let device_id1 = app::database::Database::generate_device_id();
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), device_id1)
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), device_id1)
         .expect("Should create alice");
 
     let device_id2 = app::database::Database::generate_device_id();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), device_id2)
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), device_id2)
         .expect("Should create bob");
 
     let plaintext = b"Secret message from Alice to Bob";
@@ -151,14 +159,16 @@ fn test_encrypt_decrypt_for_user() {
         plaintext,
         &bob.encryption_public_key.unwrap(),
         &alice.encryption_private_key.unwrap(),
-    ).expect("Should encrypt");
+    )
+    .expect("Should encrypt");
 
     // Bob decrypts
     let decrypted = crypto::decrypt_from_user(
         &ciphertext,
         &alice.encryption_public_key.unwrap(),
         &bob.encryption_private_key.unwrap(),
-    ).expect("Should decrypt");
+    )
+    .expect("Should decrypt");
 
     assert_eq!(decrypted, plaintext);
 }
@@ -168,15 +178,17 @@ fn test_encryption_different_ciphertexts() {
     // Use database for encryption keys
     let temp_dir = tempfile::TempDir::new().expect("Should create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = app::database::Database::new(&db_path.to_string_lossy())
-        .expect("Should create database");
+    let db =
+        app::database::Database::new(&db_path.to_string_lossy()).expect("Should create database");
 
     let device_id1 = app::database::Database::generate_device_id();
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), device_id1)
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), device_id1)
         .expect("Should create alice");
 
     let device_id2 = app::database::Database::generate_device_id();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), device_id2)
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), device_id2)
         .expect("Should create bob");
 
     let plaintext = b"Same message";
@@ -186,29 +198,36 @@ fn test_encryption_different_ciphertexts() {
         plaintext,
         &bob.encryption_public_key.as_ref().unwrap(),
         &alice.encryption_private_key.as_ref().unwrap(),
-    ).expect("Should encrypt");
+    )
+    .expect("Should encrypt");
 
     let ciphertext2 = crypto::encrypt_for_user(
         plaintext,
         &bob.encryption_public_key.as_ref().unwrap(),
         &alice.encryption_private_key.as_ref().unwrap(),
-    ).expect("Should encrypt");
+    )
+    .expect("Should encrypt");
 
     // Ciphertexts should be different (due to random nonce)
-    assert_ne!(ciphertext1, ciphertext2, "Ciphertexts should differ due to random nonce");
+    assert_ne!(
+        ciphertext1, ciphertext2,
+        "Ciphertexts should differ due to random nonce"
+    );
 
     // But both should decrypt to the same plaintext
     let decrypted1 = crypto::decrypt_from_user(
         &ciphertext1,
         &alice.encryption_public_key.as_ref().unwrap(),
         &bob.encryption_private_key.as_ref().unwrap(),
-    ).expect("Should decrypt");
+    )
+    .expect("Should decrypt");
 
     let decrypted2 = crypto::decrypt_from_user(
         &ciphertext2,
         &alice.encryption_public_key.as_ref().unwrap(),
         &bob.encryption_private_key.as_ref().unwrap(),
-    ).expect("Should decrypt");
+    )
+    .expect("Should decrypt");
 
     assert_eq!(decrypted1, plaintext);
     assert_eq!(decrypted2, plaintext);
@@ -218,15 +237,27 @@ fn test_encryption_different_ciphertexts() {
 fn test_decrypt_wrong_key_fails() {
     let temp_dir = tempfile::TempDir::new().expect("Should create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = app::database::Database::new(&db_path.to_string_lossy())
-        .expect("Should create database");
+    let db =
+        app::database::Database::new(&db_path.to_string_lossy()).expect("Should create database");
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(),
-        app::database::Database::generate_device_id()).expect("Should create");
-    let (bob, _) = db.create_user_first_launch("bob".to_string(),
-        app::database::Database::generate_device_id()).expect("Should create");
-    let (charlie, _) = db.create_user_first_launch("charlie".to_string(),
-        app::database::Database::generate_device_id()).expect("Should create");
+    let (alice, _) = db
+        .create_user_first_launch(
+            "alice".to_string(),
+            app::database::Database::generate_device_id(),
+        )
+        .expect("Should create");
+    let (bob, _) = db
+        .create_user_first_launch(
+            "bob".to_string(),
+            app::database::Database::generate_device_id(),
+        )
+        .expect("Should create");
+    let (charlie, _) = db
+        .create_user_first_launch(
+            "charlie".to_string(),
+            app::database::Database::generate_device_id(),
+        )
+        .expect("Should create");
 
     let plaintext = b"Secret for Bob only";
 
@@ -235,7 +266,8 @@ fn test_decrypt_wrong_key_fails() {
         plaintext,
         &bob.encryption_public_key.unwrap(),
         &alice.encryption_private_key.unwrap(),
-    ).expect("Should encrypt");
+    )
+    .expect("Should encrypt");
 
     // Charlie tries to decrypt (should fail)
     let result = crypto::decrypt_from_user(
@@ -258,8 +290,14 @@ fn test_hash_recovery_phrase() {
 
     // Argon2 uses random salt, so hashes will be different each time
     // But both should be valid Argon2 formatted hashes
-    assert!(hash1.starts_with("$argon2id$"), "Hash should be Argon2 format");
-    assert!(hash2.starts_with("$argon2id$"), "Hash should be Argon2 format");
+    assert!(
+        hash1.starts_with("$argon2id$"),
+        "Hash should be Argon2 format"
+    );
+    assert!(
+        hash2.starts_with("$argon2id$"),
+        "Hash should be Argon2 format"
+    );
 
     // Hashes should be non-empty and have reasonable length
     assert!(hash1.len() > 50, "Hash should be a full Argon2 string");
@@ -284,13 +322,21 @@ fn test_hash_different_phrases() {
 fn test_empty_message_encryption() {
     let temp_dir = tempfile::TempDir::new().expect("Should create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = app::database::Database::new(&db_path.to_string_lossy())
-        .expect("Should create database");
+    let db =
+        app::database::Database::new(&db_path.to_string_lossy()).expect("Should create database");
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(),
-        app::database::Database::generate_device_id()).expect("Should create");
-    let (bob, _) = db.create_user_first_launch("bob".to_string(),
-        app::database::Database::generate_device_id()).expect("Should create");
+    let (alice, _) = db
+        .create_user_first_launch(
+            "alice".to_string(),
+            app::database::Database::generate_device_id(),
+        )
+        .expect("Should create");
+    let (bob, _) = db
+        .create_user_first_launch(
+            "bob".to_string(),
+            app::database::Database::generate_device_id(),
+        )
+        .expect("Should create");
 
     let plaintext = b"";
 
@@ -298,13 +344,15 @@ fn test_empty_message_encryption() {
         plaintext,
         &bob.encryption_public_key.unwrap(),
         &alice.encryption_private_key.unwrap(),
-    ).expect("Should encrypt empty message");
+    )
+    .expect("Should encrypt empty message");
 
     let decrypted = crypto::decrypt_from_user(
         &ciphertext,
         &alice.encryption_public_key.unwrap(),
         &bob.encryption_private_key.unwrap(),
-    ).expect("Should decrypt");
+    )
+    .expect("Should decrypt");
 
     assert_eq!(decrypted, plaintext);
 }
@@ -313,13 +361,21 @@ fn test_empty_message_encryption() {
 fn test_large_message_encryption() {
     let temp_dir = tempfile::TempDir::new().expect("Should create temp dir");
     let db_path = temp_dir.path().join("test.db");
-    let db = app::database::Database::new(&db_path.to_string_lossy())
-        .expect("Should create database");
+    let db =
+        app::database::Database::new(&db_path.to_string_lossy()).expect("Should create database");
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(),
-        app::database::Database::generate_device_id()).expect("Should create");
-    let (bob, _) = db.create_user_first_launch("bob".to_string(),
-        app::database::Database::generate_device_id()).expect("Should create");
+    let (alice, _) = db
+        .create_user_first_launch(
+            "alice".to_string(),
+            app::database::Database::generate_device_id(),
+        )
+        .expect("Should create");
+    let (bob, _) = db
+        .create_user_first_launch(
+            "bob".to_string(),
+            app::database::Database::generate_device_id(),
+        )
+        .expect("Should create");
 
     // 1MB message
     let plaintext: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
@@ -328,13 +384,15 @@ fn test_large_message_encryption() {
         &plaintext,
         &bob.encryption_public_key.unwrap(),
         &alice.encryption_private_key.unwrap(),
-    ).expect("Should encrypt large message");
+    )
+    .expect("Should encrypt large message");
 
     let decrypted = crypto::decrypt_from_user(
         &ciphertext,
         &alice.encryption_public_key.unwrap(),
         &bob.encryption_private_key.unwrap(),
-    ).expect("Should decrypt");
+    )
+    .expect("Should decrypt");
 
     assert_eq!(decrypted, plaintext);
 }

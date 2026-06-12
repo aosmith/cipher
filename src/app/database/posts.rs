@@ -276,7 +276,7 @@ impl Database {
             "SELECT r.id, r.post_id, r.user_id, u.display_name, r.emoji, r.created_at
              FROM post_reactions r
              LEFT JOIN users u ON r.user_id = u.id
-             WHERE r.post_id = ?1 ORDER BY r.created_at DESC"
+             WHERE r.post_id = ?1 ORDER BY r.created_at DESC",
         )?;
 
         let reaction_iter = stmt.query_map([post_id], |row| {

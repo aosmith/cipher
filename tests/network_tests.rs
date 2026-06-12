@@ -11,7 +11,8 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn test_single_node_creation() {
-    let node = TestNode::new("test_node").await
+    let node = TestNode::new("test_node")
+        .await
         .expect("Should create node");
 
     assert_eq!(node.name, "test_node");
@@ -22,11 +23,11 @@ async fn test_single_node_creation() {
 
 #[tokio::test]
 async fn test_node_address_retrieval() {
-    let node = TestNode::new("addr_node").await
+    let node = TestNode::new("addr_node")
+        .await
         .expect("Should create node");
 
-    let addr = node.node_addr().await
-        .expect("Should get address");
+    let addr = node.node_addr().await.expect("Should get address");
 
     // Address should include the node ID
     assert_eq!(addr.node_id, node.node_id);
@@ -38,7 +39,8 @@ async fn test_node_address_retrieval() {
 
 #[tokio::test]
 async fn test_network_creation() {
-    let network = TestNetwork::with_nodes(3).await
+    let network = TestNetwork::with_nodes(3)
+        .await
         .expect("Should create network");
 
     assert_eq!(network.nodes.len(), 3);
@@ -58,11 +60,14 @@ async fn test_network_creation() {
 
 #[tokio::test]
 async fn test_network_address_sharing() {
-    let network = TestNetwork::with_nodes(2).await
+    let network = TestNetwork::with_nodes(2)
+        .await
         .expect("Should create network");
 
     // Connect all nodes by sharing addresses
-    network.connect_all().await
+    network
+        .connect_all()
+        .await
         .expect("Should connect all nodes");
 
     network.shutdown().await.expect("Should shutdown");
@@ -108,11 +113,11 @@ fn test_topic_id_consistency() {
 
 #[tokio::test]
 async fn test_topic_subscription() {
-    let node = TestNode::new("sub_node").await
-        .expect("Should create node");
+    let node = TestNode::new("sub_node").await.expect("Should create node");
 
     // Subscribe as root (first node in topic)
-    node.subscribe_as_root("test/subscription").await
+    node.subscribe_as_root("test/subscription")
+        .await
         .expect("Should subscribe");
 
     node.shutdown().await.expect("Should shutdown");
@@ -122,15 +127,17 @@ async fn test_topic_subscription() {
 
 #[tokio::test]
 async fn test_two_node_mesh() {
-    let network = TestNetwork::with_nodes(2).await
+    let network = TestNetwork::with_nodes(2)
+        .await
         .expect("Should create network");
 
     // Share addresses
-    network.connect_all().await
-        .expect("Should connect nodes");
+    network.connect_all().await.expect("Should connect nodes");
 
     // First node subscribes as root
-    network.nodes[0].subscribe_as_root("mesh/test").await
+    network.nodes[0]
+        .subscribe_as_root("mesh/test")
+        .await
         .expect("Should subscribe as root");
 
     // Give time for the subscription to register
@@ -138,14 +145,15 @@ async fn test_two_node_mesh() {
 
     // Second node joins the mesh
     let timeout = Duration::from_secs(10);
-    network.nodes[1].subscribe_and_join(
-        "mesh/test",
-        vec![network.nodes[0].node_id],
-        timeout,
-    ).await.expect("Should join mesh");
+    network.nodes[1]
+        .subscribe_and_join("mesh/test", vec![network.nodes[0].node_id], timeout)
+        .await
+        .expect("Should join mesh");
 
     // Wait for mesh formation
-    let neighbor = network.nodes[0].wait_for_neighbor("mesh/test", timeout).await;
+    let neighbor = network.nodes[0]
+        .wait_for_neighbor("mesh/test", timeout)
+        .await;
 
     // Note: In a real network test, we'd verify the neighbor
     // For unit testing without relay servers, this may timeout
@@ -160,11 +168,13 @@ async fn test_two_node_mesh() {
 
 #[tokio::test]
 async fn test_broadcast_message() {
-    let node = TestNode::new("broadcast_node").await
+    let node = TestNode::new("broadcast_node")
+        .await
         .expect("Should create node");
 
     // Subscribe to a topic first
-    node.subscribe_as_root("broadcast/test").await
+    node.subscribe_as_root("broadcast/test")
+        .await
         .expect("Should subscribe");
 
     // Broadcasting to self should work
@@ -186,28 +196,28 @@ async fn test_broadcast_message() {
 #[tokio::test]
 async fn test_gossip_network_lifecycle() {
     // Create a 3-node network
-    let network = TestNetwork::with_nodes(3).await
+    let network = TestNetwork::with_nodes(3)
+        .await
         .expect("Should create network");
 
     // Connect all nodes
-    network.connect_all().await
-        .expect("Should connect");
+    network.connect_all().await.expect("Should connect");
 
     // Have all nodes subscribe to a topic
     // Node 0 is root, others join
     let timeout = Duration::from_secs(10);
-    network.nodes[0].subscribe_as_root("lifecycle/test").await
+    network.nodes[0]
+        .subscribe_as_root("lifecycle/test")
+        .await
         .expect("Node 0 should subscribe as root");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     for node in network.nodes.iter().skip(1) {
         // Join with node 0 as bootstrap
-        let result = node.subscribe_and_join(
-            "lifecycle/test",
-            vec![network.nodes[0].node_id],
-            timeout,
-        ).await;
+        let result = node
+            .subscribe_and_join("lifecycle/test", vec![network.nodes[0].node_id], timeout)
+            .await;
 
         // May timeout without relay, but shouldn't error
         if let Err(e) = result {

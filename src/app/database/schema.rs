@@ -409,14 +409,8 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
 
 pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     // Migration: Add P2P columns to devices table
-    let _ = conn.execute(
-        "ALTER TABLE devices ADD COLUMN iroh_node_id TEXT",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE devices ADD COLUMN relay_url TEXT",
-        [],
-    );
+    let _ = conn.execute("ALTER TABLE devices ADD COLUMN iroh_node_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE devices ADD COLUMN relay_url TEXT", []);
 
     // Migration: Add P2P columns to p2p_connections table
     let _ = conn.execute(
@@ -441,10 +435,7 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     );
 
     // Migration: Add profile_signature column to users table
-    let _ = conn.execute(
-        "ALTER TABLE users ADD COLUMN profile_signature TEXT",
-        [],
-    );
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN profile_signature TEXT", []);
 
     // Migration: Add known_display_name to p2p_connections for tracking friend name changes
     let _ = conn.execute(

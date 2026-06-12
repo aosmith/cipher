@@ -142,8 +142,7 @@ pub async fn create_community_invite(
     payload.extend_from_slice(&pubkey_bytes);
 
     // Node ID (32 bytes)
-    let node_bytes = hex::decode(&node_id)
-        .map_err(|e| format!("Invalid node id: {}", e))?;
+    let node_bytes = hex::decode(&node_id).map_err(|e| format!("Invalid node id: {}", e))?;
     payload.extend_from_slice(&node_bytes);
 
     // Encode as base64url
@@ -164,7 +163,7 @@ pub async fn create_community_invite(
         community_name: community.name,
         creator_id,
         invite_code,
-        uses_remaining: -1, // Unlimited for self-contained invites
+        uses_remaining: -1,         // Unlimited for self-contained invites
         expires_at: "".to_string(), // No expiration
         created_at: chrono::Utc::now().to_rfc3339(),
     })
@@ -427,8 +426,7 @@ pub async fn publish_community_post(
         .ok_or("User not found")?;
 
     // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
-    let sender_pub_key = user.public_key
-        .ok_or("User missing signing public key")?;
+    let sender_pub_key = user.public_key.ok_or("User missing signing public key")?;
     let sender_priv_key = user
         .encryption_private_key
         .ok_or("User missing encryption private key")?;
@@ -444,13 +442,16 @@ pub async fn publish_community_post(
         .unwrap_or(false)
     };
 
+    // Get post attachments
+    let attachments = db.get_post_media(post_id).ok().filter(|v| !v.is_empty());
+
     // Create sealed envelope for all members
     let envelope = GossipEnvelope::new_community_post(
         &sender_pub_key,
         &community_id.to_string(),
         &community.name,
         &post.content,
-        None, // TODO: handle attachments
+        attachments,
         show_in_main_feed,
         &member_keys,
         &sender_priv_key,
@@ -461,7 +462,10 @@ pub async fn publish_community_post(
         .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
 
     // Broadcast via Iroh - clone Arc to release lock before await
-    let network_opt = IROH_NETWORK.lock().map_err(|_| "Failed to lock network")?.clone();
+    let network_opt = IROH_NETWORK
+        .lock()
+        .map_err(|_| "Failed to lock network")?
+        .clone();
 
     if let Some(network) = network_opt {
         let message = P2PMessage::SealedEnvelope { envelope_json };
@@ -469,7 +473,10 @@ pub async fn publish_community_post(
             .publish_message(CONTENT_TOPIC, message)
             .await
             .map_err(|e| format!("Failed to broadcast: {}", e))?;
-        println!("[COMMUNITY] Post published to {} members", member_keys.len());
+        println!(
+            "[COMMUNITY] Post published to {} members",
+            member_keys.len()
+        );
     } else {
         return Err("P2P network not initialized".to_string());
     }
@@ -503,7 +510,8 @@ pub async fn announce_community_member(
         .ok_or("New member not found")?;
 
     // CRITICAL: Use signing public key (Ed25519) for identification, NOT encryption key (X25519)
-    let new_member_signing_key = new_member.public_key
+    let new_member_signing_key = new_member
+        .public_key
         .ok_or("New member missing signing public key")?;
 
     // Get all member public keys (including new member for announcement)
@@ -538,7 +546,10 @@ pub async fn announce_community_member(
         .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
 
     // Broadcast via Iroh - clone Arc to release lock before await
-    let network_opt = IROH_NETWORK.lock().map_err(|_| "Failed to lock network")?.clone();
+    let network_opt = IROH_NETWORK
+        .lock()
+        .map_err(|_| "Failed to lock network")?
+        .clone();
 
     if let Some(network) = network_opt {
         let message = P2PMessage::SealedEnvelope { envelope_json };

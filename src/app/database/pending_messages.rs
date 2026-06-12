@@ -1,6 +1,6 @@
-use rusqlite::{params, Result as SqliteResult};
 use crate::app::types::SqliteUuid;
 use crate::app::Database;
+use rusqlite::{params, Result as SqliteResult};
 
 /// Pending message for offline delivery
 #[derive(Debug, Clone)]
@@ -76,11 +76,11 @@ impl Database {
     #[allow(dead_code)]
     pub fn mark_message_sent(&self, message_id: SqliteUuid) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM pending_messages WHERE id = ?1",
-            [message_id],
-        )?;
-        println!("[QUEUE] ✓ Removed sent message from queue (ID: {})", message_id);
+        conn.execute("DELETE FROM pending_messages WHERE id = ?1", [message_id])?;
+        println!(
+            "[QUEUE] ✓ Removed sent message from queue (ID: {})",
+            message_id
+        );
         Ok(())
     }
 
@@ -102,10 +102,7 @@ impl Database {
     #[allow(dead_code)]
     pub fn remove_pending_message(&self, message_id: SqliteUuid) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM pending_messages WHERE id = ?1",
-            [message_id],
-        )?;
+        conn.execute("DELETE FROM pending_messages WHERE id = ?1", [message_id])?;
         println!(
             "[QUEUE] ✗ Removed message from queue after max retries (ID: {})",
             message_id
@@ -129,10 +126,7 @@ impl Database {
     #[allow(dead_code)]
     pub fn clear_pending_messages(&self, user_id: SqliteUuid) -> SqliteResult<i64> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM pending_messages WHERE user_id = ?1",
-            [user_id],
-        )?;
+        conn.execute("DELETE FROM pending_messages WHERE user_id = ?1", [user_id])?;
 
         // Get count of deleted messages for logging
         let count: i64 = conn

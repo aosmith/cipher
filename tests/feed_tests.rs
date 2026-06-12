@@ -9,7 +9,9 @@ fn test_create_and_retrieve_post() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Create post
     let post = db.create_post(user.id, "My first post!", false).unwrap();
@@ -27,14 +29,19 @@ fn test_edit_post() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
 
     let post = db.create_post(user.id, "Original content", false).unwrap();
 
     // Edit post
     let edited = db.edit_post(post.id, user.id, "Updated content").unwrap();
     assert_eq!(edited.content, "Updated content");
-    assert!(edited.updated_at != edited.created_at, "Post should have different updated_at after edit");
+    assert!(
+        edited.updated_at != edited.created_at,
+        "Post should have different updated_at after edit"
+    );
 }
 
 #[test]
@@ -42,7 +49,9 @@ fn test_delete_post() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
 
     let post = db.create_post(user.id, "To be deleted", false).unwrap();
 
@@ -59,10 +68,16 @@ fn test_post_reactions() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
 
-    let post = db.create_post(alice.id, "Check out this post!", false).unwrap();
+    let post = db
+        .create_post(alice.id, "Check out this post!", false)
+        .unwrap();
 
     // Bob reacts with heart
     db.add_post_reaction(post.id, bob.id, "❤️").unwrap();
@@ -84,8 +99,12 @@ fn test_remove_post_reaction() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
 
     let post = db.create_post(alice.id, "Post", false).unwrap();
 
@@ -105,13 +124,19 @@ fn test_post_comments() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
 
     let post = db.create_post(alice.id, "Original post", false).unwrap();
 
     // Bob comments
-    let comment = db.add_post_comment(post.id, bob.id, "Nice post!", None).unwrap();
+    let comment = db
+        .add_post_comment(post.id, bob.id, "Nice post!", None)
+        .unwrap();
     assert_eq!(comment.content, "Nice post!");
     assert_eq!(comment.post_id, post.id);
 
@@ -124,20 +149,68 @@ fn test_post_comments() {
     assert_eq!(count, 1);
 }
 
-// TODO: Implement nested comment replies (parent_id column) then enable this test
-// The post_comments table currently doesn't have a parent_id column for nested replies
-// #[test]
-// fn test_comment_replies() { ... }
+#[test]
+fn test_comment_replies() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
+
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (charlie, _) = db
+        .create_user_first_launch("charlie".to_string(), Database::generate_device_id())
+        .unwrap();
+
+    let post = db.create_post(alice.id, "Original post", false).unwrap();
+
+    // Bob comments on the post (top-level)
+    let comment = db
+        .add_post_comment(post.id, bob.id, "Nice post!", None)
+        .unwrap();
+    assert!(comment.parent_comment_id.is_none());
+
+    // Charlie replies to Bob's comment
+    let reply = db
+        .add_post_comment(post.id, charlie.id, "I agree!", Some(comment.id))
+        .unwrap();
+    assert_eq!(reply.parent_comment_id, Some(comment.id));
+
+    // Alice also replies to Bob's comment
+    let reply2 = db
+        .add_post_comment(post.id, alice.id, "Thanks!", Some(comment.id))
+        .unwrap();
+    assert_eq!(reply2.parent_comment_id, Some(comment.id));
+
+    // Get top-level comments (should only be Bob's)
+    let comments = db.get_post_comments(post.id).unwrap();
+    assert_eq!(comments.len(), 1, "Should only have 1 top-level comment");
+    assert_eq!(comments[0].id, comment.id);
+
+    // Get replies to Bob's comment
+    let replies = db.get_comment_replies(comment.id).unwrap();
+    assert_eq!(replies.len(), 2, "Should have 2 replies");
+
+    // Total comment count should include all
+    let total = db.get_post_comment_count(post.id).unwrap();
+    assert_eq!(total, 3, "Total should be 3 (1 top-level + 2 replies)");
+}
 
 #[test]
 fn test_delete_post_comment() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
 
     let post = db.create_post(alice.id, "Post", false).unwrap();
-    let comment = db.add_post_comment(post.id, alice.id, "Comment", None).unwrap();
+    let comment = db
+        .add_post_comment(post.id, alice.id, "Comment", None)
+        .unwrap();
 
     // Delete comment
     db.delete_post_comment(comment.id, alice.id).unwrap();
@@ -152,13 +225,23 @@ fn test_post_sharing() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
 
     let original_post = db.create_post(alice.id, "Original", false).unwrap();
 
     // Bob shares Alice's post
-    let share = db.share_post(bob.id, original_post.id, Some("Check this out!".to_string())).unwrap();
+    let share = db
+        .share_post(
+            bob.id,
+            original_post.id,
+            Some("Check this out!".to_string()),
+        )
+        .unwrap();
     assert_eq!(share.shared_post_id, Some(original_post.id));
     assert_eq!(share.user_id, bob.id);
 
@@ -176,8 +259,12 @@ fn test_get_all_posts() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Create multiple posts
     db.create_post(alice.id, "Alice post 1", false).unwrap();
@@ -194,18 +281,28 @@ fn test_feed_filtering_by_friends() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
-    let (charlie, _) = db.create_user_first_launch("charlie".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (charlie, _) = db
+        .create_user_first_launch("charlie".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Alice is friends with Bob, but not Charlie
     db.add_friend(alice.id, bob.id).unwrap();
 
     // Accept friendship
-    db.conn.lock().unwrap().execute(
-        "UPDATE p2p_connections SET status = 'accepted' WHERE user_id = ?1",
-        rusqlite::params![alice.id]
-    ).unwrap();
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE p2p_connections SET status = 'accepted' WHERE user_id = ?1",
+            rusqlite::params![alice.id],
+        )
+        .unwrap();
 
     // Create posts
     db.create_post(alice.id, "Alice's post", false).unwrap();
@@ -215,7 +312,10 @@ fn test_feed_filtering_by_friends() {
     // Alice should see her own posts and Bob's posts (friend)
     let alice_feed = db.get_posts(alice.id).unwrap();
     // Alice sees her own post + Bob's post (friend)
-    assert!(alice_feed.len() >= 2, "Alice should see her own and friend's posts");
+    assert!(
+        alice_feed.len() >= 2,
+        "Alice should see her own and friend's posts"
+    );
 }
 
 #[test]
@@ -223,21 +323,25 @@ fn test_post_with_media_attachment() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Create post
     let post = db.create_post(user.id, "Post with image", false).unwrap();
 
     // Upload media
     let data = vec![1, 2, 3, 4, 5];
-    let media = db.upload_media(
-        user.id,
-        post.id,
-        "image.jpg",
-        "image/jpeg",
-        &data,
-        data.len() as i64
-    ).unwrap();
+    let media = db
+        .upload_media(
+            user.id,
+            post.id,
+            "image.jpg",
+            "image/jpeg",
+            &data,
+            data.len() as i64,
+        )
+        .unwrap();
 
     assert_eq!(media.post_id, post.id);
 
@@ -252,7 +356,9 @@ fn test_post_chronological_ordering() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
 
     // Create posts with delays
     let _post1 = db.create_post(user.id, "First", false).unwrap();
@@ -265,8 +371,14 @@ fn test_post_chronological_ordering() {
     let posts = db.get_posts(user.id).unwrap();
     assert_eq!(posts.len(), 3);
     // Posts returned in DESC order: Third, Second, First
-    assert!(posts[0].created_at >= posts[1].created_at, "Newest should be first");
-    assert!(posts[1].created_at >= posts[2].created_at, "Posts should be newest-first");
+    assert!(
+        posts[0].created_at >= posts[1].created_at,
+        "Newest should be first"
+    );
+    assert!(
+        posts[1].created_at >= posts[2].created_at,
+        "Posts should be newest-first"
+    );
     assert_eq!(posts[0].content, "Third");
     assert_eq!(posts[2].content, "First");
 }
@@ -279,7 +391,9 @@ fn test_post_persistence() {
     // Session 1: Create post
     let user_id = {
         let db = Database::new(&db_path.to_string_lossy()).unwrap();
-        let (user, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
+        let (user, _) = db
+            .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+            .unwrap();
         db.create_post(user.id, "Persistent post", false).unwrap();
         user.id
     };
@@ -298,9 +412,15 @@ fn test_multiple_reactions_on_same_post() {
     let temp_dir = TempDir::new().unwrap();
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
-    let (alice, _) = db.create_user_first_launch("alice".to_string(), Database::generate_device_id()).unwrap();
-    let (bob, _) = db.create_user_first_launch("bob".to_string(), Database::generate_device_id()).unwrap();
-    let (charlie, _) = db.create_user_first_launch("charlie".to_string(), Database::generate_device_id()).unwrap();
+    let (alice, _) = db
+        .create_user_first_launch("alice".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (bob, _) = db
+        .create_user_first_launch("bob".to_string(), Database::generate_device_id())
+        .unwrap();
+    let (charlie, _) = db
+        .create_user_first_launch("charlie".to_string(), Database::generate_device_id())
+        .unwrap();
 
     let post = db.create_post(alice.id, "Popular post", false).unwrap();
 
@@ -323,7 +443,9 @@ fn test_empty_feed() {
     let db = Database::new(&temp_dir.path().join("test.db").to_string_lossy()).unwrap();
 
     // No posts created
-    let (user, _) = db.create_user_first_launch("testuser".to_string(), Database::generate_device_id()).unwrap();
+    let (user, _) = db
+        .create_user_first_launch("testuser".to_string(), Database::generate_device_id())
+        .unwrap();
     let posts = db.get_posts(user.id).unwrap();
     assert_eq!(posts.len(), 0, "Empty feed should return no posts");
 }

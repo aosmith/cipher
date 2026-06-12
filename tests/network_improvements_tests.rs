@@ -65,9 +65,7 @@ mod tests {
         }
 
         // After 20 attempts, should still be capped at 60
-        let retry_state = PeerRetryState {
-            attempt_count: 20,
-        };
+        let retry_state = PeerRetryState { attempt_count: 20 };
 
         assert_eq!(
             retry_state.backoff_delay_secs(),
@@ -93,14 +91,16 @@ mod tests {
             timestamp: 1234567890,
         };
 
-        let json = serde_json::to_string(&msg)
-            .expect("Failed to serialize message");
+        let json = serde_json::to_string(&msg).expect("Failed to serialize message");
 
         // Test deserialization
-        let deserialized: TestMessage = serde_json::from_str(&json)
-            .expect("Failed to deserialize message");
+        let deserialized: TestMessage =
+            serde_json::from_str(&json).expect("Failed to deserialize message");
 
-        assert_eq!(msg, deserialized, "Message should survive serialization round-trip");
+        assert_eq!(
+            msg, deserialized,
+            "Message should survive serialization round-trip"
+        );
     }
 
     /// Test pending message queueing logic
@@ -134,7 +134,10 @@ mod tests {
         }
 
         // Should NOT allow more retries after max
-        assert!(!msg.should_retry(), "Should not allow retry after max_retries");
+        assert!(
+            !msg.should_retry(),
+            "Should not allow retry after max_retries"
+        );
     }
 
     /// Test connection state tracking
@@ -148,23 +151,33 @@ mod tests {
         }
 
         let mut state = ConnectionState::Offline;
-        assert_eq!(state, ConnectionState::Offline, "Initial state should be Offline");
+        assert_eq!(
+            state,
+            ConnectionState::Offline,
+            "Initial state should be Offline"
+        );
 
         // Transition to connecting
         state = ConnectionState::Connecting;
         assert_eq!(
-            state, ConnectionState::Connecting,
+            state,
+            ConnectionState::Connecting,
             "Should transition to Connecting"
         );
 
         // Transition to online
         state = ConnectionState::Online;
-        assert_eq!(state, ConnectionState::Online, "Should transition to Online");
+        assert_eq!(
+            state,
+            ConnectionState::Online,
+            "Should transition to Online"
+        );
 
         // Transition back to offline
         state = ConnectionState::Offline;
         assert_eq!(
-            state, ConnectionState::Offline,
+            state,
+            ConnectionState::Offline,
             "Should transition back to Offline"
         );
     }
@@ -195,9 +208,7 @@ mod tests {
 
         impl PeerRetryState {
             fn new() -> Self {
-                PeerRetryState {
-                    attempt_count: 0,
-                }
+                PeerRetryState { attempt_count: 0 }
             }
 
             fn record_attempt(&mut self) {
@@ -247,7 +258,11 @@ mod tests {
             queue.push(format!("message_{}", i));
         }
 
-        assert_eq!(queue.len(), MAX_QUEUE_SIZE, "Queue should contain exactly MAX_QUEUE_SIZE");
+        assert_eq!(
+            queue.len(),
+            MAX_QUEUE_SIZE,
+            "Queue should contain exactly MAX_QUEUE_SIZE"
+        );
 
         // Try to add one more
         if queue.len() < MAX_QUEUE_SIZE {
@@ -255,7 +270,8 @@ mod tests {
         }
 
         assert_eq!(
-            queue.len(), MAX_QUEUE_SIZE,
+            queue.len(),
+            MAX_QUEUE_SIZE,
             "Queue should not exceed MAX_QUEUE_SIZE"
         );
     }
@@ -266,17 +282,11 @@ mod tests {
         let is_online = false;
         let should_queue = !is_online;
 
-        assert!(
-            should_queue,
-            "Should queue messages when offline"
-        );
+        assert!(should_queue, "Should queue messages when offline");
 
         let is_online = true;
         let should_queue = !is_online;
 
-        assert!(
-            !should_queue,
-            "Should NOT queue messages when online"
-        );
+        assert!(!should_queue, "Should NOT queue messages when online");
     }
 }

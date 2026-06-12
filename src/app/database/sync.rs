@@ -51,8 +51,10 @@ impl Database {
 
         // Get last sync timestamps for each table (use _with_conn to avoid deadlock)
         let last_post_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "posts")?;
-        let last_message_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "messages")?;
-        let last_friend_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "p2p_connections")?;
+        let last_message_sync =
+            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "messages")?;
+        let last_friend_sync =
+            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "p2p_connections")?;
 
         // Get posts created/updated since last sync
         let mut post_stmt = conn.prepare(
@@ -131,7 +133,8 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Get comments created/updated since last sync (on user's posts or by user)
-        let last_comment_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_comments")?;
+        let last_comment_sync =
+            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_comments")?;
         let mut comment_stmt = conn.prepare(
             "SELECT c.id, c.post_id, c.user_id, c.content, c.parent_comment_id, c.created_at, c.updated_at
              FROM post_comments c
@@ -155,13 +158,14 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Get reactions created since last sync (on user's posts or by user)
-        let last_reaction_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_reactions")?;
+        let last_reaction_sync =
+            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_reactions")?;
         let mut reaction_stmt = conn.prepare(
             "SELECT r.id, r.post_id, r.user_id, r.emoji, r.created_at
              FROM post_reactions r
              INNER JOIN posts p ON r.post_id = p.id
              WHERE (r.user_id = ?1 OR p.user_id = ?1) AND r.created_at > ?2
-             ORDER BY r.created_at ASC"
+             ORDER BY r.created_at ASC",
         )?;
 
         let reactions = reaction_stmt

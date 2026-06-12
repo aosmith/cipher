@@ -3,30 +3,29 @@
 
 mod app;
 
-use tauri::Emitter;
 use app::{
     accept_friend_request, add_friend, add_message_reaction, add_post_comment, add_post_reaction,
     block_user, cancel_friend_request, cleanup_expired_messages, cleanup_expired_mutes,
     cleanup_old_notifications, create_friend_invite, create_new_user, create_notification,
-    create_post, create_post_with_id, debug_log, decrypt_message_for_user, delete_message, delete_notification,
-    delete_post, delete_post_comment, edit_message, edit_post,
+    create_post, create_post_with_id, debug_log, decrypt_message_for_user, delete_message,
+    delete_notification, delete_post, delete_post_comment, edit_message, edit_post,
     export_friends_list, generate_friend_qr_code, generate_qr_code, generate_recovery_phrase,
     get_all_posts, get_blocked_users, get_comment_replies, get_friends, get_friends_of_friends,
     get_media_attachments, get_media_file_data, get_message_reactions, get_message_thread,
     get_messages_for_user, get_mute_settings, get_muted_users, get_notifications,
-    get_outgoing_friend_requests, get_pending_friend_requests, get_platform, get_post_comment_count,
-    get_post_comments, get_post_reaction_summary, get_post_reactions, get_post_shares,
-    get_recent_contacts, get_shared_post, get_unread_notification_count, get_unread_notifications,
-    get_user_by_id, get_user_by_public_key, get_websocket_port,
+    get_outgoing_friend_requests, get_pending_friend_requests, get_platform,
+    get_post_comment_count, get_post_comments, get_post_reaction_summary, get_post_reactions,
+    get_post_shares, get_recent_contacts, get_shared_post, get_unread_notification_count,
+    get_unread_notifications, get_user_by_id, get_user_by_public_key, get_websocket_port,
     import_friends_list, is_blocked_either_way, is_user_blocked, is_user_muted,
     mark_all_notifications_read, mark_notification_read, mute_user, parse_qr_code_data,
     reject_friend_request, remove_post_reaction, reply_to_message, restore_from_recovery_phrase,
-    scan_qr_code_from_image, search_friends, send_encrypted_message,
-    share_post, start_notification_server, unblock_user, unmute_user,
-    update_mute_settings, update_recent_contact, update_user_profile, upload_media_file,
-    upload_profile_picture, use_friend_invite, validate_recovery_phrase, verify_message_signature,
-    save_media_to_downloads, Database,
+    save_media_to_downloads, scan_qr_code_from_image, search_friends, send_encrypted_message,
+    share_post, start_notification_server, unblock_user, unmute_user, update_mute_settings,
+    update_recent_contact, update_user_profile, upload_media_file, upload_profile_picture,
+    use_friend_invite, validate_recovery_phrase, verify_message_signature, Database,
 };
+use tauri::Emitter;
 use tauri::Manager;
 
 // P2P networking commands (Iroh-based)
@@ -285,14 +284,12 @@ fn main() {
                     }
                 }
             }
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                println!("[LIFECYCLE] App exit requested - triggering background handler");
-                // Emit event to frontend so it can call iroh_enter_background
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.emit("app-backgrounding", ());
-                }
-                // Don't prevent exit on desktop
-                api.prevent_exit();
+            tauri::RunEvent::ExitRequested { .. } => {
+                // Let the exit proceed. prevent_exit() here left a windowless zombie
+                // process holding the device keypair - peers kept connecting to the
+                // dead instance's NodeId and the next launch fought it for the DB.
+                // SQLite WAL is crash-safe, so no flush dance is needed.
+                println!("[LIFECYCLE] App exit requested - exiting");
             }
             _ => {}
         }

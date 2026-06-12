@@ -237,14 +237,14 @@
                     <div class="modal-content" id="friendsContent">
                         <div class="modal-scrollable">
                             <!-- My QR Code Section -->
-                            <div style="text-align: center; margin-bottom: var(--spacing-xl); padding: var(--spacing-lg); background: var(--glass-regular); border-radius: var(--border-radius-lg);">
-                                <h4 style="margin-bottom: var(--spacing-md); color: var(--color-text-primary);">Share This Code</h4>
+                            <div style="text-align: center; margin-bottom: var(--spacing-xl); padding: 20px 20px 16px 20px; background: var(--glass-regular); border: 1px solid var(--glass-regular-border); border-radius: var(--border-radius-lg);">
+                                <div style="margin: 0 0 16px 0; line-height: 1; color: var(--color-text-primary); font-weight: 600;">Share This Code</div>
                                 <div id="myQrCode" style="display: inline-block; padding: var(--spacing-md); background: white; border-radius: var(--border-radius-md);">
                                     <!-- QR code will be generated here -->
                                 </div>
-                                <p style="margin-top: var(--spacing-md); color: var(--color-text-secondary); font-size: var(--font-size-sm);">Have friends scan this or share the link</p>
-                                <button id="copyInviteLinkBtn" class="btn btn-secondary" onclick="copyInviteLink()" style="margin-top: var(--spacing-md); display: none;">Copy Invite Link</button>
+                                <div style="margin: 12px 0 0 0; line-height: 1; color: var(--color-text-secondary); font-size: var(--font-size-sm);">Have friends scan this or share the link</div>
                             </div>
+                            <button id="copyInviteLinkBtn" class="btn btn-secondary" onclick="copyInviteLink()" style="display: none; margin-bottom: var(--spacing-md);">Copy Invite Link</button>
 
                             <!-- Add Friend Buttons -->
                             <div style="display: flex; gap: var(--spacing-md); margin: 0 0 var(--spacing-xl) 0; flex-wrap: wrap; justify-content: center;">

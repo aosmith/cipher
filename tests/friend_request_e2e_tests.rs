@@ -38,17 +38,20 @@ fn test_e2e_friend_request_send_and_accept() {
     println!("Bob public_key: {:?}", bob.public_key);
 
     // === STEP 1: Bob scans Alice's QR code (or gets her public key) ===
-    let alice_in_bob_db = bob_db.sync_peer_user(
-        &alice.display_name,
-        alice.public_key.as_ref().unwrap(),
-        alice.encryption_public_key.as_ref().unwrap(),
-    ).expect("Should sync Alice to Bob's database");
+    let alice_in_bob_db = bob_db
+        .sync_peer_user(
+            &alice.display_name,
+            alice.public_key.as_ref().unwrap(),
+            alice.encryption_public_key.as_ref().unwrap(),
+        )
+        .expect("Should sync Alice to Bob's database");
 
     println!("\n=== Step 1: Bob syncs Alice's info ===");
     println!("Alice synced to Bob's DB with ID: {}", alice_in_bob_db.id);
 
     // === STEP 2: Bob sends friend request to Alice ===
-    let bob_connection = bob_db.add_friend(bob.id, alice_in_bob_db.id)
+    let bob_connection = bob_db
+        .add_friend(bob.id, alice_in_bob_db.id)
         .expect("Bob should create friend request");
 
     println!("\n=== Step 2: Bob sends friend request ===");
@@ -59,92 +62,134 @@ fn test_e2e_friend_request_send_and_accept() {
     assert_eq!(bob_connection.initiated_by, bob.id);
 
     // Verify Bob sees this as an OUTGOING request
-    let bob_outgoing = bob_db.get_outgoing_friend_requests(bob.id)
+    let bob_outgoing = bob_db
+        .get_outgoing_friend_requests(bob.id)
         .expect("Should get outgoing requests");
     assert_eq!(bob_outgoing.len(), 1, "Bob should have 1 outgoing request");
-    assert_eq!(bob_outgoing[0].id, alice_in_bob_db.id, "Outgoing request should be to Alice");
+    assert_eq!(
+        bob_outgoing[0].id, alice_in_bob_db.id,
+        "Outgoing request should be to Alice"
+    );
 
     // Bob should NOT have any pending (incoming) requests
-    let bob_pending = bob_db.get_pending_friend_requests(bob.id)
+    let bob_pending = bob_db
+        .get_pending_friend_requests(bob.id)
         .expect("Should get pending requests");
     assert_eq!(bob_pending.len(), 0, "Bob should have 0 incoming requests");
 
     // They should NOT be friends yet
-    assert!(!bob_db.are_friends(bob.id, alice_in_bob_db.id).unwrap(), "Not friends yet");
+    assert!(
+        !bob_db.are_friends(bob.id, alice_in_bob_db.id).unwrap(),
+        "Not friends yet"
+    );
 
     // === STEP 3: Simulate P2P message delivery ===
-    let bob_in_alice_db = alice_db.sync_peer_user(
-        &bob.display_name,
-        bob.public_key.as_ref().unwrap(),
-        bob.encryption_public_key.as_ref().unwrap(),
-    ).expect("Should sync Bob to Alice's database");
+    let bob_in_alice_db = alice_db
+        .sync_peer_user(
+            &bob.display_name,
+            bob.public_key.as_ref().unwrap(),
+            bob.encryption_public_key.as_ref().unwrap(),
+        )
+        .expect("Should sync Bob to Alice's database");
 
     // Alice's app creates the reciprocal pending connection with Bob as initiator
-    let alice_connection = alice_db.add_friend(alice.id, bob_in_alice_db.id)
+    let alice_connection = alice_db
+        .add_friend(alice.id, bob_in_alice_db.id)
         .expect("Alice should create reciprocal connection");
 
     // CRITICAL: Update the initiated_by to be Bob (the actual initiator)
-    alice_db.conn.lock().unwrap().execute(
-        "UPDATE p2p_connections SET initiated_by = ?1 WHERE id = ?2",
-        rusqlite::params![bob_in_alice_db.id, alice_connection.id],
-    ).expect("Should update initiated_by");
+    alice_db
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE p2p_connections SET initiated_by = ?1 WHERE id = ?2",
+            rusqlite::params![bob_in_alice_db.id, alice_connection.id],
+        )
+        .expect("Should update initiated_by");
 
     println!("\n=== Step 3: P2P message delivered to Alice ===");
     println!("Bob synced to Alice's DB with ID: {}", bob_in_alice_db.id);
 
     // === STEP 4: Verify Alice sees pending incoming request ===
-    let alice_pending = alice_db.get_pending_friend_requests(alice.id)
+    let alice_pending = alice_db
+        .get_pending_friend_requests(alice.id)
         .expect("Should get pending requests");
 
     println!("\n=== Step 4: Alice's pending requests ===");
     println!("Number of pending requests: {}", alice_pending.len());
 
     assert_eq!(alice_pending.len(), 1, "Alice should see 1 pending request");
-    assert_eq!(alice_pending[0].id, bob_in_alice_db.id, "Pending request should be from Bob");
-    assert_eq!(alice_pending[0].display_name, "bob", "Should show Bob's username");
+    assert_eq!(
+        alice_pending[0].id, bob_in_alice_db.id,
+        "Pending request should be from Bob"
+    );
+    assert_eq!(
+        alice_pending[0].display_name, "bob",
+        "Should show Bob's username"
+    );
 
     // Alice should NOT have any outgoing requests
-    let alice_outgoing = alice_db.get_outgoing_friend_requests(alice.id)
+    let alice_outgoing = alice_db
+        .get_outgoing_friend_requests(alice.id)
         .expect("Should get outgoing requests");
-    assert_eq!(alice_outgoing.len(), 0, "Alice should have 0 outgoing requests");
+    assert_eq!(
+        alice_outgoing.len(),
+        0,
+        "Alice should have 0 outgoing requests"
+    );
 
     // === STEP 5: Alice accepts the friend request ===
-    alice_db.accept_friend_request(alice.id, bob_in_alice_db.id)
+    alice_db
+        .accept_friend_request(alice.id, bob_in_alice_db.id)
         .expect("Alice should accept friend request");
 
     println!("\n=== Step 5: Alice accepts ===");
 
     // Verify Alice now has Bob as a friend
-    let alice_friends = alice_db.get_friends(alice.id)
-        .expect("Should get friends");
+    let alice_friends = alice_db.get_friends(alice.id).expect("Should get friends");
     assert_eq!(alice_friends.len(), 1, "Alice should have 1 friend");
-    assert_eq!(alice_friends[0].id, bob_in_alice_db.id, "Alice's friend should be Bob");
+    assert_eq!(
+        alice_friends[0].id, bob_in_alice_db.id,
+        "Alice's friend should be Bob"
+    );
 
     // No more pending requests
-    let alice_pending_after = alice_db.get_pending_friend_requests(alice.id)
+    let alice_pending_after = alice_db
+        .get_pending_friend_requests(alice.id)
         .expect("Should get pending requests");
     assert_eq!(alice_pending_after.len(), 0, "No more pending requests");
 
     // === STEP 6: Simulate P2P acceptance message to Bob ===
-    bob_db.accept_friend_request(bob.id, alice_in_bob_db.id)
+    bob_db
+        .accept_friend_request(bob.id, alice_in_bob_db.id)
         .expect("Bob's connection should be updated to accepted");
 
     println!("\n=== Step 6: Bob receives acceptance ===");
 
     // Verify Bob now has Alice as a friend
-    let bob_friends = bob_db.get_friends(bob.id)
-        .expect("Should get friends");
+    let bob_friends = bob_db.get_friends(bob.id).expect("Should get friends");
     assert_eq!(bob_friends.len(), 1, "Bob should have 1 friend");
-    assert_eq!(bob_friends[0].id, alice_in_bob_db.id, "Bob's friend should be Alice");
+    assert_eq!(
+        bob_friends[0].id, alice_in_bob_db.id,
+        "Bob's friend should be Alice"
+    );
 
     // No more outgoing requests
-    let bob_outgoing_after = bob_db.get_outgoing_friend_requests(bob.id)
+    let bob_outgoing_after = bob_db
+        .get_outgoing_friend_requests(bob.id)
         .expect("Should get outgoing requests");
     assert_eq!(bob_outgoing_after.len(), 0, "No more outgoing requests");
 
     // Both should see each other as friends
-    assert!(alice_db.are_friends(alice.id, bob_in_alice_db.id).unwrap(), "Alice and Bob are friends");
-    assert!(bob_db.are_friends(bob.id, alice_in_bob_db.id).unwrap(), "Bob and Alice are friends");
+    assert!(
+        alice_db.are_friends(alice.id, bob_in_alice_db.id).unwrap(),
+        "Alice and Bob are friends"
+    );
+    assert!(
+        bob_db.are_friends(bob.id, alice_in_bob_db.id).unwrap(),
+        "Bob and Alice are friends"
+    );
 
     println!("\n=== TEST PASSED: Full friend request flow completed ===");
 }
@@ -159,33 +204,43 @@ fn test_e2e_friend_request_reject() {
     let (bob, _) = create_test_user(&bob_db, "bob_reject");
 
     // Bob scans Alice's QR and sends friend request
-    let alice_in_bob_db = bob_db.sync_peer_user(
-        &alice.display_name,
-        alice.public_key.as_ref().unwrap(),
-        alice.encryption_public_key.as_ref().unwrap(),
-    ).unwrap();
+    let alice_in_bob_db = bob_db
+        .sync_peer_user(
+            &alice.display_name,
+            alice.public_key.as_ref().unwrap(),
+            alice.encryption_public_key.as_ref().unwrap(),
+        )
+        .unwrap();
 
     bob_db.add_friend(bob.id, alice_in_bob_db.id).unwrap();
 
     // Simulate P2P delivery to Alice
-    let bob_in_alice_db = alice_db.sync_peer_user(
-        &bob.display_name,
-        bob.public_key.as_ref().unwrap(),
-        bob.encryption_public_key.as_ref().unwrap(),
-    ).unwrap();
+    let bob_in_alice_db = alice_db
+        .sync_peer_user(
+            &bob.display_name,
+            bob.public_key.as_ref().unwrap(),
+            bob.encryption_public_key.as_ref().unwrap(),
+        )
+        .unwrap();
 
     let alice_conn = alice_db.add_friend(alice.id, bob_in_alice_db.id).unwrap();
-    alice_db.conn.lock().unwrap().execute(
-        "UPDATE p2p_connections SET initiated_by = ?1 WHERE id = ?2",
-        rusqlite::params![bob_in_alice_db.id, alice_conn.id],
-    ).unwrap();
+    alice_db
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE p2p_connections SET initiated_by = ?1 WHERE id = ?2",
+            rusqlite::params![bob_in_alice_db.id, alice_conn.id],
+        )
+        .unwrap();
 
     // Verify Alice has pending request
     let pending = alice_db.get_pending_friend_requests(alice.id).unwrap();
     assert_eq!(pending.len(), 1);
 
     // === Alice REJECTS the request ===
-    alice_db.reject_friend_request(alice.id, bob_in_alice_db.id)
+    alice_db
+        .reject_friend_request(alice.id, bob_in_alice_db.id)
         .expect("Should reject request");
 
     // Verify no more pending requests
@@ -193,7 +248,10 @@ fn test_e2e_friend_request_reject() {
     assert_eq!(pending_after.len(), 0, "Pending request should be deleted");
 
     // They should NOT be friends
-    assert!(!alice_db.are_friends(alice.id, bob_in_alice_db.id).unwrap(), "Should not be friends");
+    assert!(
+        !alice_db.are_friends(alice.id, bob_in_alice_db.id).unwrap(),
+        "Should not be friends"
+    );
 
     // Friends list should be empty
     let alice_friends = alice_db.get_friends(alice.id).unwrap();
@@ -212,11 +270,13 @@ fn test_e2e_friend_request_cancel() {
     let (alice, _) = create_test_user(&alice_db, "alice_cancel");
 
     // Bob scans Alice's QR and sends friend request
-    let alice_in_bob_db = bob_db.sync_peer_user(
-        &alice.display_name,
-        alice.public_key.as_ref().unwrap(),
-        alice.encryption_public_key.as_ref().unwrap(),
-    ).unwrap();
+    let alice_in_bob_db = bob_db
+        .sync_peer_user(
+            &alice.display_name,
+            alice.public_key.as_ref().unwrap(),
+            alice.encryption_public_key.as_ref().unwrap(),
+        )
+        .unwrap();
 
     bob_db.add_friend(bob.id, alice_in_bob_db.id).unwrap();
 
@@ -225,15 +285,23 @@ fn test_e2e_friend_request_cancel() {
     assert_eq!(outgoing.len(), 1, "Bob should have 1 outgoing request");
 
     // === Bob CANCELS the request before Alice accepts ===
-    bob_db.cancel_friend_request(bob.id, alice_in_bob_db.id)
+    bob_db
+        .cancel_friend_request(bob.id, alice_in_bob_db.id)
         .expect("Should cancel request");
 
     // Verify no more outgoing requests
     let outgoing_after = bob_db.get_outgoing_friend_requests(bob.id).unwrap();
-    assert_eq!(outgoing_after.len(), 0, "Outgoing request should be deleted");
+    assert_eq!(
+        outgoing_after.len(),
+        0,
+        "Outgoing request should be deleted"
+    );
 
     // They should NOT be friends
-    assert!(!bob_db.are_friends(bob.id, alice_in_bob_db.id).unwrap(), "Should not be friends");
+    assert!(
+        !bob_db.are_friends(bob.id, alice_in_bob_db.id).unwrap(),
+        "Should not be friends"
+    );
 
     println!("=== TEST PASSED: Friend request cancellation flow ===");
 }
@@ -270,7 +338,8 @@ fn test_e2e_friend_invite_code() {
     let (bob, _) = create_test_user(&db, "bob_invite");
 
     // Alice creates an invite code
-    let invite = db.create_friend_invite(alice.id, 1, 24)
+    let invite = db
+        .create_friend_invite(alice.id, 1, 24)
         .expect("Should create invite");
 
     println!("=== Alice created invite code: {} ===", invite.invite_code);
@@ -278,13 +347,17 @@ fn test_e2e_friend_invite_code() {
     println!("  username: {}", invite.display_name);
 
     // Bob uses the invite code - this creates an accepted friendship directly
-    let friend = db.use_friend_invite(bob.id, invite.invite_code.clone())
+    let friend = db
+        .use_friend_invite(bob.id, invite.invite_code.clone())
         .expect("Should use invite");
 
     assert_eq!(friend.id, alice.id, "Should return Alice");
 
     // Bob and Alice are now friends
-    assert!(db.are_friends(bob.id, alice.id).unwrap(), "Should be friends");
+    assert!(
+        db.are_friends(bob.id, alice.id).unwrap(),
+        "Should be friends"
+    );
 
     // Alice should also see Bob as a friend
     let alice_friends = db.get_friends(alice.id).unwrap();
@@ -306,7 +379,10 @@ fn test_e2e_cannot_self_friend() {
         // Check that get_friends doesn't return self
         let friends = db.get_friends(user.id).unwrap();
         for friend in &friends {
-            assert_ne!(friend.id, user.id, "User should not appear in own friends list");
+            assert_ne!(
+                friend.id, user.id,
+                "User should not appear in own friends list"
+            );
         }
     }
 
@@ -343,7 +419,8 @@ async fn test_p2p_friend_request_delivery() -> anyhow::Result<()> {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bob.subscribe_and_join(topic, vec![alice.node_id], Duration::from_secs(10)).await?;
+    bob.subscribe_and_join(topic, vec![alice.node_id], Duration::from_secs(10))
+        .await?;
 
     // Give mesh time to form
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -359,7 +436,10 @@ async fn test_p2p_friend_request_delivery() -> anyhow::Result<()> {
 
     let msg_bytes = serde_json::to_vec(&friend_request)?;
     bob.broadcast(topic, &msg_bytes).await?;
-    println!("Bob: Sent friend request message ({} bytes)", msg_bytes.len());
+    println!(
+        "Bob: Sent friend request message ({} bytes)",
+        msg_bytes.len()
+    );
 
     // Alice should receive the friend request over the network
     let received = alice.receive(topic, Duration::from_secs(5)).await?;
@@ -405,7 +485,9 @@ async fn test_p2p_friend_accept_bidirectional() -> anyhow::Result<()> {
     let topic = "friend-flow-test";
 
     // All subscribe to topic
-    network.all_subscribe(topic, Duration::from_secs(10)).await?;
+    network
+        .all_subscribe(topic, Duration::from_secs(10))
+        .await?;
 
     // Give mesh time to stabilize
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -421,7 +503,10 @@ async fn test_p2p_friend_accept_bidirectional() -> anyhow::Result<()> {
     println!("Node 0 (Bob): Sent friend request");
 
     // Node 1 (Alice) receives and sends acceptance
-    let received = network.node(1).receive(topic, Duration::from_secs(5)).await?;
+    let received = network
+        .node(1)
+        .receive(topic, Duration::from_secs(5))
+        .await?;
     if let Some(data) = received {
         let parsed: serde_json::Value = serde_json::from_slice(&data)?;
         println!("Node 1 (Alice): Received: type={}", parsed["type"]);
@@ -436,7 +521,10 @@ async fn test_p2p_friend_accept_bidirectional() -> anyhow::Result<()> {
         println!("Node 1 (Alice): Sent friend accept");
 
         // Node 0 (Bob) should receive acceptance
-        let acceptance = network.node(0).receive(topic, Duration::from_secs(5)).await?;
+        let acceptance = network
+            .node(0)
+            .receive(topic, Duration::from_secs(5))
+            .await?;
         if let Some(data) = acceptance {
             let parsed: serde_json::Value = serde_json::from_slice(&data)?;
             println!("Node 0 (Bob): Received: type={}", parsed["type"]);
@@ -488,7 +576,13 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
     let alice_topic = format!("user/{}", alice_user.public_key.as_ref().unwrap());
     alice_node.subscribe_as_root(&alice_topic).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    bob_node.subscribe_and_join(&alice_topic, vec![alice_node.node_id], Duration::from_secs(10)).await?;
+    bob_node
+        .subscribe_and_join(
+            &alice_topic,
+            vec![alice_node.node_id],
+            Duration::from_secs(10),
+        )
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     println!("\n=== Step 1: Bob sends friend request ===");
@@ -510,7 +604,9 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
         "from_username": bob_user.display_name,
         "from_encryption_public_key": bob_user.encryption_public_key
     });
-    bob_node.broadcast(&alice_topic, &serde_json::to_vec(&request_msg)?).await?;
+    bob_node
+        .broadcast(&alice_topic, &serde_json::to_vec(&request_msg)?)
+        .await?;
     println!("Bob: Sent friend request over P2P");
 
     // Verify Bob has outgoing request
@@ -520,7 +616,9 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
     println!("\n=== Step 2: Alice receives friend request ===");
 
     // Alice receives the P2P message
-    let received = alice_node.receive(&alice_topic, Duration::from_secs(5)).await?;
+    let received = alice_node
+        .receive(&alice_topic, Duration::from_secs(5))
+        .await?;
     if let Some(data) = received {
         let msg: serde_json::Value = serde_json::from_slice(&data)?;
         println!("Alice: Received P2P message: type={}", msg["type"]);
@@ -541,7 +639,11 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
 
         // Verify Alice sees pending request
         let alice_pending = alice_db.get_pending_friend_requests(alice_user.id)?;
-        assert_eq!(alice_pending.len(), 1, "Alice should have 1 pending request");
+        assert_eq!(
+            alice_pending.len(),
+            1,
+            "Alice should have 1 pending request"
+        );
         assert_eq!(alice_pending[0].display_name, "bob_e2e");
 
         println!("\n=== Step 3: Alice accepts friend request ===");
@@ -561,13 +663,17 @@ async fn test_full_e2e_friend_request_with_network() -> anyhow::Result<()> {
             "from_public_key": alice_user.public_key,
             "from_username": alice_user.display_name
         });
-        alice_node.broadcast(&alice_topic, &serde_json::to_vec(&accept_msg)?).await?;
+        alice_node
+            .broadcast(&alice_topic, &serde_json::to_vec(&accept_msg)?)
+            .await?;
         println!("Alice: Sent friend accept over P2P");
 
         println!("\n=== Step 4: Bob receives acceptance ===");
 
         // Bob receives acceptance
-        let accept_received = bob_node.receive(&alice_topic, Duration::from_secs(5)).await?;
+        let accept_received = bob_node
+            .receive(&alice_topic, Duration::from_secs(5))
+            .await?;
         if let Some(data) = accept_received {
             let msg: serde_json::Value = serde_json::from_slice(&data)?;
             println!("Bob: Received P2P message: type={}", msg["type"]);
@@ -635,7 +741,10 @@ async fn test_qr_scan_network_discovery() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Bob joins with Alice as bootstrap - use longer timeout for network variance
-    match bob.subscribe_and_join(topic, vec![alice.node_id], Duration::from_secs(15)).await {
+    match bob
+        .subscribe_and_join(topic, vec![alice.node_id], Duration::from_secs(15))
+        .await
+    {
         Ok(_) => {
             println!("Bob: Joined Alice's topic");
 
