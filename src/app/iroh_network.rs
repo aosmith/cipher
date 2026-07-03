@@ -1287,24 +1287,53 @@ impl IrohNetwork {
         // Get encryption public key for sealed envelopes (comments, reactions, etc.)
         let encryption_public_key = self.get_user_encryption_public_key();
 
-        let presence = P2PMessage::Presence {
-            user_id: self.user_id,
-            public_key: self.public_key.clone(),
-            encryption_public_key,
+        // Presence carries our profile and network addresses (IPs), so it is
+        // SEALED to friends plus our own devices - it used to be broadcast in
+        // plaintext to the entire mesh, handing every node a live directory of
+        // users, their IPs, and their online times.
+        let mut recipients = self.get_friend_encryption_public_keys();
+        if let Some(own_key) = encryption_public_key.clone() {
+            if !recipients.contains(&own_key) {
+                recipients.push(own_key);
+            }
+        }
+        if recipients.is_empty() {
+            println!("[IROH] No presence recipients (no encryption key yet) - skipping");
+            return Ok(());
+        }
+        let signing_key = user
+            .private_key
+            .clone()
+            .ok_or_else(|| "No signing private key for presence".to_string())?;
+
+        let node_addr_json = serde_json::to_string(&node_addr)
+            .map_err(|e| format!("Failed to serialize node address: {}", e))?;
+
+        let payload = super::crypto::ContentPayload::Presence {
             device_id: self
                 .device_id
                 .clone()
                 .unwrap_or_else(|| "unknown".to_string()),
-            node_addr,
-            timestamp: chrono::Utc::now().timestamp(),
+            node_addr_json,
+            encryption_public_key,
             display_name,
             bio,
             profile_picture,
             profile_signature,
+            sent_at: chrono::Utc::now().timestamp(),
         };
 
-        // Publish to global content topic - all nodes will see this
-        self.publish_message(CONTENT_TOPIC, presence).await
+        let envelope = super::crypto::GossipEnvelope::seal(
+            &payload,
+            &recipients,
+            &self.public_key,
+            &signing_key,
+        )?;
+        let envelope_json = serde_json::to_string(&envelope)
+            .map_err(|e| format!("Failed to serialize presence envelope: {}", e))?;
+
+        self.publish_message(CONTENT_TOPIC, P2PMessage::SealedEnvelope { envelope_json })
+            .await
     }
 
     /// Start background loop for presence announcements
@@ -1640,479 +1669,15 @@ impl IrohNetwork {
     /// Handle received P2P message
     async fn handle_message(&self, message: P2PMessage) {
         match message {
-            P2PMessage::Presence {
-                user_id: peer_user_id,
-                public_key,
-                encryption_public_key,
-                device_id,
-                node_addr,
-                timestamp: _,
-                display_name,
-                bio,
-                profile_picture,
-                profile_signature,
-            } => {
-                let peer_node_id = node_addr.id;
+            P2PMessage::Presence { device_id, .. } => {
+                // Plaintext presence is no longer processed: it broadcast
+                // profile data and network addresses (IPs) unencrypted to the
+                // entire mesh. Presence now arrives sealed to friends and our
+                // own devices as ContentPayload::Presence.
                 println!(
-                    "[IROH] Received presence from user {} ({}) device {} (NodeId: {})",
-                    display_name,
-                    &public_key[..8],
-                    device_id,
-                    peer_node_id
+                    "[IROH] Ignoring plaintext Presence from device {} (deprecated)",
+                    device_id
                 );
-                println!(
-                    "[IROH]   Relay: {:?}, Direct addresses: {}",
-                    node_addr.relay_urls().next(),
-                    node_addr.ip_addrs().count()
-                );
-
-                // SECURITY: Verify profile signature if present
-                let signature_valid = if let Some(ref sig) = profile_signature {
-                    let valid = Database::verify_profile_signature(
-                        &public_key,
-                        &display_name,
-                        &bio,
-                        &profile_picture,
-                        sig,
-                    );
-                    if valid {
-                        println!(
-                            "[IROH] [SECURITY] Profile signature VERIFIED for {}",
-                            display_name
-                        );
-                    } else {
-                        println!("[IROH] [SECURITY] WARNING: Profile signature INVALID for {} - possible tampering!", display_name);
-                    }
-                    valid
-                } else {
-                    println!(
-                        "[IROH] [SECURITY] No profile signature provided by {}",
-                        display_name
-                    );
-                    false
-                };
-
-                // Skip if this is our own device (don't store our own NodeId as a peer)
-                if self
-                    .device_id
-                    .as_ref()
-                    .map(|d| d == &device_id)
-                    .unwrap_or(false)
-                {
-                    println!("[IROH] Skipping - this is our own presence message");
-                    return;
-                }
-
-                // Store peer NodeId in database for future bootstrap (regardless of user match)
-                // This builds a network of known peers for gossip bootstrapping
-                let node_id_str = peer_node_id.to_string();
-                if let Err(e) = self.db.update_device_node_id(&device_id, &node_id_str) {
-                    println!("[IROH] Warning: Failed to store peer NodeId: {}", e);
-                } else {
-                    println!(
-                        "[IROH] Stored peer NodeId {} for device {}",
-                        node_id_str, device_id
-                    );
-                }
-
-                // CLEANUP: Remove stale device entries for OTHER users (not our own user)
-                // This handles the case where a peer user wiped their device and got a new device_id/node_id
-                // The old device entry with the old node_id would otherwise stay in our database forever
-                //
-                // CRITICAL: Only run cleanup for OTHER users, not our own user!
-                // If peer is another device of the SAME user (public_key == self.public_key),
-                // running cleanup would delete OUR OWN device entry since it would match the
-                // "different device_id, different node_id" criteria.
-                if public_key != self.public_key {
-                    match self.db.cleanup_stale_devices_for_user(
-                        &public_key,
-                        &device_id,
-                        &node_id_str,
-                    ) {
-                        Ok(stale_node_ids) if !stale_node_ids.is_empty() => {
-                            println!(
-                                "[IROH] Cleaned up {} stale device entries for user {}",
-                                stale_node_ids.len(),
-                                &public_key[..8]
-                            );
-                            // Also remove stale node_ids from connected_peers
-                            for stale_node_id in stale_node_ids {
-                                if let Ok(stale_id) = stale_node_id.parse::<iroh::EndpointId>() {
-                                    self.remove_connected_peer(stale_id).await;
-                                    println!(
-                                        "[IROH] Removed stale peer {} from connected set",
-                                        stale_node_id
-                                    );
-                                }
-                            }
-                        }
-                        Ok(_) => {} // No stale entries
-                        Err(e) => {
-                            println!("[IROH] Warning: Failed to cleanup stale devices: {}", e)
-                        }
-                    }
-                }
-
-                // NOTE: We received this Presence message via gossip, which means we ALREADY have
-                // a working gossip connection to this peer. Calling endpoint.connect() would be
-                // redundant and might interfere with the gossip protocol's connection management.
-                //
-                // Instead, we just:
-                // 1. Add the peer's node address to the endpoint (for better routing info)
-                // 2. Track the peer as connected (since we received their presence via gossip)
-                // 3. Store their info in the database for future reconnection
-
-                // Register the peer's address in the address book for better routing /
-                // gossip resolution. Replaces 0.35 endpoint.add_node_addr().
-                self.address_book.add_endpoint_info(node_addr.clone());
-                println!("[IROH] [OK] Added peer's address to the address book");
-
-                // Track this peer as connected (we received their presence via gossip!)
-                self.add_connected_peer(peer_node_id).await;
-                println!(
-                    "[IROH] [OK] Peer {} is connected via gossip mesh (received their presence)",
-                    peer_node_id
-                );
-
-                // Create friendship in database (CRITICAL for friends list to work!)
-                // Skip if this is the same user (different device)
-                if public_key != self.public_key {
-                    println!(
-                        "[IROH] Creating/updating friendship with peer user {}",
-                        peer_user_id
-                    );
-
-                    // First, ensure the peer user exists in our database with their profile data
-                    // CRITICAL: Include encryption_public_key for sealed envelope encryption (comments, reactions, etc.)
-                    // NOTE: Using lock() because encryption_public_key is ESSENTIAL for comments/reactions to work.
-                    // Without this data, sealed envelope encryption will fail and messages won't be delivered.
-                    {
-                        let conn = self.db.conn.lock().unwrap();
-                        if let Err(e) = conn.execute(
-                            "INSERT INTO users (id, display_name, public_key, encryption_public_key, bio, profile_picture, profile_signature, created_at, updated_at)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                             ON CONFLICT(public_key) DO UPDATE SET
-                                display_name = excluded.display_name,
-                                encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
-                                bio = excluded.bio,
-                                profile_picture = excluded.profile_picture,
-                                profile_signature = excluded.profile_signature,
-                                updated_at = excluded.updated_at",
-                            rusqlite::params![
-                                peer_user_id,
-                                &display_name,
-                                &public_key,
-                                &encryption_public_key,
-                                &bio,
-                                &profile_picture,
-                                &profile_signature,
-                                chrono::Utc::now().to_rfc3339(),
-                                chrono::Utc::now().to_rfc3339()
-                            ],
-                        ) {
-                            println!("[IROH] Warning: Failed to update peer user: {}", e);
-                        } else if encryption_public_key.is_some() {
-                            println!("[IROH] [OK] Stored encryption_public_key for peer {}", &public_key[..8]);
-                        }
-                    }
-
-                    // SECURITY: Check for display name changes on existing friends
-                    // Store known_display_name when first becoming friends
-                    // Warn if display name changes with valid signature (legitimate update)
-                    // or especially if signature is invalid (potential impersonation)
-                    // Check both directions since connection could be stored either way
-                    // NOTE: Using lock() instead of try_lock() - security checks must not be skipped
-                    {
-                        let conn = self.db.conn.lock().unwrap();
-                        if let Ok((known_name, _stored_sig)) = conn
-                            .query_row(
-                                "SELECT known_display_name, friend_profile_signature FROM p2p_connections
-                                 WHERE ((user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1))
-                                 AND status = 'accepted'",
-                                rusqlite::params![self.user_id, peer_user_id],
-                                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
-                            )
-                        {
-                            if let Some(known) = known_name {
-                                if known != display_name {
-                                    if signature_valid {
-                                        println!("[IROH] [SECURITY] Friend {} changed name from '{}' to '{}' (signature valid)",
-                                            &public_key[..8], known, display_name);
-                                        // Emit event to frontend - legitimate name change with valid signature
-                                        let _ = self.app_handle.emit("friend-name-changed", serde_json::json!({
-                                            "publicKey": &public_key,
-                                            "oldName": &known,
-                                            "newName": &display_name,
-                                            "signatureValid": true,
-                                            "warning": false
-                                        }));
-                                    } else {
-                                        println!("[IROH] [SECURITY] WARNING: Friend {} changed name from '{}' to '{}' but signature is INVALID!",
-                                            &public_key[..8], known, display_name);
-                                        // Emit warning event to frontend - potential impersonation attempt!
-                                        let _ = self.app_handle.emit("friend-name-changed", serde_json::json!({
-                                            "publicKey": &public_key,
-                                            "oldName": &known,
-                                            "newName": &display_name,
-                                            "signatureValid": false,
-                                            "warning": true,
-                                            "message": "This friend's display name changed but their signature is invalid. This could indicate tampering or impersonation."
-                                        }));
-                                    }
-                                }
-                            }
-                            // Update stored signature if we have a valid new one
-                            if signature_valid {
-                                let _ = conn.execute(
-                                    "UPDATE p2p_connections SET friend_profile_signature = ?1
-                                     WHERE (user_id = ?2 AND friend_user_id = ?3) OR (user_id = ?3 AND friend_user_id = ?2)",
-                                    rusqlite::params![&profile_signature, self.user_id, peer_user_id],
-                                );
-                            }
-                        }
-                    }
-
-                    // Only update peer address for EXISTING friendships (pending or accepted)
-                    // Do NOT auto-create friendships - that should happen via FriendRequest flow
-                    // Check both directions since connection could be stored either way
-                    // NOTE: Using lock() instead of try_lock() - connection status check must not be skipped
-                    println!(
-                        "[IROH] Checking existing connection status for peer {}",
-                        peer_user_id
-                    );
-                    let existing_status: Option<String> = {
-                        let conn = self.db.conn.lock().unwrap();
-                        conn.query_row(
-                            "SELECT status FROM p2p_connections
-                             WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                            rusqlite::params![self.user_id, peer_user_id],
-                            |row| row.get(0)
-                        ).ok()
-                    };
-                    println!(
-                        "[IROH] Existing status query returned: {:?}",
-                        existing_status
-                    );
-
-                    if let Some(status) = existing_status {
-                        println!(
-                            "[IROH] Existing connection with peer {} has status: {}",
-                            peer_user_id, status
-                        );
-
-                        // CRITICAL: Always update NodeId for reconnection - even if relay_url is missing
-                        // This ensures the discovery loop has the correct NodeId after peer wipes/restarts
-                        if let Some(relay_url) = node_addr.relay_urls().next() {
-                            // Have relay URL: update both NodeId and relay URL
-                            let relay_url_str = relay_url.to_string();
-                            if let Err(e) = self.db.save_friend_peer_address(
-                                self.user_id,
-                                peer_user_id,
-                                &node_id_str,
-                                &relay_url_str,
-                            ) {
-                                println!(
-                                    "[IROH] Warning: Failed to save friend peer address: {}",
-                                    e
-                                );
-                            } else {
-                                println!("[IROH] [OK] Friend peer address saved for reconnection: NodeId={}, Relay={}", node_id_str, relay_url_str);
-                            }
-                        } else {
-                            // No relay URL: update just the NodeId, preserve existing relay URL
-                            if let Err(e) = self.db.update_friend_node_id(
-                                self.user_id,
-                                peer_user_id,
-                                &node_id_str,
-                            ) {
-                                println!("[IROH] Warning: Failed to update friend NodeId: {}", e);
-                            } else {
-                                println!(
-                                    "[IROH] [OK] Friend NodeId updated for reconnection: {}",
-                                    node_id_str
-                                );
-                            }
-                        }
-
-                        // CRITICAL FIX: If we have accepted this peer's friend request, resend FriendAccepted
-                        // This handles the case where our original FriendAccepted was lost due to gossip mesh instability
-                        if status == "accepted" {
-                            // Check if this peer initiated the connection (they sent the friend request to us)
-                            // NOTE: Using lock() instead of try_lock() - this check is important for FriendAccepted resend
-                            let initiated_by: Option<super::types::SqliteUuid> = {
-                                let conn = self.db.conn.lock().unwrap();
-                                conn.query_row(
-                                    "SELECT initiated_by FROM p2p_connections
-                                     WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                                    rusqlite::params![self.user_id, peer_user_id],
-                                    |row| row.get(0)
-                                ).ok()
-                            };
-
-                            // If peer_user_id initiated the connection, they are waiting for our FriendAccepted
-                            if initiated_by == Some(peer_user_id) {
-                                println!("[IROH] Peer {} initiated this friendship - resending FriendAccepted to ensure delivery", peer_user_id);
-
-                                // Get our node address for the FriendAccepted message
-                                // Use try_lock to avoid blocking the gossip stream handler if endpoint is busy
-                                let endpoint_clone = match tokio::time::timeout(
-                                    tokio::time::Duration::from_millis(100),
-                                    self.endpoint.lock(),
-                                )
-                                .await
-                                {
-                                    Ok(guard) => guard.clone(),
-                                    Err(_) => {
-                                        println!(
-                                            "[IROH] Skipping FriendAccepted resend - endpoint busy"
-                                        );
-                                        None
-                                    }
-                                };
-                                let (our_node_id, our_relay_url) =
-                                    if let Some(endpoint) = endpoint_clone.as_ref() {
-                                        let addr = endpoint.addr();
-                                        let relay = addr
-                                            .relay_urls()
-                                            .next()
-                                            .map(|u| u.to_string())
-                                            .unwrap_or_default();
-                                        (addr.id.to_string(), relay)
-                                    } else {
-                                        (String::new(), String::new())
-                                    };
-
-                                if !our_node_id.is_empty() {
-                                    // Get our encryption public key for sealed envelope encryption
-                                    let our_encryption_public_key =
-                                        self.get_user_encryption_public_key().unwrap_or_default();
-
-                                    let friend_accepted = P2PMessage::FriendAccepted {
-                                        from_user_id: self.user_id,
-                                        from_public_key: self.public_key.clone(),
-                                        from_encryption_public_key: our_encryption_public_key,
-                                        from_display_name: self.display_name.clone(),
-                                        from_node_id: our_node_id,
-                                        from_relay_url: our_relay_url,
-                                        to_public_key: public_key.clone(),
-                                    };
-
-                                    if let Err(e) =
-                                        self.publish_message(CONTENT_TOPIC, friend_accepted).await
-                                    {
-                                        println!(
-                                            "[IROH] Warning: Failed to resend FriendAccepted: {}",
-                                            e
-                                        );
-                                    } else {
-                                        println!("[IROH] [OK] Resent FriendAccepted to {} (ensuring they know we accepted)", public_key);
-                                    }
-                                }
-                            }
-                        }
-
-                        // CRITICAL FIX: If we have a pending OUTGOING request to this peer, resend FriendRequest
-                        // This handles the case where their app data was cleared and they lost our original request
-                        if status == "pending" {
-                            // Check if WE initiated the connection (we sent the friend request to them)
-                            // NOTE: Using lock() instead of try_lock() - this check is important for FriendRequest resend
-                            let initiated_by: Option<super::types::SqliteUuid> = {
-                                let conn = self.db.conn.lock().unwrap();
-                                conn.query_row(
-                                    "SELECT initiated_by FROM p2p_connections
-                                     WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                                    rusqlite::params![self.user_id, peer_user_id],
-                                    |row| row.get(0)
-                                ).ok()
-                            };
-
-                            // If WE initiated the connection, they may have lost our FriendRequest - resend it
-                            if initiated_by == Some(self.user_id) {
-                                println!("[IROH] We initiated friendship with {} - resending FriendRequest to ensure delivery", peer_user_id);
-
-                                // Get our node address for the FriendRequest message
-                                // Clone endpoint first to avoid holding lock during await
-                                let endpoint_clone = self.endpoint.lock().await.clone();
-                                let (our_node_id, our_relay_url) =
-                                    if let Some(endpoint) = endpoint_clone.as_ref() {
-                                        let addr = endpoint.addr();
-                                        let relay = addr
-                                            .relay_urls()
-                                            .next()
-                                            .map(|u| u.to_string())
-                                            .unwrap_or_default();
-                                        (addr.id.to_string(), relay)
-                                    } else {
-                                        (String::new(), String::new())
-                                    };
-
-                                if !our_node_id.is_empty() {
-                                    // Get our encryption public key for sealed envelope encryption
-                                    let our_encryption_public_key =
-                                        self.get_user_encryption_public_key().unwrap_or_default();
-
-                                    let friend_request = P2PMessage::FriendRequest {
-                                        from_user_id: self.user_id,
-                                        from_public_key: self.public_key.clone(),
-                                        from_encryption_public_key: our_encryption_public_key,
-                                        from_display_name: self.display_name.clone(),
-                                        from_node_id: our_node_id,
-                                        from_relay_url: our_relay_url,
-                                        to_public_key: public_key.clone(),
-                                        timestamp: chrono::Utc::now().timestamp(),
-                                    };
-
-                                    if let Err(e) =
-                                        self.publish_message(CONTENT_TOPIC, friend_request).await
-                                    {
-                                        println!(
-                                            "[IROH] Warning: Failed to resend FriendRequest: {}",
-                                            e
-                                        );
-                                    } else {
-                                        println!("[IROH] [OK] Resent FriendRequest to {} (in case they lost our original request)", public_key);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // No existing connection - this peer needs to send a FriendRequest first
-                        println!("[IROH] No existing connection with peer {} - waiting for FriendRequest", peer_user_id);
-                    }
-                }
-
-                // GLOBAL MESH: No topic subscriptions needed in message handler
-                // All nodes are on the same cipher/content/v1 topic
-                // Presence is just for peer discovery and connection establishment
-                println!("[IROH] Presence processed - global mesh handles all routing");
-
-                // Check if this is another device with the same user account
-                if public_key == self.public_key
-                    && device_id != self.device_id.clone().unwrap_or_default()
-                {
-                    println!(
-                        "[IROH] SAME-USER DEVICE DETECTED: {} with NodeId: {}",
-                        device_id, peer_node_id
-                    );
-
-                    // Send device sync request via global mesh
-                    match self.build_signed_sync_request() {
-                        Some(sync_request) => {
-                            if let Err(e) = self.publish_message(CONTENT_TOPIC, sync_request).await
-                            {
-                                println!("[IROH] Failed to send device sync request: {}", e);
-                            } else {
-                                println!(
-                                    "[IROH] Sent device sync request to same-user device {}",
-                                    device_id
-                                );
-                            }
-                        }
-                        None => println!(
-                            "[IROH] Cannot sign device sync request (no signing key) - skipping"
-                        ),
-                    }
-                }
             }
 
             P2PMessage::DeviceSyncRequest {
@@ -2364,32 +1929,44 @@ impl IrohNetwork {
                         }
                     };
 
-                // Quick check: does this envelope have any boxes for us?
-                let our_encryption_public_key = match self.get_user_encryption_public_key() {
-                    Some(key) => key,
-                    None => {
-                        println!("[IROH] No encryption public key found");
-                        return;
-                    }
-                };
-
-                if !envelope.might_be_for_us(&our_encryption_public_key) {
-                    // Not for us - but cached for relay
-                    println!("[IROH] Envelope not for us, cached for relay");
+                // STALENESS: envelopes are only valid within the purge window;
+                // anything older is a replay or long-delayed duplicate
+                let now = chrono::Utc::now().timestamp();
+                if envelope.timestamp < now - 7 * 24 * 3600 {
+                    println!("[IROH] Ignoring stale envelope (older than 7 days)");
                     return;
                 }
 
-                // Try to decrypt
-                match envelope.try_decrypt(&our_encryption_public_key, &our_encryption_private_key)
-                {
-                    Some(payload) => {
+                // REPLAY PROTECTION: persistently track processed message_ids -
+                // the in-memory gossip dedup doesn't survive restarts, so an
+                // attacker could otherwise replay recorded envelopes (e.g. undo
+                // a reaction removal) after we restart
+                match self.db.mark_envelope_seen(&envelope.message_id) {
+                    Ok(true) => {} // first time we see this envelope
+                    Ok(false) => {
+                        println!(
+                            "[IROH] Ignoring already-processed envelope {}",
+                            &envelope.message_id[..8.min(envelope.message_id.len())]
+                        );
+                        return;
+                    }
+                    // Fail open: a broken replay table shouldn't stop content
+                    Err(e) => println!("[IROH] Warning: replay check failed: {}", e),
+                }
+
+                // Trial-decrypt the key boxes (no recipient hints on the wire).
+                // The sender's identity comes back AUTHENTICATED from inside
+                // the ciphertext - the wire carries no sender metadata.
+                match envelope.try_decrypt(&our_encryption_private_key) {
+                    Some(decrypted) => {
+                        let sender_public_key = decrypted.sender_public_key;
                         println!(
                             "[IROH] [OK] Successfully decrypted envelope from {}",
-                            envelope.sender_public_key
+                            sender_public_key
                         );
 
                         // Process the decrypted content
-                        match payload {
+                        match decrypted.payload {
                             super::crypto::ContentPayload::Post {
                                 post_id,
                                 content,
@@ -2405,9 +1982,8 @@ impl IrohNetwork {
                                     envelope.timestamp
                                 };
                                 // Get sender's user_id from their public key
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(
-                                    &envelope.sender_public_key,
-                                );
+                                let sender_user_id =
+                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
 
                                 // Ensure sender exists in database
                                 // NOTE: Using lock() instead of try_lock() for data integrity
@@ -2418,8 +1994,8 @@ impl IrohNetwork {
                                          VALUES (?1, ?2, ?3, ?4, ?5)",
                                         rusqlite::params![
                                             sender_user_id,
-                                            format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
-                                            &envelope.sender_public_key,
+                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                                            &sender_public_key,
                                             chrono::Utc::now().to_rfc3339(),
                                             chrono::Utc::now().to_rfc3339()
                                         ],
@@ -2445,7 +2021,7 @@ impl IrohNetwork {
                                     DecryptedPostEvent {
                                         post_id,
                                         user_id: sender_user_id,
-                                        public_key: envelope.sender_public_key.clone(),
+                                        public_key: sender_public_key.clone(),
                                         node_id,
                                         content,
                                         timestamp,
@@ -2455,12 +2031,11 @@ impl IrohNetwork {
                                 println!("[IROH] [OK] Emitted decrypted post to UI");
                             }
                             super::crypto::ContentPayload::DirectMessage { content, thread_id } => {
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(
-                                    &envelope.sender_public_key,
-                                );
+                                let sender_user_id =
+                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
                                 println!(
                                     "[IROH] Received encrypted DM from {}: {} chars",
-                                    envelope.sender_public_key,
+                                    sender_public_key,
                                     content.len()
                                 );
 
@@ -2477,7 +2052,7 @@ impl IrohNetwork {
                                     "sealed-dm-received",
                                     DecryptedDMEvent {
                                         from_user_id: sender_user_id,
-                                        from_public_key: envelope.sender_public_key.clone(),
+                                        from_public_key: sender_public_key.clone(),
                                         content,
                                         thread_id,
                                         timestamp: envelope.timestamp,
@@ -2497,13 +2072,12 @@ impl IrohNetwork {
                                 } else {
                                     envelope.timestamp
                                 };
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(
-                                    &envelope.sender_public_key,
-                                );
+                                let sender_user_id =
+                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
                                 println!(
                                     "[IROH] Received community post in '{}' from {}: {} chars",
                                     community_name,
-                                    envelope.sender_public_key,
+                                    sender_public_key,
                                     content.len()
                                 );
 
@@ -2526,8 +2100,8 @@ impl IrohNetwork {
                                          VALUES (?1, ?2, ?3, ?4, ?5)",
                                         rusqlite::params![
                                             sender_user_id,
-                                            format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
-                                            &envelope.sender_public_key,
+                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                                            &sender_public_key,
                                             chrono::Utc::now().to_rfc3339(),
                                             chrono::Utc::now().to_rfc3339()
                                         ],
@@ -2570,7 +2144,7 @@ impl IrohNetwork {
                                                 community_name: community_name.clone(),
                                                 post_id: post.id,
                                                 user_id: sender_user_id,
-                                                public_key: envelope.sender_public_key.clone(),
+                                                public_key: sender_public_key.clone(),
                                                 content,
                                                 show_in_main_feed,
                                                 timestamp,
@@ -2681,12 +2255,11 @@ impl IrohNetwork {
                                 } else {
                                     envelope.timestamp
                                 };
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(
-                                    &envelope.sender_public_key,
-                                );
+                                let sender_user_id =
+                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
                                 println!(
                                     "[IROH] Received post comment from {} on post {}",
-                                    envelope.sender_public_key, post_id
+                                    sender_public_key, post_id
                                 );
 
                                 // Parse IDs
@@ -2722,8 +2295,8 @@ impl IrohNetwork {
                                          VALUES (?1, ?2, ?3, ?4, ?5)",
                                         rusqlite::params![
                                             sender_user_id,
-                                            format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
-                                            &envelope.sender_public_key,
+                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                                            &sender_public_key,
                                             &now,
                                             &now
                                         ],
@@ -2756,7 +2329,7 @@ impl IrohNetwork {
                                         "commentId": comment_id,
                                         "postId": post_id,
                                         "userId": sender_user_id.to_string(),
-                                        "publicKey": envelope.sender_public_key,
+                                        "publicKey": sender_public_key,
                                         "content": content,
                                         "parentCommentId": parent_comment_id,
                                         "timestamp": timestamp
@@ -2775,12 +2348,11 @@ impl IrohNetwork {
                                 } else {
                                     envelope.timestamp
                                 };
-                                let sender_user_id = super::types::SqliteUuid::from_public_key(
-                                    &envelope.sender_public_key,
-                                );
+                                let sender_user_id =
+                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
                                 println!(
                                     "[IROH] Received post reaction from {}: {} {} on post {}",
-                                    envelope.sender_public_key, action, emoji, post_id
+                                    sender_public_key, action, emoji, post_id
                                 );
 
                                 // Parse post ID
@@ -2805,8 +2377,8 @@ impl IrohNetwork {
                                          VALUES (?1, ?2, ?3, ?4, ?5)",
                                         rusqlite::params![
                                             sender_user_id,
-                                            format!("User_{}", &envelope.sender_public_key[..8.min(envelope.sender_public_key.len())]),
-                                            &envelope.sender_public_key,
+                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                                            &sender_public_key,
                                             &now,
                                             &now
                                         ],
@@ -2847,7 +2419,7 @@ impl IrohNetwork {
                                     serde_json::json!({
                                         "postId": post_id,
                                         "userId": sender_user_id.to_string(),
-                                        "publicKey": envelope.sender_public_key,
+                                        "publicKey": sender_public_key,
                                         "emoji": emoji,
                                         "action": action,
                                         "timestamp": timestamp
@@ -2861,11 +2433,11 @@ impl IrohNetwork {
                                 ..
                             } => {
                                 // try_decrypt already verified the payload is
-                                // signed by envelope.sender_public_key; only our
+                                // signed by sender_public_key; only our
                                 // own devices (same recovery phrase) can both
                                 // sign as us and encrypt to our key. Guard
                                 // anyway: sync must come from our own identity.
-                                if envelope.sender_public_key != self.public_key {
+                                if sender_public_key != self.public_key {
                                     println!(
                                         "[IROH-SYNC] Rejecting DeviceSync from foreign sender"
                                     );
@@ -2916,14 +2488,61 @@ impl IrohNetwork {
                                     ),
                                 }
                             }
+                            super::crypto::ContentPayload::Presence {
+                                device_id,
+                                node_addr_json,
+                                encryption_public_key,
+                                display_name,
+                                bio,
+                                profile_picture,
+                                profile_signature,
+                                sent_at,
+                            } => {
+                                // Replayed presence could poison our address
+                                // book with stale endpoints - only accept
+                                // reasonably fresh announcements
+                                let now = chrono::Utc::now().timestamp();
+                                if sent_at > 0 && now - sent_at > 3600 {
+                                    println!("[IROH] Ignoring stale presence (>1h old)");
+                                    return;
+                                }
+                                let node_addr: iroh::EndpointAddr =
+                                    match serde_json::from_str(&node_addr_json) {
+                                        Ok(a) => a,
+                                        Err(e) => {
+                                            println!(
+                                                "[IROH] Invalid node address in presence: {}",
+                                                e
+                                            );
+                                            return;
+                                        }
+                                    };
+                                // Derive the peer's user_id from the AUTHENTICATED
+                                // sender key rather than trusting a claimed id
+                                let peer_user_id =
+                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
+                                self.handle_presence(
+                                    peer_user_id,
+                                    sender_public_key.clone(),
+                                    encryption_public_key,
+                                    device_id,
+                                    node_addr,
+                                    display_name,
+                                    bio,
+                                    profile_picture,
+                                    profile_signature,
+                                )
+                                .await;
+                            }
                             _ => {
                                 println!("[IROH] Received other sealed content type");
                             }
                         }
                     }
                     None => {
-                        // Couldn't decrypt - this shouldn't happen if might_be_for_us returned true
-                        println!("[IROH] Failed to decrypt envelope (hint matched but decryption failed)");
+                        // No key box decrypted with our key - envelope is for
+                        // other recipients; we just relayed it
+                        println!("[IROH] Envelope not for us - ignored");
                     }
                 }
             }
@@ -3883,6 +3502,474 @@ impl IrohNetwork {
     }
 
     /// Get current user's encryption private key from database
+    /// Process an authenticated presence announcement. Presence arrives inside
+    /// sealed envelopes (ContentPayload::Presence); `public_key` is the sender
+    /// key whose signature was verified during envelope decryption, and
+    /// `peer_user_id` is derived from it rather than trusted from the payload.
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_presence(
+        &self,
+        peer_user_id: super::types::SqliteUuid,
+        public_key: String,
+        encryption_public_key: Option<String>,
+        device_id: String,
+        node_addr: iroh::EndpointAddr,
+        display_name: String,
+        bio: String,
+        profile_picture: String,
+        profile_signature: Option<String>,
+    ) {
+        let peer_node_id = node_addr.id;
+        println!(
+            "[IROH] Received presence from user {} ({}) device {} (NodeId: {})",
+            display_name,
+            &public_key[..8],
+            device_id,
+            peer_node_id
+        );
+        println!(
+            "[IROH]   Relay: {:?}, Direct addresses: {}",
+            node_addr.relay_urls().next(),
+            node_addr.ip_addrs().count()
+        );
+
+        // SECURITY: Verify profile signature if present
+        let signature_valid = if let Some(ref sig) = profile_signature {
+            let valid = Database::verify_profile_signature(
+                &public_key,
+                &display_name,
+                &bio,
+                &profile_picture,
+                sig,
+            );
+            if valid {
+                println!(
+                    "[IROH] [SECURITY] Profile signature VERIFIED for {}",
+                    display_name
+                );
+            } else {
+                println!("[IROH] [SECURITY] WARNING: Profile signature INVALID for {} - possible tampering!", display_name);
+            }
+            valid
+        } else {
+            println!(
+                "[IROH] [SECURITY] No profile signature provided by {}",
+                display_name
+            );
+            false
+        };
+
+        // Skip if this is our own device (don't store our own NodeId as a peer)
+        if self
+            .device_id
+            .as_ref()
+            .map(|d| d == &device_id)
+            .unwrap_or(false)
+        {
+            println!("[IROH] Skipping - this is our own presence message");
+            return;
+        }
+
+        // Store peer NodeId in database for future bootstrap (regardless of user match)
+        // This builds a network of known peers for gossip bootstrapping
+        let node_id_str = peer_node_id.to_string();
+        if let Err(e) = self.db.update_device_node_id(&device_id, &node_id_str) {
+            println!("[IROH] Warning: Failed to store peer NodeId: {}", e);
+        } else {
+            println!(
+                "[IROH] Stored peer NodeId {} for device {}",
+                node_id_str, device_id
+            );
+        }
+
+        // CLEANUP: Remove stale device entries for OTHER users (not our own user)
+        // This handles the case where a peer user wiped their device and got a new device_id/node_id
+        // The old device entry with the old node_id would otherwise stay in our database forever
+        //
+        // CRITICAL: Only run cleanup for OTHER users, not our own user!
+        // If peer is another device of the SAME user (public_key == self.public_key),
+        // running cleanup would delete OUR OWN device entry since it would match the
+        // "different device_id, different node_id" criteria.
+        if public_key != self.public_key {
+            match self
+                .db
+                .cleanup_stale_devices_for_user(&public_key, &device_id, &node_id_str)
+            {
+                Ok(stale_node_ids) if !stale_node_ids.is_empty() => {
+                    println!(
+                        "[IROH] Cleaned up {} stale device entries for user {}",
+                        stale_node_ids.len(),
+                        &public_key[..8]
+                    );
+                    // Also remove stale node_ids from connected_peers
+                    for stale_node_id in stale_node_ids {
+                        if let Ok(stale_id) = stale_node_id.parse::<iroh::EndpointId>() {
+                            self.remove_connected_peer(stale_id).await;
+                            println!(
+                                "[IROH] Removed stale peer {} from connected set",
+                                stale_node_id
+                            );
+                        }
+                    }
+                }
+                Ok(_) => {} // No stale entries
+                Err(e) => {
+                    println!("[IROH] Warning: Failed to cleanup stale devices: {}", e)
+                }
+            }
+        }
+
+        // NOTE: We received this Presence message via gossip, which means we ALREADY have
+        // a working gossip connection to this peer. Calling endpoint.connect() would be
+        // redundant and might interfere with the gossip protocol's connection management.
+        //
+        // Instead, we just:
+        // 1. Add the peer's node address to the endpoint (for better routing info)
+        // 2. Track the peer as connected (since we received their presence via gossip)
+        // 3. Store their info in the database for future reconnection
+
+        // Register the peer's address in the address book for better routing /
+        // gossip resolution. Replaces 0.35 endpoint.add_node_addr().
+        self.address_book.add_endpoint_info(node_addr.clone());
+        println!("[IROH] [OK] Added peer's address to the address book");
+
+        // Track this peer as connected (we received their presence via gossip!)
+        self.add_connected_peer(peer_node_id).await;
+        println!(
+            "[IROH] [OK] Peer {} is connected via gossip mesh (received their presence)",
+            peer_node_id
+        );
+
+        // Create friendship in database (CRITICAL for friends list to work!)
+        // Skip if this is the same user (different device)
+        if public_key != self.public_key {
+            println!(
+                "[IROH] Creating/updating friendship with peer user {}",
+                peer_user_id
+            );
+
+            // First, ensure the peer user exists in our database with their profile data
+            // CRITICAL: Include encryption_public_key for sealed envelope encryption (comments, reactions, etc.)
+            // NOTE: Using lock() because encryption_public_key is ESSENTIAL for comments/reactions to work.
+            // Without this data, sealed envelope encryption will fail and messages won't be delivered.
+            {
+                let conn = self.db.conn.lock().unwrap();
+                if let Err(e) = conn.execute(
+                            "INSERT INTO users (id, display_name, public_key, encryption_public_key, bio, profile_picture, profile_signature, created_at, updated_at)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                             ON CONFLICT(public_key) DO UPDATE SET
+                                display_name = excluded.display_name,
+                                encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+                                bio = excluded.bio,
+                                profile_picture = excluded.profile_picture,
+                                profile_signature = excluded.profile_signature,
+                                updated_at = excluded.updated_at",
+                            rusqlite::params![
+                                peer_user_id,
+                                &display_name,
+                                &public_key,
+                                &encryption_public_key,
+                                &bio,
+                                &profile_picture,
+                                &profile_signature,
+                                chrono::Utc::now().to_rfc3339(),
+                                chrono::Utc::now().to_rfc3339()
+                            ],
+                        ) {
+                            println!("[IROH] Warning: Failed to update peer user: {}", e);
+                        } else if encryption_public_key.is_some() {
+                            println!("[IROH] [OK] Stored encryption_public_key for peer {}", &public_key[..8]);
+                        }
+            }
+
+            // SECURITY: Check for display name changes on existing friends
+            // Store known_display_name when first becoming friends
+            // Warn if display name changes with valid signature (legitimate update)
+            // or especially if signature is invalid (potential impersonation)
+            // Check both directions since connection could be stored either way
+            // NOTE: Using lock() instead of try_lock() - security checks must not be skipped
+            {
+                let conn = self.db.conn.lock().unwrap();
+                if let Ok((known_name, _stored_sig)) = conn
+                            .query_row(
+                                "SELECT known_display_name, friend_profile_signature FROM p2p_connections
+                                 WHERE ((user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1))
+                                 AND status = 'accepted'",
+                                rusqlite::params![self.user_id, peer_user_id],
+                                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+                            )
+                        {
+                            if let Some(known) = known_name {
+                                if known != display_name {
+                                    if signature_valid {
+                                        println!("[IROH] [SECURITY] Friend {} changed name from '{}' to '{}' (signature valid)",
+                                            &public_key[..8], known, display_name);
+                                        // Emit event to frontend - legitimate name change with valid signature
+                                        let _ = self.app_handle.emit("friend-name-changed", serde_json::json!({
+                                            "publicKey": &public_key,
+                                            "oldName": &known,
+                                            "newName": &display_name,
+                                            "signatureValid": true,
+                                            "warning": false
+                                        }));
+                                    } else {
+                                        println!("[IROH] [SECURITY] WARNING: Friend {} changed name from '{}' to '{}' but signature is INVALID!",
+                                            &public_key[..8], known, display_name);
+                                        // Emit warning event to frontend - potential impersonation attempt!
+                                        let _ = self.app_handle.emit("friend-name-changed", serde_json::json!({
+                                            "publicKey": &public_key,
+                                            "oldName": &known,
+                                            "newName": &display_name,
+                                            "signatureValid": false,
+                                            "warning": true,
+                                            "message": "This friend's display name changed but their signature is invalid. This could indicate tampering or impersonation."
+                                        }));
+                                    }
+                                }
+                            }
+                            // Update stored signature if we have a valid new one
+                            if signature_valid {
+                                let _ = conn.execute(
+                                    "UPDATE p2p_connections SET friend_profile_signature = ?1
+                                     WHERE (user_id = ?2 AND friend_user_id = ?3) OR (user_id = ?3 AND friend_user_id = ?2)",
+                                    rusqlite::params![&profile_signature, self.user_id, peer_user_id],
+                                );
+                            }
+                        }
+            }
+
+            // Only update peer address for EXISTING friendships (pending or accepted)
+            // Do NOT auto-create friendships - that should happen via FriendRequest flow
+            // Check both directions since connection could be stored either way
+            // NOTE: Using lock() instead of try_lock() - connection status check must not be skipped
+            println!(
+                "[IROH] Checking existing connection status for peer {}",
+                peer_user_id
+            );
+            let existing_status: Option<String> = {
+                let conn = self.db.conn.lock().unwrap();
+                conn.query_row(
+                            "SELECT status FROM p2p_connections
+                             WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                            rusqlite::params![self.user_id, peer_user_id],
+                            |row| row.get(0)
+                        ).ok()
+            };
+            println!(
+                "[IROH] Existing status query returned: {:?}",
+                existing_status
+            );
+
+            if let Some(status) = existing_status {
+                println!(
+                    "[IROH] Existing connection with peer {} has status: {}",
+                    peer_user_id, status
+                );
+
+                // CRITICAL: Always update NodeId for reconnection - even if relay_url is missing
+                // This ensures the discovery loop has the correct NodeId after peer wipes/restarts
+                if let Some(relay_url) = node_addr.relay_urls().next() {
+                    // Have relay URL: update both NodeId and relay URL
+                    let relay_url_str = relay_url.to_string();
+                    if let Err(e) = self.db.save_friend_peer_address(
+                        self.user_id,
+                        peer_user_id,
+                        &node_id_str,
+                        &relay_url_str,
+                    ) {
+                        println!("[IROH] Warning: Failed to save friend peer address: {}", e);
+                    } else {
+                        println!("[IROH] [OK] Friend peer address saved for reconnection: NodeId={}, Relay={}", node_id_str, relay_url_str);
+                    }
+                } else {
+                    // No relay URL: update just the NodeId, preserve existing relay URL
+                    if let Err(e) =
+                        self.db
+                            .update_friend_node_id(self.user_id, peer_user_id, &node_id_str)
+                    {
+                        println!("[IROH] Warning: Failed to update friend NodeId: {}", e);
+                    } else {
+                        println!(
+                            "[IROH] [OK] Friend NodeId updated for reconnection: {}",
+                            node_id_str
+                        );
+                    }
+                }
+
+                // CRITICAL FIX: If we have accepted this peer's friend request, resend FriendAccepted
+                // This handles the case where our original FriendAccepted was lost due to gossip mesh instability
+                if status == "accepted" {
+                    // Check if this peer initiated the connection (they sent the friend request to us)
+                    // NOTE: Using lock() instead of try_lock() - this check is important for FriendAccepted resend
+                    let initiated_by: Option<super::types::SqliteUuid> = {
+                        let conn = self.db.conn.lock().unwrap();
+                        conn.query_row(
+                                    "SELECT initiated_by FROM p2p_connections
+                                     WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                                    rusqlite::params![self.user_id, peer_user_id],
+                                    |row| row.get(0)
+                                ).ok()
+                    };
+
+                    // If peer_user_id initiated the connection, they are waiting for our FriendAccepted
+                    if initiated_by == Some(peer_user_id) {
+                        println!("[IROH] Peer {} initiated this friendship - resending FriendAccepted to ensure delivery", peer_user_id);
+
+                        // Get our node address for the FriendAccepted message
+                        // Use try_lock to avoid blocking the gossip stream handler if endpoint is busy
+                        let endpoint_clone = match tokio::time::timeout(
+                            tokio::time::Duration::from_millis(100),
+                            self.endpoint.lock(),
+                        )
+                        .await
+                        {
+                            Ok(guard) => guard.clone(),
+                            Err(_) => {
+                                println!("[IROH] Skipping FriendAccepted resend - endpoint busy");
+                                None
+                            }
+                        };
+                        let (our_node_id, our_relay_url) =
+                            if let Some(endpoint) = endpoint_clone.as_ref() {
+                                let addr = endpoint.addr();
+                                let relay = addr
+                                    .relay_urls()
+                                    .next()
+                                    .map(|u| u.to_string())
+                                    .unwrap_or_default();
+                                (addr.id.to_string(), relay)
+                            } else {
+                                (String::new(), String::new())
+                            };
+
+                        if !our_node_id.is_empty() {
+                            // Get our encryption public key for sealed envelope encryption
+                            let our_encryption_public_key =
+                                self.get_user_encryption_public_key().unwrap_or_default();
+
+                            let friend_accepted = P2PMessage::FriendAccepted {
+                                from_user_id: self.user_id,
+                                from_public_key: self.public_key.clone(),
+                                from_encryption_public_key: our_encryption_public_key,
+                                from_display_name: self.display_name.clone(),
+                                from_node_id: our_node_id,
+                                from_relay_url: our_relay_url,
+                                to_public_key: public_key.clone(),
+                            };
+
+                            if let Err(e) =
+                                self.publish_message(CONTENT_TOPIC, friend_accepted).await
+                            {
+                                println!("[IROH] Warning: Failed to resend FriendAccepted: {}", e);
+                            } else {
+                                println!("[IROH] [OK] Resent FriendAccepted to {} (ensuring they know we accepted)", public_key);
+                            }
+                        }
+                    }
+                }
+
+                // CRITICAL FIX: If we have a pending OUTGOING request to this peer, resend FriendRequest
+                // This handles the case where their app data was cleared and they lost our original request
+                if status == "pending" {
+                    // Check if WE initiated the connection (we sent the friend request to them)
+                    // NOTE: Using lock() instead of try_lock() - this check is important for FriendRequest resend
+                    let initiated_by: Option<super::types::SqliteUuid> = {
+                        let conn = self.db.conn.lock().unwrap();
+                        conn.query_row(
+                                    "SELECT initiated_by FROM p2p_connections
+                                     WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                                    rusqlite::params![self.user_id, peer_user_id],
+                                    |row| row.get(0)
+                                ).ok()
+                    };
+
+                    // If WE initiated the connection, they may have lost our FriendRequest - resend it
+                    if initiated_by == Some(self.user_id) {
+                        println!("[IROH] We initiated friendship with {} - resending FriendRequest to ensure delivery", peer_user_id);
+
+                        // Get our node address for the FriendRequest message
+                        // Clone endpoint first to avoid holding lock during await
+                        let endpoint_clone = self.endpoint.lock().await.clone();
+                        let (our_node_id, our_relay_url) =
+                            if let Some(endpoint) = endpoint_clone.as_ref() {
+                                let addr = endpoint.addr();
+                                let relay = addr
+                                    .relay_urls()
+                                    .next()
+                                    .map(|u| u.to_string())
+                                    .unwrap_or_default();
+                                (addr.id.to_string(), relay)
+                            } else {
+                                (String::new(), String::new())
+                            };
+
+                        if !our_node_id.is_empty() {
+                            // Get our encryption public key for sealed envelope encryption
+                            let our_encryption_public_key =
+                                self.get_user_encryption_public_key().unwrap_or_default();
+
+                            let friend_request = P2PMessage::FriendRequest {
+                                from_user_id: self.user_id,
+                                from_public_key: self.public_key.clone(),
+                                from_encryption_public_key: our_encryption_public_key,
+                                from_display_name: self.display_name.clone(),
+                                from_node_id: our_node_id,
+                                from_relay_url: our_relay_url,
+                                to_public_key: public_key.clone(),
+                                timestamp: chrono::Utc::now().timestamp(),
+                            };
+
+                            if let Err(e) =
+                                self.publish_message(CONTENT_TOPIC, friend_request).await
+                            {
+                                println!("[IROH] Warning: Failed to resend FriendRequest: {}", e);
+                            } else {
+                                println!("[IROH] [OK] Resent FriendRequest to {} (in case they lost our original request)", public_key);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No existing connection - this peer needs to send a FriendRequest first
+                println!(
+                    "[IROH] No existing connection with peer {} - waiting for FriendRequest",
+                    peer_user_id
+                );
+            }
+        }
+
+        // GLOBAL MESH: No topic subscriptions needed in message handler
+        // All nodes are on the same cipher/content/v1 topic
+        // Presence is just for peer discovery and connection establishment
+        println!("[IROH] Presence processed - global mesh handles all routing");
+
+        // Check if this is another device with the same user account
+        if public_key == self.public_key && device_id != self.device_id.clone().unwrap_or_default()
+        {
+            println!(
+                "[IROH] SAME-USER DEVICE DETECTED: {} with NodeId: {}",
+                device_id, peer_node_id
+            );
+
+            // Send device sync request via global mesh
+            match self.build_signed_sync_request() {
+                Some(sync_request) => {
+                    if let Err(e) = self.publish_message(CONTENT_TOPIC, sync_request).await {
+                        println!("[IROH] Failed to send device sync request: {}", e);
+                    } else {
+                        println!(
+                            "[IROH] Sent device sync request to same-user device {}",
+                            device_id
+                        );
+                    }
+                }
+                None => {
+                    println!("[IROH] Cannot sign device sync request (no signing key) - skipping")
+                }
+            }
+        }
+    }
+
     /// Get our Ed25519 signing private key (used to sign sealed-envelope
     /// payloads and device sync requests)
     fn get_user_signing_private_key(&self) -> Option<String> {

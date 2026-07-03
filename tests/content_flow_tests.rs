@@ -5,7 +5,6 @@
 // - SealedEnvelope encryption/decryption
 
 // Import the actual crypto module for encryption tests
-use app::crypto::sealed_box::SealedBox;
 use app::crypto::{ContentPayload as RealContentPayload, GossipEnvelope};
 
 #[cfg(test)]
@@ -621,7 +620,8 @@ mod tests {
         .expect("Should create envelope");
 
         let decrypted = envelope
-            .try_decrypt(&pub_key, &priv_key)
+            .try_decrypt(&priv_key)
+            .map(|d| d.payload)
             .expect("Should decrypt");
 
         match decrypted {
@@ -652,7 +652,8 @@ mod tests {
         .expect("Should create envelope");
 
         let decrypted = envelope
-            .try_decrypt(&pub_key, &priv_key)
+            .try_decrypt(&priv_key)
+            .map(|d| d.payload)
             .expect("Should decrypt");
 
         match decrypted {
@@ -688,7 +689,8 @@ mod tests {
         .expect("Should create envelope");
 
         let decrypted = envelope
-            .try_decrypt(&pub_key, &priv_key)
+            .try_decrypt(&priv_key)
+            .map(|d| d.payload)
             .expect("Should decrypt");
 
         match decrypted {
@@ -730,13 +732,13 @@ mod tests {
         .expect("Should create envelope");
 
         // All recipients can decrypt
-        let alice_result = envelope.try_decrypt(&alice_pub, &alice_priv);
+        let alice_result = envelope.try_decrypt(&alice_priv).map(|d| d.payload);
         assert!(alice_result.is_some(), "Alice should decrypt");
 
-        let bob_result = envelope.try_decrypt(&bob_pub, &bob_priv);
+        let bob_result = envelope.try_decrypt(&bob_priv).map(|d| d.payload);
         assert!(bob_result.is_some(), "Bob should decrypt");
 
-        let carol_result = envelope.try_decrypt(&carol_pub, &carol_priv);
+        let carol_result = envelope.try_decrypt(&carol_priv).map(|d| d.payload);
         assert!(carol_result.is_some(), "Carol should decrypt");
 
         // Verify content matches for all
@@ -755,7 +757,7 @@ mod tests {
     fn test_envelope_non_recipient_cannot_decrypt() {
         let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, _alice_priv) = generate_test_keypair();
-        let (eve_pub, eve_priv) = generate_test_keypair();
+        let (_eve_pub, eve_priv) = generate_test_keypair();
 
         // Only Alice is a recipient
         let recipient_keys = vec![alice_pub.clone()];
@@ -772,7 +774,7 @@ mod tests {
         .expect("Should create envelope");
 
         // Eve (not a recipient) cannot decrypt
-        let eve_result = envelope.try_decrypt(&eve_pub, &eve_priv);
+        let eve_result = envelope.try_decrypt(&eve_priv).map(|d| d.payload);
         assert!(eve_result.is_none(), "Eve should NOT be able to decrypt");
     }
 
@@ -796,7 +798,7 @@ mod tests {
         .expect("Should create envelope");
 
         // Alice's public key but Bob's private key should fail
-        let result = envelope.try_decrypt(&alice_pub, &bob_priv);
+        let result = envelope.try_decrypt(&bob_priv).map(|d| d.payload);
         assert!(result.is_none(), "Wrong private key should fail");
     }
 
@@ -818,7 +820,7 @@ mod tests {
         )
         .expect("Should create envelope");
 
-        let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
+        let decrypted = envelope.try_decrypt(&alice_priv).map(|d| d.payload);
 
         match decrypted {
             Some(RealContentPayload::Post { content, .. }) => {
@@ -847,7 +849,7 @@ mod tests {
         )
         .expect("Should create envelope");
 
-        let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
+        let decrypted = envelope.try_decrypt(&alice_priv).map(|d| d.payload);
 
         match decrypted {
             Some(RealContentPayload::Post { content, .. }) => {
@@ -878,7 +880,7 @@ mod tests {
         )
         .expect("Should create comment envelope");
 
-        let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
+        let decrypted = envelope.try_decrypt(&alice_priv).map(|d| d.payload);
 
         match decrypted {
             Some(RealContentPayload::PostComment {
@@ -915,7 +917,7 @@ mod tests {
         )
         .expect("Should create reaction envelope");
 
-        let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
+        let decrypted = envelope.try_decrypt(&alice_priv).map(|d| d.payload);
 
         match decrypted {
             Some(RealContentPayload::PostReaction {
@@ -950,7 +952,7 @@ mod tests {
         )
         .expect("Should create reaction remove envelope");
 
-        let decrypted = envelope.try_decrypt(&alice_pub, &alice_priv);
+        let decrypted = envelope.try_decrypt(&alice_priv).map(|d| d.payload);
 
         match decrypted {
             Some(RealContentPayload::PostReaction {

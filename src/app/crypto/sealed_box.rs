@@ -1,12 +1,20 @@
 // Sealed Box implementation for global mesh encryption
 //
-// Architecture:
-// - GossipEnvelope contains multiple SealedBox instances (one per friend)
-// - Each SealedBox can only be decrypted by its intended recipient
-// - The `recipient_hint` (first 8 bytes of public key) allows quick filtering
-// - Ephemeral keys provide forward secrecy for each message
-// - The plaintext inside each box carries an Ed25519 signature binding it to
-//   the envelope's claimed sender, so envelopes cannot be forged or re-targeted
+// Architecture (v3):
+// - The payload is serialized, signed, padded to a size bucket, and encrypted
+//   ONCE under a random 32-byte content key (XChaCha20-Poly1305)
+// - Each recipient gets a small SealedBox that wraps just the content key
+//   (ephemeral X25519 ECDH), so envelope size is O(1) payload + O(n) tiny boxes
+// - Recipients TRIAL-DECRYPT the key boxes: there are no recipient hints on
+//   the wire, so observers cannot tell who a message is addressed to
+// - Dummy key boxes pad the box count to a power of two, so the exact
+//   recipient count (friend count) is not visible either
+// - The sender's identity travels INSIDE the ciphertext (SignedPlaintext),
+//   authenticated by an Ed25519 signature binding the envelope metadata -
+//   a wire observer sees only: size bucket, box count bucket, coarse hour
+//
+// What a passive mesh observer learns per envelope: nothing about sender,
+// recipients, or content type - only approximate size and the hour it was sent.
 
 use base64::{engine::general_purpose, Engine as _};
 use chacha20poly1305::{
@@ -20,54 +28,46 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use crate::app::database::Database;
 use crate::app::types::{BlobReference, MediaAttachmentWithData, SqliteUuid};
 
-/// Content types that can be sealed
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ContentType {
-    Post,
-    DirectMessage,
-    FriendRequest,
-    FriendAccepted,
-    KeyRotation,
-    CommunityPost,
-    CommunityMemberAdded,
-    PostComment,
-    PostReaction,
-    /// Full device-to-device sync payload, sealed to the user's own key
-    DeviceSync,
-}
-
-/// Envelope for gossiped content - contains multiple sealed boxes
-/// All nodes receive this, but only intended recipients can decrypt
+/// Envelope for gossiped content.
+/// All nodes receive this; only intended recipients can decrypt. The wire
+/// format deliberately carries NO sender, recipient, or content-type metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GossipEnvelope {
-    /// Random ID for deduplication (32 bytes, hex encoded)
+    /// Random ID for deduplication / replay protection (32 bytes, hex encoded)
     pub message_id: String,
     /// Unix timestamp, rounded down to the hour (only used for purging)
     pub timestamp: i64,
-    /// Type hint for the content
-    pub content_type: ContentType,
-    /// Sender's Ed25519 signing public key. AUTHENTICATED: the payload inside
-    /// each sealed box is signed with the matching private key and verified in
-    /// try_decrypt(), so this field cannot be spoofed on a decryptable envelope.
-    pub sender_public_key: String,
-    /// One sealed box per intended recipient
+    /// The payload (a padded SignedPlaintext), encrypted once under a random
+    /// content key: base64(nonce_24 || xchacha20poly1305_ciphertext)
+    pub encrypted_payload: String,
+    /// One box per recipient wrapping the content key, padded with dummy
+    /// boxes to a power of two so recipient count is not observable
     pub sealed_boxes: Vec<SealedBox>,
 }
 
-/// A sealed box that only one recipient can open
+/// A sealed box wrapping the envelope's content key for one recipient.
+/// Recipients trial-decrypt every box - there is deliberately no recipient
+/// identifier, so a box is indistinguishable from a dummy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SealedBox {
     /// Ephemeral X25519 public key (for ECDH) - base64 encoded
     pub ephemeral_pubkey: String,
-    /// First 8 bytes of recipient's public key (for quick filtering) - hex encoded
-    pub recipient_hint: String,
     /// Nonce for XChaCha20-Poly1305 (24 bytes) - base64 encoded
     pub nonce: String,
-    /// Encrypted payload - base64 encoded
+    /// Encrypted content key - base64 encoded
     pub ciphertext: String,
 }
 
-/// The actual content inside a sealed box
+/// The decrypted, authenticated result of opening an envelope
+#[derive(Debug)]
+pub struct DecryptedEnvelope {
+    /// The sender's Ed25519 public key. AUTHENTICATED: the payload signature
+    /// was verified against this key during decryption.
+    pub sender_public_key: String,
+    pub payload: ContentPayload,
+}
+
+/// The actual content inside a sealed envelope
 ///
 /// Variants carry a `sent_at` timestamp INSIDE the ciphertext: the envelope's
 /// outer `timestamp` is coarsened to the hour (it only exists for purging), so
@@ -144,18 +144,40 @@ pub enum ContentPayload {
         #[serde(default)]
         sent_at: i64,
     },
+    /// Presence announcement, sealed to friends + the user's own devices.
+    /// Carries profile data and network addresses (including IPs), which is
+    /// why it must never travel in plaintext. The sender's user_id is derived
+    /// from the authenticated sender public key, not carried here.
+    Presence {
+        device_id: String,
+        /// serde-serialized iroh::EndpointAddr (kept as JSON so this module
+        /// stays transport-agnostic)
+        node_addr_json: String,
+        /// X25519 encryption public key for sealed envelopes
+        encryption_public_key: Option<String>,
+        display_name: String,
+        bio: String,
+        profile_picture: String,
+        /// Profile signature (display_name|bio|profile_picture), kept for the
+        /// profile-tamper checks in the presence handler
+        profile_signature: Option<String>,
+        #[serde(default)]
+        sent_at: i64,
+    },
 }
 
-/// What actually gets encrypted into each SealedBox: the payload plus an
-/// Ed25519 signature binding it to the envelope's sender, message_id, and
-/// timestamp. Without this, anyone could put any `sender_public_key` on an
-/// envelope and impersonate other users - the boxes alone prove nothing about
-/// who created them.
+/// What actually gets encrypted into the payload: the payload JSON, the
+/// sender's identity, and an Ed25519 signature binding both to the envelope's
+/// message_id and timestamp. Keeping the sender INSIDE the ciphertext means a
+/// wire observer cannot attribute envelopes to users, and the signature means
+/// a recipient cannot be fooled about who wrote the payload.
 #[derive(Debug, Serialize, Deserialize)]
 struct SignedPlaintext {
     payload_json: String,
+    /// Sender's Ed25519 signing public key - base64 encoded
+    sender_public_key: String,
     /// base64 Ed25519 signature over `signing_context(...)` by the private key
-    /// matching the envelope's `sender_public_key`
+    /// matching `sender_public_key`
     signature: String,
 }
 
@@ -196,9 +218,16 @@ fn padded_len(len: usize) -> usize {
     }
 }
 
-/// Derive the AEAD key from the ECDH result with a KDF instead of using the
-/// raw shared secret, binding it to both public keys so a box cannot be
-/// re-targeted to a different recipient or ephemeral key.
+/// Number of key boxes to put on an envelope for `real` recipients: the next
+/// power of two, minimum 2, so the exact recipient count (friend count) is
+/// not observable. The extras are dummy boxes indistinguishable from real ones.
+fn padded_box_count(real: usize) -> usize {
+    real.max(1).next_power_of_two().max(2)
+}
+
+/// Derive the AEAD key for a key box from the ECDH result with a KDF instead
+/// of using the raw shared secret, binding it to both public keys so a box
+/// cannot be re-targeted to a different recipient or ephemeral key.
 fn derive_aead_key(
     shared_secret: &x25519_dalek::SharedSecret,
     ephemeral_public: &[u8],
@@ -212,6 +241,72 @@ fn derive_aead_key(
 }
 
 impl GossipEnvelope {
+    /// Seal a payload for a set of recipients. This is the single path all
+    /// content takes onto the wire: sign, pad, encrypt once under a random
+    /// content key, then wrap the key for each recipient (plus dummies).
+    pub fn seal(
+        payload: &ContentPayload,
+        recipient_public_keys: &[String],
+        sender_public_key: &str,
+        sender_signing_private_key: &str,
+    ) -> Result<Self, String> {
+        let message_id = generate_message_id();
+        let timestamp = coarse_timestamp(chrono::Utc::now().timestamp());
+
+        // Serialize and sign the payload, binding the envelope metadata
+        let payload_json = serde_json::to_string(payload)
+            .map_err(|e| format!("Failed to serialize payload: {}", e))?;
+        let context = signing_context(&message_id, timestamp, sender_public_key, &payload_json);
+        let signature = Database::sign_message(&context, sender_signing_private_key)
+            .map_err(|e| format!("Failed to sign payload: {}", e))?;
+        let signed = SignedPlaintext {
+            payload_json,
+            sender_public_key: sender_public_key.to_string(),
+            signature,
+        };
+        let mut plaintext = serde_json::to_vec(&signed)
+            .map_err(|e| format!("Failed to serialize signed payload: {}", e))?;
+        plaintext.resize(padded_len(plaintext.len()), b' ');
+
+        // Encrypt the payload ONCE under a random content key
+        let mut rng = rand::thread_rng();
+        let mut content_key = [0u8; 32];
+        rng.fill(&mut content_key);
+        let mut nonce_bytes = [0u8; 24];
+        rng.fill(&mut nonce_bytes);
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&content_key));
+        let ciphertext = cipher
+            .encrypt(XNonce::from_slice(&nonce_bytes), plaintext.as_slice())
+            .map_err(|_| "Payload encryption failed")?;
+        let mut blob = nonce_bytes.to_vec();
+        blob.extend_from_slice(&ciphertext);
+
+        // Wrap the content key for each recipient...
+        let mut sealed_boxes = Vec::new();
+        for recipient_key in recipient_public_keys {
+            sealed_boxes.push(SealedBox::seal_bytes(&content_key, recipient_key)?);
+        }
+        // ...plus dummy boxes (a random key wrapped for a throwaway recipient,
+        // indistinguishable from a real box) so box count doesn't reveal the
+        // exact recipient count
+        while sealed_boxes.len() < padded_box_count(recipient_public_keys.len()) {
+            let mut dummy_key = [0u8; 32];
+            rng.fill(&mut dummy_key);
+            let mut throwaway_secret = [0u8; 32];
+            rng.fill(&mut throwaway_secret);
+            let throwaway_public = X25519PublicKey::from(&StaticSecret::from(throwaway_secret));
+            let throwaway_b64 = general_purpose::STANDARD.encode(throwaway_public.as_bytes());
+            sealed_boxes.push(SealedBox::seal_bytes(&dummy_key, &throwaway_b64)?);
+        }
+
+        Ok(GossipEnvelope {
+            message_id,
+            timestamp,
+            encrypted_payload: general_purpose::STANDARD.encode(blob),
+            sealed_boxes,
+        })
+    }
+
     /// Create a new envelope for a post, encrypted for all friends
     pub fn new_post(
         sender_public_key: &str,
@@ -222,34 +317,19 @@ impl GossipEnvelope {
         friend_public_keys: &[String],
         sender_signing_private_key: &str,
     ) -> Result<Self, String> {
-        let message_id = generate_message_id();
-        let now = chrono::Utc::now().timestamp();
-        let timestamp = coarse_timestamp(now);
-
         let payload = ContentPayload::Post {
             post_id: post_id.to_string(),
             content: content.to_string(),
             node_id: node_id.to_string(),
             blob_refs: blob_refs.to_vec(),
-            sent_at: now,
+            sent_at: chrono::Utc::now().timestamp(),
         };
-
-        let sealed_boxes = create_sealed_boxes_for_recipients(
+        Self::seal(
             &payload,
             friend_public_keys,
-            &message_id,
-            timestamp,
             sender_public_key,
             sender_signing_private_key,
-        )?;
-
-        Ok(GossipEnvelope {
-            message_id,
-            timestamp,
-            content_type: ContentType::Post,
-            sender_public_key: sender_public_key.to_string(),
-            sealed_boxes,
-        })
+        )
     }
 
     /// Create a new envelope for a community post, encrypted for all community members
@@ -264,35 +344,20 @@ impl GossipEnvelope {
         member_public_keys: &[String],
         sender_signing_private_key: &str,
     ) -> Result<Self, String> {
-        let message_id = generate_message_id();
-        let now = chrono::Utc::now().timestamp();
-        let timestamp = coarse_timestamp(now);
-
         let payload = ContentPayload::CommunityPost {
             community_id: community_id.to_string(),
             community_name: community_name.to_string(),
             content: content.to_string(),
             attachments,
             show_in_main_feed,
-            sent_at: now,
+            sent_at: chrono::Utc::now().timestamp(),
         };
-
-        let sealed_boxes = create_sealed_boxes_for_recipients(
+        Self::seal(
             &payload,
             member_public_keys,
-            &message_id,
-            timestamp,
             sender_public_key,
             sender_signing_private_key,
-        )?;
-
-        Ok(GossipEnvelope {
-            message_id,
-            timestamp,
-            content_type: ContentType::CommunityPost,
-            sender_public_key: sender_public_key.to_string(),
-            sealed_boxes,
-        })
+        )
     }
 
     /// Create a new envelope to notify members about a new community member
@@ -305,32 +370,18 @@ impl GossipEnvelope {
         member_public_keys: &[String],
         sender_signing_private_key: &str,
     ) -> Result<Self, String> {
-        let message_id = generate_message_id();
-        let timestamp = coarse_timestamp(chrono::Utc::now().timestamp());
-
         let payload = ContentPayload::CommunityMemberAdded {
             community_id: community_id.to_string(),
             community_name: community_name.to_string(),
             new_member_public_key: new_member_public_key.to_string(),
             new_member_display_name: new_member_display_name.to_string(),
         };
-
-        let sealed_boxes = create_sealed_boxes_for_recipients(
+        Self::seal(
             &payload,
             member_public_keys,
-            &message_id,
-            timestamp,
             sender_public_key,
             sender_signing_private_key,
-        )?;
-
-        Ok(GossipEnvelope {
-            message_id,
-            timestamp,
-            content_type: ContentType::CommunityMemberAdded,
-            sender_public_key: sender_public_key.to_string(),
-            sealed_boxes,
-        })
+        )
     }
 
     /// Create a new envelope for a post comment, encrypted for all friends
@@ -343,34 +394,19 @@ impl GossipEnvelope {
         friend_public_keys: &[String],
         sender_signing_private_key: &str,
     ) -> Result<Self, String> {
-        let message_id = generate_message_id();
-        let now = chrono::Utc::now().timestamp();
-        let timestamp = coarse_timestamp(now);
-
         let payload = ContentPayload::PostComment {
             comment_id: comment_id.to_string(),
             post_id: post_id.to_string(),
             content: content.to_string(),
             parent_comment_id: parent_comment_id.map(|s| s.to_string()),
-            sent_at: now,
+            sent_at: chrono::Utc::now().timestamp(),
         };
-
-        let sealed_boxes = create_sealed_boxes_for_recipients(
+        Self::seal(
             &payload,
             friend_public_keys,
-            &message_id,
-            timestamp,
             sender_public_key,
             sender_signing_private_key,
-        )?;
-
-        Ok(GossipEnvelope {
-            message_id,
-            timestamp,
-            content_type: ContentType::PostComment,
-            sender_public_key: sender_public_key.to_string(),
-            sealed_boxes,
-        })
+        )
     }
 
     /// Create a new envelope for a post reaction, encrypted for all friends
@@ -382,40 +418,23 @@ impl GossipEnvelope {
         friend_public_keys: &[String],
         sender_signing_private_key: &str,
     ) -> Result<Self, String> {
-        let message_id = generate_message_id();
-        let now = chrono::Utc::now().timestamp();
-        let timestamp = coarse_timestamp(now);
-
         let payload = ContentPayload::PostReaction {
             post_id: post_id.to_string(),
             emoji: emoji.to_string(),
             action: action.to_string(),
-            sent_at: now,
+            sent_at: chrono::Utc::now().timestamp(),
         };
-
-        let sealed_boxes = create_sealed_boxes_for_recipients(
+        Self::seal(
             &payload,
             friend_public_keys,
-            &message_id,
-            timestamp,
             sender_public_key,
             sender_signing_private_key,
-        )?;
-
-        Ok(GossipEnvelope {
-            message_id,
-            timestamp,
-            content_type: ContentType::PostReaction,
-            sender_public_key: sender_public_key.to_string(),
-            sealed_boxes,
-        })
+        )
     }
 
     /// Create a device-sync envelope, sealed to the user's OWN encryption key.
     /// All of a user's devices derive the same keypair from the recovery
-    /// phrase, so only the user's own devices can decrypt it - unlike the old
-    /// plaintext DeviceSyncResponse, which broadcast the entire database to
-    /// the whole mesh.
+    /// phrase, so only the user's own devices can decrypt it.
     pub fn new_device_sync(
         sender_public_key: &str,
         device_id: &str,
@@ -423,61 +442,47 @@ impl GossipEnvelope {
         own_encryption_public_key: &str,
         sender_signing_private_key: &str,
     ) -> Result<Self, String> {
-        let message_id = generate_message_id();
-        let now = chrono::Utc::now().timestamp();
-        let timestamp = coarse_timestamp(now);
-
         let payload = ContentPayload::DeviceSync {
             device_id: device_id.to_string(),
             data_json: data_json.to_string(),
-            sent_at: now,
+            sent_at: chrono::Utc::now().timestamp(),
         };
-
-        let sealed_boxes = create_sealed_boxes_for_recipients(
+        Self::seal(
             &payload,
             &[own_encryption_public_key.to_string()],
-            &message_id,
-            timestamp,
             sender_public_key,
             sender_signing_private_key,
-        )?;
-
-        Ok(GossipEnvelope {
-            message_id,
-            timestamp,
-            content_type: ContentType::DeviceSync,
-            sender_public_key: sender_public_key.to_string(),
-            sealed_boxes,
-        })
+        )
     }
 
-    /// Try to decrypt this envelope for a given recipient.
+    /// Try to decrypt this envelope with our encryption private key.
     ///
-    /// Returns the payload only if BOTH hold:
-    /// 1. one of the sealed boxes decrypts with our key, AND
-    /// 2. the payload signature verifies against the envelope's
-    ///    `sender_public_key` over the envelope metadata.
-    ///
-    /// A decryptable envelope whose signature does not verify is a forgery
-    /// attempt (someone stamped another user's key on their own envelope) and
-    /// is rejected.
-    pub fn try_decrypt(
-        &self,
-        recipient_public_key: &str,
-        recipient_private_key: &str,
-    ) -> Option<ContentPayload> {
-        // Calculate our recipient hint for quick filtering
-        let our_hint = calculate_recipient_hint(recipient_public_key);
+    /// Trial-decrypts every key box (there are no recipient hints on the wire),
+    /// then opens the payload and verifies the sender signature. Returns the
+    /// payload with its AUTHENTICATED sender only if both decryption and
+    /// signature verification succeed.
+    pub fn try_decrypt(&self, recipient_private_key: &str) -> Option<DecryptedEnvelope> {
+        let payload_blob = general_purpose::STANDARD
+            .decode(&self.encrypted_payload)
+            .ok()?;
+        if payload_blob.len() < 25 {
+            return None;
+        }
+        let (nonce_bytes, payload_ct) = payload_blob.split_at(24);
 
         for sealed_box in &self.sealed_boxes {
-            // Quick filter: check if this box might be for us
-            if sealed_box.recipient_hint != our_hint {
+            // Trial decryption: most boxes are for other recipients (or
+            // dummies) and fail the AEAD tag check - that's the design.
+            let Ok(key_bytes) = sealed_box.decrypt_bytes(recipient_private_key) else {
+                continue;
+            };
+            if key_bytes.len() != 32 {
                 continue;
             }
 
-            let plaintext = match sealed_box.decrypt_bytes(recipient_private_key) {
-                Ok(p) => p,
-                Err(_) => continue,
+            let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+            let Ok(plaintext) = cipher.decrypt(XNonce::from_slice(nonce_bytes), payload_ct) else {
+                continue;
             };
 
             let signed: SignedPlaintext = match serde_json::from_slice(&plaintext) {
@@ -488,24 +493,29 @@ impl GossipEnvelope {
                 }
             };
 
-            // AUTHENTICITY: the payload must be signed by the key the envelope
-            // claims as sender - otherwise anyone could impersonate any user.
+            // AUTHENTICITY: the payload must be signed by the key it claims
+            // as sender - otherwise anyone could impersonate any user.
             let context = signing_context(
                 &self.message_id,
                 self.timestamp,
-                &self.sender_public_key,
+                &signed.sender_public_key,
                 &signed.payload_json,
             );
-            if !Database::verify_signature(&context, &signed.signature, &self.sender_public_key) {
+            if !Database::verify_signature(&context, &signed.signature, &signed.sender_public_key) {
                 println!(
                     "[SEALED-BOX] Rejecting envelope: payload signature invalid for claimed sender {}",
-                    self.sender_public_key
+                    signed.sender_public_key
                 );
                 continue;
             }
 
             match serde_json::from_str(&signed.payload_json) {
-                Ok(payload) => return Some(payload),
+                Ok(payload) => {
+                    return Some(DecryptedEnvelope {
+                        sender_public_key: signed.sender_public_key,
+                        payload,
+                    })
+                }
                 Err(e) => {
                     println!("[SEALED-BOX] Failed to deserialize verified payload: {e}");
                     continue;
@@ -515,26 +525,13 @@ impl GossipEnvelope {
 
         None
     }
-
-    /// Check if this envelope might be for us (quick hint check)
-    pub fn might_be_for_us(&self, recipient_public_key: &str) -> bool {
-        let our_hint = calculate_recipient_hint(recipient_public_key);
-        self.sealed_boxes
-            .iter()
-            .any(|sb| sb.recipient_hint == our_hint)
-    }
 }
 
 impl SealedBox {
-    /// Encrypt plaintext bytes for a specific recipient.
-    ///
-    /// The plaintext is padded with trailing spaces to a size bucket so
-    /// ciphertext length doesn't reveal content length - callers must pass
-    /// whitespace-tolerant plaintext (JSON).
+    /// Encrypt plaintext bytes for a specific recipient (used to wrap the
+    /// 32-byte content key, so all boxes are the same size by construction -
+    /// no padding needed).
     pub fn seal_bytes(plaintext: &[u8], recipient_public_key: &str) -> Result<Self, String> {
-        let mut padded = plaintext.to_vec();
-        padded.resize(padded_len(padded.len()), b' ');
-
         // Decode recipient's public key
         let recipient_pub_bytes = general_purpose::STANDARD
             .decode(recipient_public_key)
@@ -575,22 +572,17 @@ impl SealedBox {
         let nonce = XNonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
-            .encrypt(nonce, padded.as_slice())
+            .encrypt(nonce, plaintext)
             .map_err(|_| "Encryption failed")?;
-
-        // Calculate recipient hint (first 8 bytes of public key, hex encoded)
-        let recipient_hint = calculate_recipient_hint(recipient_public_key);
 
         Ok(SealedBox {
             ephemeral_pubkey: general_purpose::STANDARD.encode(ephemeral_public.as_bytes()),
-            recipient_hint,
             nonce: general_purpose::STANDARD.encode(nonce_bytes),
             ciphertext: general_purpose::STANDARD.encode(ciphertext),
         })
     }
 
-    /// Decrypt this sealed box to raw plaintext bytes (padded; callers parse
-    /// JSON, which ignores the trailing whitespace padding)
+    /// Decrypt this sealed box to raw plaintext bytes
     pub fn decrypt_bytes(&self, recipient_private_key: &str) -> Result<Vec<u8>, String> {
         // Decode ephemeral public key
         let ephemeral_pub_bytes = general_purpose::STANDARD
@@ -655,55 +647,6 @@ fn generate_message_id() -> String {
     hex::encode(id)
 }
 
-/// Calculate recipient hint from public key (first 8 bytes, hex encoded)
-fn calculate_recipient_hint(public_key: &str) -> String {
-    // Decode the base64 public key
-    if let Ok(bytes) = general_purpose::STANDARD.decode(public_key) {
-        if bytes.len() >= 8 {
-            return hex::encode(&bytes[0..8]);
-        }
-    }
-    // Fallback: hash the key and use first 8 bytes
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(public_key.as_bytes());
-    let hash = hasher.finalize();
-    hex::encode(&hash[0..8])
-}
-
-/// Create sealed boxes for multiple recipients.
-/// The payload is serialized and signed ONCE (the signature binds the envelope
-/// metadata), then the same signed plaintext is sealed per recipient.
-fn create_sealed_boxes_for_recipients(
-    payload: &ContentPayload,
-    recipient_public_keys: &[String],
-    message_id: &str,
-    timestamp: i64,
-    sender_public_key: &str,
-    sender_signing_private_key: &str,
-) -> Result<Vec<SealedBox>, String> {
-    let payload_json = serde_json::to_string(payload)
-        .map_err(|e| format!("Failed to serialize payload: {}", e))?;
-
-    let context = signing_context(message_id, timestamp, sender_public_key, &payload_json);
-    let signature = Database::sign_message(&context, sender_signing_private_key)
-        .map_err(|e| format!("Failed to sign payload: {}", e))?;
-
-    let signed = SignedPlaintext {
-        payload_json,
-        signature,
-    };
-    let plaintext = serde_json::to_string(&signed)
-        .map_err(|e| format!("Failed to serialize signed payload: {}", e))?;
-
-    let mut boxes = Vec::new();
-    for recipient_key in recipient_public_keys {
-        boxes.push(SealedBox::seal_bytes(plaintext.as_bytes(), recipient_key)?);
-    }
-
-    Ok(boxes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,21 +682,20 @@ mod tests {
     fn test_seal_bytes_roundtrip() {
         let (pub_key, priv_key) = x25519_keypair();
 
-        let plaintext = br#"{"hello":"encrypted world"}"#;
-        let sealed = SealedBox::seal_bytes(plaintext, &pub_key).unwrap();
+        let plaintext = [42u8; 32];
+        let sealed = SealedBox::seal_bytes(&plaintext, &pub_key).unwrap();
         let decrypted = sealed.decrypt_bytes(&priv_key).unwrap();
+        assert_eq!(decrypted, plaintext);
 
-        // Decrypted output is the plaintext plus whitespace padding
-        assert!(decrypted.starts_with(plaintext));
-        assert!(decrypted[plaintext.len()..].iter().all(|&b| b == b' '));
-        assert_eq!(decrypted.len(), 256); // smallest bucket
+        // Wrong key fails the AEAD tag check
+        let (_, other_priv) = x25519_keypair();
+        assert!(sealed.decrypt_bytes(&other_priv).is_err());
     }
 
     #[test]
     fn test_envelope_with_multiple_recipients() {
         let (sender_pub, sender_priv) = ed25519_keypair();
 
-        // Generate 3 recipient keypairs
         let recipients: Vec<(String, String)> = (0..3).map(|_| x25519_keypair()).collect();
         let recipient_pub_keys: Vec<String> = recipients.iter().map(|(p, _)| p.clone()).collect();
 
@@ -768,12 +710,13 @@ mod tests {
         )
         .unwrap();
 
-        // Each recipient should be able to decrypt
-        for (pub_key, priv_key) in &recipients {
-            let decrypted = envelope.try_decrypt(pub_key, priv_key);
-            assert!(decrypted.is_some());
+        // Each recipient should be able to decrypt, and the authenticated
+        // sender comes back with the payload
+        for (_, priv_key) in &recipients {
+            let decrypted = envelope.try_decrypt(priv_key).expect("should decrypt");
+            assert_eq!(decrypted.sender_public_key, sender_pub);
 
-            match decrypted.unwrap() {
+            match decrypted.payload {
                 ContentPayload::Post { content, .. } => {
                     assert_eq!(content, "Secret message for friends only");
                 }
@@ -782,15 +725,53 @@ mod tests {
         }
 
         // A non-recipient should NOT be able to decrypt
-        let (outsider_pub, outsider_priv) = x25519_keypair();
-        let decrypted = envelope.try_decrypt(&outsider_pub, &outsider_priv);
-        assert!(decrypted.is_none());
+        let (_, outsider_priv) = x25519_keypair();
+        assert!(envelope.try_decrypt(&outsider_priv).is_none());
+    }
+
+    #[test]
+    fn test_no_recipient_metadata_on_wire() {
+        let (sender_pub, sender_priv) = ed25519_keypair();
+        let recipients: Vec<String> = (0..3).map(|_| x25519_keypair().0).collect();
+
+        let envelope = GossipEnvelope::new_post(
+            &sender_pub,
+            "p",
+            "content",
+            "n",
+            &[],
+            &recipients,
+            &sender_priv,
+        )
+        .unwrap();
+
+        // The serialized wire format must not contain the sender key or any
+        // recipient key material
+        let wire = serde_json::to_string(&envelope).unwrap();
+        assert!(!wire.contains(&sender_pub[..16]));
+        for r in &recipients {
+            assert!(!wire.contains(&r[..16]));
+        }
+
+        // Box count is padded to a power of two: 3 recipients -> 4 boxes,
+        // indistinguishable from an envelope with 4 real recipients
+        assert_eq!(envelope.sealed_boxes.len(), 4);
+    }
+
+    #[test]
+    fn test_box_count_hides_recipient_count() {
+        assert_eq!(padded_box_count(1), 2);
+        assert_eq!(padded_box_count(2), 2);
+        assert_eq!(padded_box_count(3), 4);
+        assert_eq!(padded_box_count(4), 4);
+        assert_eq!(padded_box_count(5), 8);
+        assert_eq!(padded_box_count(9), 16);
     }
 
     #[test]
     fn test_forged_sender_is_rejected() {
-        // Attacker signs with their own key but stamps the victim's public key
-        // on the envelope. Recipients must reject it.
+        // Attacker signs with their own key but claims the victim's public
+        // key as sender. Recipients must reject it.
         let (_attacker_pub, attacker_priv) = ed25519_keypair();
         let (victim_pub, _) = ed25519_keypair();
         let (recipient_pub, recipient_priv) = x25519_keypair();
@@ -801,15 +782,13 @@ mod tests {
             "I definitely wrote this - victim",
             "node",
             &[],
-            &[recipient_pub.clone()],
+            &[recipient_pub],
             &attacker_priv, // actually signed by the attacker
         )
         .unwrap();
 
         assert!(
-            forged
-                .try_decrypt(&recipient_pub, &recipient_priv)
-                .is_none(),
+            forged.try_decrypt(&recipient_priv).is_none(),
             "envelope claiming another user's key must be rejected"
         );
     }
@@ -825,37 +804,33 @@ mod tests {
             "content",
             "node-1",
             &[],
-            &[recipient_pub.clone()],
+            &[recipient_pub],
             &sender_priv,
         )
         .unwrap();
 
         // Sanity: unmodified envelope decrypts
-        assert!(envelope
-            .try_decrypt(&recipient_pub, &recipient_priv)
-            .is_some());
+        assert!(envelope.try_decrypt(&recipient_priv).is_some());
 
         // Tampered message_id must be rejected (signature binds it)
         let mut tampered = envelope.clone();
         tampered.message_id = generate_message_id();
-        assert!(tampered
-            .try_decrypt(&recipient_pub, &recipient_priv)
-            .is_none());
+        assert!(tampered.try_decrypt(&recipient_priv).is_none());
 
         // Tampered timestamp must be rejected
         let mut tampered = envelope.clone();
         tampered.timestamp += 3600;
-        assert!(tampered
-            .try_decrypt(&recipient_pub, &recipient_priv)
-            .is_none());
+        assert!(tampered.try_decrypt(&recipient_priv).is_none());
 
-        // Swapped sender key must be rejected
-        let (other_pub, _) = ed25519_keypair();
+        // Tampered payload ciphertext must be rejected (AEAD tag check)
         let mut tampered = envelope.clone();
-        tampered.sender_public_key = other_pub;
-        assert!(tampered
-            .try_decrypt(&recipient_pub, &recipient_priv)
-            .is_none());
+        let mut blob = general_purpose::STANDARD
+            .decode(&tampered.encrypted_payload)
+            .unwrap();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+        tampered.encrypted_payload = general_purpose::STANDARD.encode(blob);
+        assert!(tampered.try_decrypt(&recipient_priv).is_none());
     }
 
     #[test]
@@ -874,12 +849,14 @@ mod tests {
         )
         .unwrap();
 
-        match envelope.try_decrypt(&own_enc_pub, &own_enc_priv) {
-            Some(ContentPayload::DeviceSync {
+        let decrypted = envelope.try_decrypt(&own_enc_priv).expect("should decrypt");
+        assert_eq!(decrypted.sender_public_key, sender_pub);
+        match decrypted.payload {
+            ContentPayload::DeviceSync {
                 device_id,
                 data_json,
                 ..
-            }) => {
+            } => {
                 assert_eq!(device_id, "device-abc");
                 assert_eq!(data_json, data);
             }
@@ -887,8 +864,45 @@ mod tests {
         }
 
         // Another user cannot read it
-        let (other_pub, other_priv) = x25519_keypair();
-        assert!(envelope.try_decrypt(&other_pub, &other_priv).is_none());
+        let (_, other_priv) = x25519_keypair();
+        assert!(envelope.try_decrypt(&other_priv).is_none());
+    }
+
+    #[test]
+    fn test_presence_envelope_roundtrip() {
+        let (sender_pub, sender_priv) = ed25519_keypair();
+        let (friend_pub, friend_priv) = x25519_keypair();
+        let (own_pub, own_priv) = x25519_keypair();
+
+        let payload = ContentPayload::Presence {
+            device_id: "device-1".to_string(),
+            node_addr_json: r#"{"id":"fake"}"#.to_string(),
+            encryption_public_key: Some(own_pub.clone()),
+            display_name: "Alice".to_string(),
+            bio: "hi".to_string(),
+            profile_picture: String::new(),
+            profile_signature: None,
+            sent_at: chrono::Utc::now().timestamp(),
+        };
+        let envelope =
+            GossipEnvelope::seal(&payload, &[friend_pub, own_pub], &sender_pub, &sender_priv)
+                .unwrap();
+
+        // Both the friend and our own device can read it
+        for priv_key in [&friend_priv, &own_priv] {
+            let decrypted = envelope.try_decrypt(priv_key).expect("should decrypt");
+            assert_eq!(decrypted.sender_public_key, sender_pub);
+            match decrypted.payload {
+                ContentPayload::Presence { display_name, .. } => {
+                    assert_eq!(display_name, "Alice");
+                }
+                _ => panic!("Expected Presence payload"),
+            }
+        }
+
+        // A stranger cannot
+        let (_, stranger_priv) = x25519_keypair();
+        assert!(envelope.try_decrypt(&stranger_priv).is_none());
     }
 
     #[test]
@@ -909,7 +923,7 @@ mod tests {
         let (recipient_pub, recipient_priv) = x25519_keypair();
 
         // Two posts with different content lengths that land in the same
-        // padding bucket must produce identically sized ciphertexts.
+        // padding bucket must produce identically sized wire payloads.
         let make = |content: String| {
             GossipEnvelope::new_post(
                 &sender_pub,
@@ -926,14 +940,14 @@ mod tests {
         let long = make("b".repeat(600));
 
         assert_eq!(
-            short.sealed_boxes[0].ciphertext.len(),
-            long.sealed_boxes[0].ciphertext.len(),
+            short.encrypted_payload.len(),
+            long.encrypted_payload.len(),
             "same-bucket payloads must be indistinguishable by size"
         );
 
         // Padded payloads must still decrypt cleanly
-        match short.try_decrypt(&recipient_pub, &recipient_priv) {
-            Some(ContentPayload::Post { content, .. }) => {
+        match short.try_decrypt(&recipient_priv).unwrap().payload {
+            ContentPayload::Post { content, .. } => {
                 assert_eq!(content, "a".repeat(500));
             }
             _ => panic!("Wrong payload type"),
@@ -952,7 +966,7 @@ mod tests {
             "content",
             "node-1",
             &[],
-            &[pub_key.clone()],
+            &[pub_key],
             &sender_priv,
         )
         .unwrap();
@@ -963,7 +977,7 @@ mod tests {
         assert!(envelope.timestamp <= after && envelope.timestamp > before - 3600);
 
         // ...while the precise time is inside the ciphertext.
-        match envelope.try_decrypt(&pub_key, &priv_key).unwrap() {
+        match envelope.try_decrypt(&priv_key).unwrap().payload {
             ContentPayload::Post { sent_at, .. } => {
                 assert!((before..=after).contains(&sent_at));
             }

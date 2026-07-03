@@ -399,3 +399,25 @@ impl Database {
         ))
     }
 }
+
+impl Database {
+    /// Record a sealed-envelope message_id for replay protection.
+    /// Returns Ok(true) the first time an id is seen, Ok(false) on a replay.
+    pub fn mark_envelope_seen(&self, message_id: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO seen_envelopes (message_id, seen_at) VALUES (?1, ?2)",
+            params![message_id, now],
+        )?;
+        if inserted > 0 {
+            // Opportunistic prune: ids older than the 7-day envelope staleness
+            // window can never replay successfully, so they're dead weight
+            let _ = conn.execute(
+                "DELETE FROM seen_envelopes WHERE seen_at < ?1",
+                params![now - 8 * 24 * 3600],
+            );
+        }
+        Ok(inserted > 0)
+    }
+}

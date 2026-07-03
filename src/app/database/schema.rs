@@ -30,6 +30,20 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
+    // Replay protection for sealed envelopes: persistently tracks processed
+    // message_ids so recorded envelopes can't be replayed across restarts
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS seen_envelopes (
+            message_id TEXT PRIMARY KEY,
+            seen_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_seen_envelopes_seen_at ON seen_envelopes(seen_at)",
+        [],
+    )?;
+
     // Create posts table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS posts (
