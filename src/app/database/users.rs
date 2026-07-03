@@ -615,4 +615,19 @@ impl Database {
             |row| row.get(0),
         )
     }
+
+    /// Get user's Ed25519 signing private key
+    /// SECURITY: This should ONLY be called for the current user, never for other users
+    /// Used to sign sealed-envelope payloads and device sync requests
+    pub fn get_user_signing_private_key(
+        &self,
+        user_id: SqliteUuid,
+    ) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT private_key FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+    }
 }

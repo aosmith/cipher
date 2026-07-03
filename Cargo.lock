@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "cipher-social"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "argon2",

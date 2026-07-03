@@ -322,12 +322,12 @@ pub async fn iroh_publish_post(
         .ok_or("No encryption public key found")?;
     println!("[PUBLISH-POST] Step 3: DONE - Got encryption public key");
 
-    println!("[PUBLISH-POST] Step 4: Getting encryption private key from DB...");
-    let our_encryption_private_key = db
-        .get_user_encryption_private_key(network.user_id)
-        .map_err(|e| format!("Failed to get encryption private key: {}", e))?
-        .ok_or("No encryption private key found")?;
-    println!("[PUBLISH-POST] Step 4: DONE - Got encryption private key");
+    println!("[PUBLISH-POST] Step 4: Getting signing private key from DB...");
+    let our_signing_private_key = db
+        .get_user_signing_private_key(network.user_id)
+        .map_err(|e| format!("Failed to get signing private key: {}", e))?
+        .ok_or("No signing private key found")?;
+    println!("[PUBLISH-POST] Step 4: DONE - Got signing private key");
 
     // Get friend encryption public keys
     println!("[PUBLISH-POST] Step 5: Getting friend encryption keys...");
@@ -482,7 +482,7 @@ pub async fn iroh_publish_post(
         &node_id,
         &blob_refs,
         &friend_encryption_keys,
-        &our_encryption_private_key,
+        &our_signing_private_key,
     )
     .map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
     println!("[PUBLISH-POST] Step 6 (PHASE 2): DONE - Envelope created");
@@ -544,11 +544,12 @@ pub async fn iroh_publish_post_comment(
         return Ok("Comment saved locally (no friends to broadcast to)".to_string());
     }
 
-    // Get our encryption keys for sealed envelope
-    let our_encryption_private_key = db
-        .get_user_encryption_private_key(network.user_id)
-        .map_err(|e| format!("Failed to get encryption private key: {}", e))?
-        .ok_or("No encryption private key found")?;
+    // Get our signing key: sealed envelopes are signed so recipients can
+    // verify the sender (boxes are encrypted with ephemeral keys, not ours)
+    let our_signing_private_key = db
+        .get_user_signing_private_key(network.user_id)
+        .map_err(|e| format!("Failed to get signing private key: {}", e))?
+        .ok_or("No signing private key found")?;
 
     // Create sealed envelope
     // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
@@ -562,7 +563,7 @@ pub async fn iroh_publish_post_comment(
             .map(|id| id.to_string())
             .as_deref(),
         &friend_encryption_keys,
-        &our_encryption_private_key,
+        &our_signing_private_key,
     )
     .map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
 
@@ -612,11 +613,12 @@ pub async fn iroh_publish_post_reaction(
         return Ok("Reaction saved locally (no friends to broadcast to)".to_string());
     }
 
-    // Get our encryption keys for sealed envelope
-    let our_encryption_private_key = db
-        .get_user_encryption_private_key(network.user_id)
-        .map_err(|e| format!("Failed to get encryption private key: {}", e))?
-        .ok_or("No encryption private key found")?;
+    // Get our signing key: sealed envelopes are signed so recipients can
+    // verify the sender (boxes are encrypted with ephemeral keys, not ours)
+    let our_signing_private_key = db
+        .get_user_signing_private_key(network.user_id)
+        .map_err(|e| format!("Failed to get signing private key: {}", e))?
+        .ok_or("No signing private key found")?;
 
     // Create sealed envelope
     // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
@@ -626,7 +628,7 @@ pub async fn iroh_publish_post_reaction(
         &emoji,
         &action,
         &friend_encryption_keys,
-        &our_encryption_private_key,
+        &our_signing_private_key,
     )
     .map_err(|e| format!("Failed to create sealed envelope: {}", e))?;
 

@@ -52,11 +52,19 @@ pub enum P2PMessage {
         /// Signed with user's Ed25519 private key, verifiable with public_key
         profile_signature: Option<String>,
     },
-    /// Device sync request (same user, different device)
+    /// Device sync request (same user, different device).
+    /// SECURITY: signed with the user's Ed25519 key - without the signature,
+    /// anyone could broadcast a request claiming our public key and trigger a
+    /// sync response. Fields default for decode-compat with old clients, whose
+    /// unsigned requests then fail verification (fail closed).
     DeviceSyncRequest {
         public_key: String,
         device_id: String,
         last_sync_timestamp: i64,
+        #[serde(default)]
+        timestamp: i64,
+        #[serde(default)]
+        signature: String,
     },
     /// Device sync response with data
     DeviceSyncResponse {
@@ -193,6 +201,20 @@ impl PeerRetryState {
         self.attempt_count = 0;
         self.last_attempt_time = std::time::Instant::now();
     }
+}
+
+/// Canonical string a DeviceSyncRequest signature covers - binds all request
+/// fields so none can be altered without invalidating the signature
+fn sync_request_context(
+    public_key: &str,
+    device_id: &str,
+    last_sync_timestamp: i64,
+    timestamp: i64,
+) -> String {
+    format!(
+        "syncreq_v1|{}|{}|{}|{}",
+        public_key, device_id, last_sync_timestamp, timestamp
+    )
 }
 
 /// Main Iroh network coordinator
@@ -2074,22 +2096,21 @@ impl IrohNetwork {
                     );
 
                     // Send device sync request via global mesh
-                    let sync_request = P2PMessage::DeviceSyncRequest {
-                        public_key: self.public_key.clone(),
-                        device_id: self
-                            .device_id
-                            .clone()
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        last_sync_timestamp: 0, // Get all data for now
-                    };
-
-                    if let Err(e) = self.publish_message(CONTENT_TOPIC, sync_request).await {
-                        println!("[IROH] Failed to send device sync request: {}", e);
-                    } else {
-                        println!(
-                            "[IROH] Sent device sync request to same-user device {}",
-                            device_id
-                        );
+                    match self.build_signed_sync_request() {
+                        Some(sync_request) => {
+                            if let Err(e) = self.publish_message(CONTENT_TOPIC, sync_request).await
+                            {
+                                println!("[IROH] Failed to send device sync request: {}", e);
+                            } else {
+                                println!(
+                                    "[IROH] Sent device sync request to same-user device {}",
+                                    device_id
+                                );
+                            }
+                        }
+                        None => println!(
+                            "[IROH] Cannot sign device sync request (no signing key) - skipping"
+                        ),
                     }
                 }
             }
@@ -2097,14 +2118,42 @@ impl IrohNetwork {
             P2PMessage::DeviceSyncRequest {
                 public_key,
                 device_id,
-                last_sync_timestamp: _,
+                last_sync_timestamp,
+                timestamp,
+                signature,
             } => {
                 // Check if this is from another device with same user
                 if public_key == self.public_key
                     && device_id != self.device_id.clone().unwrap_or_default()
                 {
+                    // AUTHENTICITY: public keys are broadcast in Presence, so a
+                    // matching public_key proves nothing - anyone could send
+                    // this request. Only our own devices hold the signing key.
+                    let context = sync_request_context(
+                        &public_key,
+                        &device_id,
+                        last_sync_timestamp,
+                        timestamp,
+                    );
+                    if !Database::verify_signature(&context, &signature, &self.public_key) {
+                        println!(
+                            "[IROH] Rejecting device sync request from {}: invalid signature",
+                            device_id
+                        );
+                        return;
+                    }
+                    // Freshness window limits replaying a captured request
+                    let now = chrono::Utc::now().timestamp();
+                    if (now - timestamp).abs() > 300 {
+                        println!(
+                            "[IROH] Rejecting device sync request from {}: stale timestamp",
+                            device_id
+                        );
+                        return;
+                    }
+
                     println!(
-                        "[IROH] Received device sync request from device {}",
+                        "[IROH] Received verified device sync request from device {}",
                         device_id
                     );
 
@@ -2122,32 +2171,61 @@ impl IrohNetwork {
                                 sync_data.friends.len()
                             );
 
-                            // Serialize sync data
-                            match serde_json::to_string(&sync_data) {
-                                Ok(data_json) => {
-                                    let response = P2PMessage::DeviceSyncResponse {
-                                        public_key: self.public_key.clone(),
-                                        device_id: our_device_id,
-                                        data_json,
-                                        timestamp: chrono::Utc::now().timestamp(),
-                                    };
+                            // Seal the sync data to our OWN encryption key: all
+                            // devices of this user share the keypair, so only
+                            // they can read it. The old plaintext response
+                            // broadcast the entire database to the whole mesh.
+                            let Some(our_encryption_public_key) =
+                                self.get_user_encryption_public_key()
+                            else {
+                                println!("[IROH] No encryption public key - cannot send sync");
+                                return;
+                            };
+                            let Some(our_signing_private_key) = self.get_user_signing_private_key()
+                            else {
+                                println!("[IROH] No signing private key - cannot send sync");
+                                return;
+                            };
 
-                                    // Publish to global mesh - target device will filter by public_key
-                                    if let Err(e) =
-                                        self.publish_message(CONTENT_TOPIC, response).await
-                                    {
-                                        println!(
-                                            "[IROH] Failed to send device sync response: {}",
-                                            e
-                                        );
-                                    } else {
-                                        println!(
-                                            "[IROH] Sent device sync response to device {}",
-                                            device_id
-                                        );
-                                    }
+                            let data_json = match serde_json::to_string(&sync_data) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    println!("[IROH] Failed to serialize sync data: {}", e);
+                                    return;
                                 }
-                                Err(e) => println!("[IROH] Failed to serialize sync data: {}", e),
+                            };
+
+                            match super::crypto::GossipEnvelope::new_device_sync(
+                                &self.public_key,
+                                &our_device_id,
+                                &data_json,
+                                &our_encryption_public_key,
+                                &our_signing_private_key,
+                            ) {
+                                Ok(envelope) => match serde_json::to_string(&envelope) {
+                                    Ok(envelope_json) => {
+                                        let response = P2PMessage::SealedEnvelope { envelope_json };
+                                        if let Err(e) =
+                                            self.publish_message(CONTENT_TOPIC, response).await
+                                        {
+                                            println!(
+                                                "[IROH] Failed to send device sync response: {}",
+                                                e
+                                            );
+                                        } else {
+                                            println!(
+                                                "[IROH] Sent encrypted device sync response to device {}",
+                                                device_id
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("[IROH] Failed to serialize envelope: {}", e)
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("[IROH] Failed to create sync envelope: {}", e)
+                                }
                             }
                         }
                         Err(e) => println!("[IROH] Failed to get sync data: {}", e),
@@ -2155,53 +2233,17 @@ impl IrohNetwork {
                 }
             }
 
-            P2PMessage::DeviceSyncResponse {
-                public_key,
-                device_id,
-                data_json,
-                timestamp: _,
-            } => {
-                // Check if this is from another device with same user
-                if public_key == self.public_key
-                    && device_id != self.device_id.clone().unwrap_or_default()
-                {
-                    println!(
-                        "[IROH] Received device sync response from device {}",
-                        device_id
-                    );
-
-                    // Deserialize sync data
-                    match serde_json::from_str::<crate::app::database::sync::SyncData>(&data_json) {
-                        Ok(sync_data) => {
-                            println!(
-                                "[IROH] Applying sync data: {} posts, {} messages, {} friends",
-                                sync_data.posts.len(),
-                                sync_data.messages.len(),
-                                sync_data.friends.len()
-                            );
-
-                            // Apply sync data to database
-                            match self.db.apply_sync_data(&sync_data) {
-                                Ok(()) => {
-                                    println!("[IROH] Successfully applied device sync data from device {}", device_id);
-
-                                    // Update sync timestamps
-                                    if let Some(our_device_id) = &self.device_id {
-                                        let _ = self.db.update_all_sync_timestamps(our_device_id);
-                                    }
-
-                                    // Emit event to UI
-                                    let _ =
-                                        self.app_handle.emit("device-sync-completed", device_id);
-                                }
-                                Err(e) => {
-                                    println!("[IROH] Failed to apply device sync data: {}", e)
-                                }
-                            }
-                        }
-                        Err(e) => println!("[IROH] Failed to deserialize sync data: {}", e),
-                    }
-                }
+            P2PMessage::DeviceSyncResponse { device_id, .. } => {
+                // Plaintext sync responses are no longer accepted: they were
+                // unauthenticated (anyone could inject posts/messages/friends
+                // into our database by stamping our public key on one) and
+                // broadcast the entire database readable to the whole mesh.
+                // Sync now travels as ContentPayload::DeviceSync inside a
+                // signed SealedEnvelope. Old clients may still send these.
+                println!(
+                    "[IROH] Ignoring plaintext DeviceSyncResponse from device {} (deprecated)",
+                    device_id
+                );
             }
 
             P2PMessage::DirectMessage {
@@ -2812,6 +2854,67 @@ impl IrohNetwork {
                                     }),
                                 );
                                 println!("[IROH] ✓ Emitted p2p-post-reaction event");
+                            }
+                            super::crypto::ContentPayload::DeviceSync {
+                                device_id,
+                                data_json,
+                                ..
+                            } => {
+                                // try_decrypt already verified the payload is
+                                // signed by envelope.sender_public_key; only our
+                                // own devices (same recovery phrase) can both
+                                // sign as us and encrypt to our key. Guard
+                                // anyway: sync must come from our own identity.
+                                if envelope.sender_public_key != self.public_key {
+                                    println!(
+                                        "[IROH-SYNC] Rejecting DeviceSync from foreign sender"
+                                    );
+                                    return;
+                                }
+                                if device_id == self.device_id.clone().unwrap_or_default() {
+                                    // Our own broadcast echoed back
+                                    return;
+                                }
+
+                                println!(
+                                    "[IROH-SYNC] Received encrypted device sync from device {}",
+                                    device_id
+                                );
+                                match serde_json::from_str::<crate::app::database::sync::SyncData>(
+                                    &data_json,
+                                ) {
+                                    Ok(sync_data) => {
+                                        println!(
+                                            "[IROH-SYNC] Applying sync data: {} posts, {} messages, {} friends",
+                                            sync_data.posts.len(),
+                                            sync_data.messages.len(),
+                                            sync_data.friends.len()
+                                        );
+                                        match self.db.apply_sync_data(&sync_data) {
+                                            Ok(()) => {
+                                                if let Some(our_device_id) = &self.device_id {
+                                                    let _ = self
+                                                        .db
+                                                        .update_all_sync_timestamps(our_device_id);
+                                                }
+                                                let _ = self
+                                                    .app_handle
+                                                    .emit("device-sync-completed", device_id);
+                                                println!(
+                                                    "[IROH-SYNC] Applied encrypted device sync"
+                                                );
+                                            }
+                                            Err(e) => println!(
+                                                "[IROH-SYNC] Failed to apply sync data: {}",
+                                                e
+                                            ),
+                                        }
+                                    }
+                                    Err(e) => println!(
+                                        "[IROH-SYNC] Failed to deserialize sync data: {}",
+                                        e
+                                    ),
+                                }
                             }
                             _ => {
                                 println!("[IROH] Received other sealed content type");
@@ -3780,6 +3883,58 @@ impl IrohNetwork {
     }
 
     /// Get current user's encryption private key from database
+    /// Get our Ed25519 signing private key (used to sign sealed-envelope
+    /// payloads and device sync requests)
+    fn get_user_signing_private_key(&self) -> Option<String> {
+        // Use try_lock to avoid blocking if network handler holds the lock
+        let conn = match self.db.conn.try_lock() {
+            Ok(c) => c,
+            Err(_) => {
+                println!("[DB] get_user_signing_private_key: lock busy, retrying...");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                match self.db.conn.try_lock() {
+                    Ok(c) => c,
+                    Err(_) => return None,
+                }
+            }
+        };
+        conn.query_row(
+            "SELECT private_key FROM users WHERE id = ?1",
+            rusqlite::params![self.user_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    /// Build a signed DeviceSyncRequest. Returns None if we have no signing
+    /// key - an unsigned request would be rejected by our other devices.
+    fn build_signed_sync_request(&self) -> Option<P2PMessage> {
+        let signing_key = self.get_user_signing_private_key()?;
+        let device_id = self
+            .device_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let last_sync_timestamp = 0; // Get all data for now
+        let timestamp = chrono::Utc::now().timestamp();
+        let context =
+            sync_request_context(&self.public_key, &device_id, last_sync_timestamp, timestamp);
+        let signature = match Database::sign_message(&context, &signing_key) {
+            Ok(sig) => sig,
+            Err(e) => {
+                println!("[IROH-SYNC] Failed to sign sync request: {}", e);
+                return None;
+            }
+        };
+        Some(P2PMessage::DeviceSyncRequest {
+            public_key: self.public_key.clone(),
+            device_id,
+            last_sync_timestamp,
+            timestamp,
+            signature,
+        })
+    }
+
     fn get_user_encryption_private_key(&self) -> Option<String> {
         // Use try_lock to avoid blocking if network handler holds the lock
         let conn = match self.db.conn.try_lock() {
@@ -4164,13 +4319,9 @@ impl IrohNetwork {
     async fn request_device_sync(&self) {
         println!("[IROH-SYNC] Requesting device sync after recovery...");
 
-        let sync_request = P2PMessage::DeviceSyncRequest {
-            public_key: self.public_key.clone(),
-            device_id: self
-                .device_id
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-            last_sync_timestamp: 0, // Get all data
+        let Some(sync_request) = self.build_signed_sync_request() else {
+            println!("[IROH-SYNC] Cannot sign device sync request (no signing key) - skipping");
+            return;
         };
 
         if let Err(e) = self.publish_message(CONTENT_TOPIC, sync_request).await {

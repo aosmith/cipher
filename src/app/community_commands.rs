@@ -425,11 +425,10 @@ pub async fn publish_community_post(
         .map_err(|e| format!("Failed to get user: {}", e))?
         .ok_or("User not found")?;
 
-    // CRITICAL: Use signing public key (Ed25519) for sender identification, NOT encryption key (X25519)
+    // CRITICAL: Use the Ed25519 signing keypair for sender identification AND
+    // payload signing - the envelope's sealed boxes verify against it
     let sender_pub_key = user.public_key.ok_or("User missing signing public key")?;
-    let sender_priv_key = user
-        .encryption_private_key
-        .ok_or("User missing encryption private key")?;
+    let sender_priv_key = user.private_key.ok_or("User missing signing private key")?;
 
     // Check community_posts for show_in_main_feed setting
     let show_in_main_feed = {
@@ -523,10 +522,11 @@ pub async fn announce_community_member(
         return Ok(()); // No one to notify
     }
 
-    // Use new member's keys for encryption (they're announcing themselves)
+    // Use the new member's signing key (they're announcing themselves, so the
+    // envelope payload is signed with their key)
     let sender_priv_key = new_member
-        .encryption_private_key
-        .ok_or("New member missing encryption private key")?;
+        .private_key
+        .ok_or("New member missing signing private key")?;
 
     // Create announcement envelope
     // sender_public_key = who sent this envelope (the new member)

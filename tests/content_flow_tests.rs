@@ -576,8 +576,24 @@ mod tests {
         )
     }
 
+    /// Helper to generate a test Ed25519 signing keypair (sender identity)
+    fn generate_signing_keypair() -> (String, String) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let mut secret_bytes = [0u8; 32];
+        rng.fill(&mut secret_bytes);
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret_bytes);
+
+        (
+            general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes()),
+            general_purpose::STANDARD.encode(secret_bytes),
+        )
+    }
+
     #[test]
     fn test_sealed_box_post_encrypt_decrypt() {
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (pub_key, priv_key) = generate_test_keypair();
 
         let payload = RealContentPayload::Post {
@@ -588,10 +604,25 @@ mod tests {
             sent_at: 1_700_000_000,
         };
 
-        let sealed =
-            SealedBox::new(&payload, &pub_key, &priv_key).expect("Should create sealed box");
+        // Payload-level sealing goes through the envelope so the plaintext
+        // carries the sender signature recipients verify
+        let RealContentPayload::Post { content, .. } = &payload else {
+            unreachable!()
+        };
+        let envelope = GossipEnvelope::new_post(
+            &sender_pub,
+            "test-post-id",
+            content,
+            "test-node-id",
+            &[],
+            &[pub_key.clone()],
+            &sender_priv,
+        )
+        .expect("Should create envelope");
 
-        let decrypted = sealed.decrypt(&priv_key).expect("Should decrypt");
+        let decrypted = envelope
+            .try_decrypt(&pub_key, &priv_key)
+            .expect("Should decrypt");
 
         match decrypted {
             RealContentPayload::Post { content, .. } => {
@@ -603,23 +634,26 @@ mod tests {
 
     #[test]
     fn test_sealed_box_comment_encrypt_decrypt() {
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (pub_key, priv_key) = generate_test_keypair();
 
         let comment_id = Uuid::new_v4().to_string();
         let post_id = Uuid::new_v4().to_string();
 
-        let payload = RealContentPayload::PostComment {
-            comment_id: comment_id.clone(),
-            post_id: post_id.clone(),
-            content: "Great post!".to_string(),
-            parent_comment_id: None,
-            sent_at: 1_700_000_000,
-        };
+        let envelope = GossipEnvelope::new_post_comment(
+            &sender_pub,
+            &comment_id,
+            &post_id,
+            "Great post!",
+            None,
+            &[pub_key.clone()],
+            &sender_priv,
+        )
+        .expect("Should create envelope");
 
-        let sealed =
-            SealedBox::new(&payload, &pub_key, &priv_key).expect("Should create sealed box");
-
-        let decrypted = sealed.decrypt(&priv_key).expect("Should decrypt");
+        let decrypted = envelope
+            .try_decrypt(&pub_key, &priv_key)
+            .expect("Should decrypt");
 
         match decrypted {
             RealContentPayload::PostComment {
@@ -638,21 +672,24 @@ mod tests {
 
     #[test]
     fn test_sealed_box_reaction_encrypt_decrypt() {
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (pub_key, priv_key) = generate_test_keypair();
 
         let post_id = Uuid::new_v4().to_string();
 
-        let payload = RealContentPayload::PostReaction {
-            post_id: post_id.clone(),
-            emoji: "👍".to_string(),
-            action: "add".to_string(),
-            sent_at: 1_700_000_000,
-        };
+        let envelope = GossipEnvelope::new_post_reaction(
+            &sender_pub,
+            &post_id,
+            "👍",
+            "add",
+            &[pub_key.clone()],
+            &sender_priv,
+        )
+        .expect("Should create envelope");
 
-        let sealed =
-            SealedBox::new(&payload, &pub_key, &priv_key).expect("Should create sealed box");
-
-        let decrypted = sealed.decrypt(&priv_key).expect("Should decrypt");
+        let decrypted = envelope
+            .try_decrypt(&pub_key, &priv_key)
+            .expect("Should decrypt");
 
         match decrypted {
             RealContentPayload::PostReaction {
@@ -672,7 +709,7 @@ mod tests {
     #[test]
     fn test_envelope_multi_recipient_decryption() {
         // Sender keypair
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
 
         // Three recipients
         let (alice_pub, alice_priv) = generate_test_keypair();
@@ -716,7 +753,7 @@ mod tests {
 
     #[test]
     fn test_envelope_non_recipient_cannot_decrypt() {
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, _alice_priv) = generate_test_keypair();
         let (eve_pub, eve_priv) = generate_test_keypair();
 
@@ -741,7 +778,7 @@ mod tests {
 
     #[test]
     fn test_envelope_wrong_key_cannot_decrypt() {
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, _alice_priv) = generate_test_keypair();
         let (_bob_pub, bob_priv) = generate_test_keypair();
 
@@ -765,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_envelope_preserves_unicode_content() {
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, alice_priv) = generate_test_keypair();
 
         let unicode_content = "Привет! 你好! مرحبا! 🎉🌍💯";
@@ -793,7 +830,7 @@ mod tests {
 
     #[test]
     fn test_envelope_preserves_large_content() {
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, alice_priv) = generate_test_keypair();
 
         // 10KB of content
@@ -823,7 +860,7 @@ mod tests {
 
     #[test]
     fn test_envelope_comment_round_trip() {
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, alice_priv) = generate_test_keypair();
 
         let comment_id = Uuid::new_v4().to_string();
@@ -862,7 +899,7 @@ mod tests {
 
     #[test]
     fn test_envelope_reaction_round_trip() {
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, alice_priv) = generate_test_keypair();
 
         let post_id = Uuid::new_v4().to_string();
@@ -897,7 +934,7 @@ mod tests {
 
     #[test]
     fn test_envelope_reaction_remove() {
-        let (sender_pub, sender_priv) = generate_test_keypair();
+        let (sender_pub, sender_priv) = generate_signing_keypair();
         let (alice_pub, alice_priv) = generate_test_keypair();
 
         let post_id = Uuid::new_v4().to_string();
