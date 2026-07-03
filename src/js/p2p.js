@@ -679,6 +679,7 @@ const P2P = {
 
             if (health.healthy) {
                 console.log('[P2P-HEALTH] Network is healthy');
+                this.consecutiveUnhealthy = 0;
                 return true;
             }
 
@@ -686,10 +687,33 @@ const P2P = {
             console.log('[P2P-HEALTH] Network unhealthy, attempting recovery...');
 
             if (health.needs_reconnect) {
-                // Serious issue - try recovery first, then full reinit if that fails
+                // recover() reuses the existing iroh endpoint - fast, and enough
+                // for stale loops or a relay blip. But after a long mobile
+                // suspension or a WiFi<->cellular switch the endpoint's socket can
+                // be dead, and recover() returns Ok without actually reconnecting
+                // (broadcasts keep failing). It never throws, so the old code's
+                // "reinit only if recover() throws" escalation never fired and the
+                // app could loop here forever offline. Track consecutive unhealthy
+                // checks and force a full reinit (which rebuilds the endpoint) once
+                // recover() has clearly failed to restore connectivity.
+                this.consecutiveUnhealthy = (this.consecutiveUnhealthy || 0) + 1;
+                const RECOVER_ATTEMPTS_BEFORE_REINIT = 2;
+
+                if (this.consecutiveUnhealthy >= RECOVER_ATTEMPTS_BEFORE_REINIT) {
+                    console.warn(`[P2P-HEALTH] Still unhealthy after ${this.consecutiveUnhealthy} recover attempts - rebuilding endpoint via full reinit`);
+                    try {
+                        await this.initialize(this.userId, this.displayName, this.publicKey, this.deviceId, true);
+                        this.consecutiveUnhealthy = 0;
+                        return true;
+                    } catch (reinitError) {
+                        console.error('[P2P-HEALTH] Full reinit failed:', reinitError);
+                        return false;
+                    }
+                }
+
                 try {
                     await TauriAPI.invoke('iroh_recover');
-                    console.log('[P2P-HEALTH] Recovery successful');
+                    console.log('[P2P-HEALTH] Recovery attempt completed');
 
                     // Restart JS-side polling
                     this.startPeerPolling();
@@ -699,6 +723,7 @@ const P2P = {
                 } catch (recoverError) {
                     console.error('[P2P-HEALTH] Recovery failed, attempting full reinitialization:', recoverError);
                     await this.initialize(this.userId, this.displayName, this.publicKey, this.deviceId, true);
+                    this.consecutiveUnhealthy = 0;
                     return true;
                 }
             } else {

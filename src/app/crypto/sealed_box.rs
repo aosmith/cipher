@@ -83,6 +83,11 @@ pub enum ContentPayload {
         blob_refs: Vec<BlobReference>, // Attachments stored as blobs
         #[serde(default)]
         sent_at: i64,
+        /// True when this is a catch-up re-send (a friend came back online and
+        /// asked for posts they missed). Backfilled posts render into the feed
+        /// silently - no toast - so reconnecting doesn't spam notifications.
+        #[serde(default)]
+        is_backfill: bool,
     },
     DirectMessage {
         #[serde(default)]
@@ -165,6 +170,17 @@ pub enum ContentPayload {
     DeviceSync {
         device_id: String,
         data_json: String,
+        #[serde(default)]
+        sent_at: i64,
+    },
+    /// Catch-up request sent to a friend when they come back online. Gossip is
+    /// fire-and-forget, so posts made while we were offline are otherwise lost;
+    /// this asks the friend to re-send their posts authored since `since`
+    /// (unix seconds). Sealed to the friend and answered only for accepted
+    /// friendships. The response is ordinary sealed Post envelopes flagged
+    /// is_backfill, deduplicated by post id on receipt.
+    FriendSyncRequest {
+        since: i64,
         #[serde(default)]
         sent_at: i64,
     },
@@ -360,6 +376,7 @@ impl GossipEnvelope {
             node_id: node_id.to_string(),
             blob_refs: blob_refs.to_vec(),
             sent_at: chrono::Utc::now().timestamp(),
+            is_backfill: false,
         };
         Self::seal(
             &payload,

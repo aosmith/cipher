@@ -5,6 +5,43 @@ use crate::app::types::{Post, PostComment, PostReaction, SqliteUuid};
 use crate::app::Database;
 
 impl Database {
+    /// The created_at (RFC3339) of the most recent post we hold that was
+    /// authored by `author_id`, or None if we have none. Used as the watermark
+    /// for friend-content backfill: we ask a friend for posts newer than this.
+    pub fn newest_post_time_from_author(
+        &self,
+        author_id: SqliteUuid,
+    ) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT MAX(created_at) FROM posts WHERE user_id = ?1",
+            params![author_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+    }
+
+    /// Posts authored by `author_id` with created_at strictly after
+    /// `since_rfc3339`, newest first, capped at `limit`. Used to answer a
+    /// friend's backfill request. Returns (post_id, content).
+    pub fn get_authored_posts_since(
+        &self,
+        author_id: SqliteUuid,
+        since_rfc3339: &str,
+        limit: i64,
+    ) -> SqliteResult<Vec<(SqliteUuid, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, content FROM posts
+             WHERE user_id = ?1 AND created_at > ?2
+             ORDER BY created_at DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![author_id, since_rfc3339, limit], |row| {
+            Ok((row.get::<_, SqliteUuid>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn get_posts(&self, current_user_id: SqliteUuid) -> SqliteResult<Vec<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

@@ -601,6 +601,7 @@ mod tests {
             node_id: "test-node-id".to_string(),
             blob_refs: vec![],
             sent_at: 1_700_000_000,
+            is_backfill: false,
         };
 
         // Payload-level sealing goes through the envelope so the plaintext

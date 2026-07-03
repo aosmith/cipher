@@ -2900,7 +2900,7 @@ function setupTauriEventListeners() {
     // Downloads ALL blobs BEFORE saving post - ensures post only shows when complete
     listen('sealed-post-received', async (event) => {
         console.log('[EVENT] Sealed post received:', event.payload);
-        const { post_id, user_id, public_key, node_id, content, timestamp, blob_refs } = event.payload;
+        const { post_id, user_id, public_key, node_id, content, timestamp, blob_refs, is_backfill } = event.payload;
 
         try {
             // Step 1: Download ALL blobs first (before saving post)
@@ -2951,7 +2951,9 @@ function setupTauriEventListeners() {
             // so a friend's post appears live instead of only after you navigate.
             console.log('[EVENT] Refreshing posts...');
             await loadPosts();
-            if (typeof UI !== 'undefined' && UI.showToast) {
+            // Backfilled posts (catch-up re-sends after we reconnect) render
+            // silently - a burst of missed posts shouldn't fire a burst of toasts.
+            if (!is_backfill && typeof UI !== 'undefined' && UI.showToast) {
                 UI.showToast('New post from a friend', 'info', 4000);
             }
         } catch (error) {

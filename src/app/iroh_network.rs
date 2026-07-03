@@ -187,6 +187,10 @@ pub struct IrohNetwork {
     /// Guards against concurrent recover() calls (foreground event racing the
     /// frontend health-check loop) each spawning their own set of loops
     recovering: Arc<std::sync::atomic::AtomicBool>,
+    /// Last time we sent a backfill (FriendSyncRequest) to each friend, so a
+    /// burst of presence messages doesn't trigger a request storm. Keyed by
+    /// friend user_id.
+    friend_sync_sent: Arc<Mutex<HashMap<SqliteUuid, std::time::Instant>>>,
 }
 
 impl IrohNetwork {
@@ -232,6 +236,7 @@ impl IrohNetwork {
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             background_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
             recovering: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            friend_sync_sent: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1794,6 +1799,7 @@ impl IrohNetwork {
                                 node_id,
                                 blob_refs,
                                 sent_at,
+                                is_backfill,
                             } => {
                                 // Precise time is inside the ciphertext; envelope
                                 // timestamp (hour-coarse) is the legacy fallback
@@ -1835,6 +1841,7 @@ impl IrohNetwork {
                                     content: String,
                                     timestamp: i64,
                                     blob_refs: Vec<super::types::BlobReference>,
+                                    is_backfill: bool,
                                 }
 
                                 let _ = self.app_handle.emit(
@@ -1847,9 +1854,13 @@ impl IrohNetwork {
                                         content,
                                         timestamp,
                                         blob_refs,
+                                        is_backfill,
                                     },
                                 );
-                                println!("[IROH] [OK] Emitted decrypted post to UI");
+                                println!(
+                                    "[IROH] [OK] Emitted decrypted post to UI (backfill={})",
+                                    is_backfill
+                                );
                             }
                             super::crypto::ContentPayload::DirectMessage {
                                 message_id,
@@ -2418,6 +2429,13 @@ impl IrohNetwork {
                                     Some(&signature),
                                 );
                             }
+                            super::crypto::ContentPayload::FriendSyncRequest { since, .. } => {
+                                // A friend came back online and wants the posts
+                                // they missed. sender_public_key is authenticated;
+                                // resend_posts_to_friend re-checks the friendship
+                                // is accepted before sending anything.
+                                self.resend_posts_to_friend(&sender_public_key, since).await;
+                            }
                         }
                     }
                     None => {
@@ -2660,6 +2678,7 @@ impl IrohNetwork {
             shutdown_flag: self.shutdown_flag.clone(),
             background_tasks: self.background_tasks.clone(),
             recovering: self.recovering.clone(),
+            friend_sync_sent: self.friend_sync_sent.clone(),
         }
     }
 
@@ -3077,6 +3096,18 @@ impl IrohNetwork {
                 // CRITICAL FIX: If we have accepted this peer's friend request, resend FriendAccepted
                 // This handles the case where our original FriendAccepted was lost due to gossip mesh instability
                 if status == "accepted" {
+                    // This accepted friend is online. Ask them (rate-limited) to
+                    // re-send posts we missed while offline - gossip is
+                    // fire-and-forget, so anything posted while we were away is
+                    // otherwise lost. Seal to whatever encryption key their
+                    // presence carried (falls back handled inside).
+                    if let Some(ref friend_enc_key) = encryption_public_key {
+                        if !friend_enc_key.is_empty() {
+                            self.maybe_request_friend_sync(peer_user_id, friend_enc_key)
+                                .await;
+                        }
+                    }
+
                     // Check if this peer initiated the connection (they sent the friend request to us)
                     // NOTE: Using lock() instead of try_lock() - this check is important for FriendAccepted resend
                     let initiated_by: Option<super::types::SqliteUuid> = {
@@ -3809,6 +3840,133 @@ impl IrohNetwork {
         }
         if let Err(e) = self.db.set_friend_prekey(sender_public_key, prekey) {
             println!("[PREKEY] Failed to store friend pre-key: {}", e);
+        }
+    }
+
+    /// True if we have an accepted friendship with `friend_user_id` (either
+    /// direction). Backfill and other friend-only responses gate on this.
+    fn is_accepted_friend(&self, friend_user_id: super::types::SqliteUuid) -> bool {
+        let Ok(conn) = self.db.conn.try_lock() else {
+            return false;
+        };
+        conn.query_row(
+            "SELECT 1 FROM p2p_connections
+             WHERE ((user_id = ?1 AND friend_user_id = ?2)
+                 OR (user_id = ?2 AND friend_user_id = ?1))
+               AND status = 'accepted' LIMIT 1",
+            rusqlite::params![self.user_id, friend_user_id],
+            |_| Ok(()),
+        )
+        .is_ok()
+    }
+
+    /// When a friend comes back online, ask them (rate-limited) to re-send the
+    /// posts we may have missed while offline. `since` is derived from the
+    /// newest post we already hold from them, falling back to a 7-day window.
+    async fn maybe_request_friend_sync(
+        &self,
+        friend_user_id: super::types::SqliteUuid,
+        friend_encryption_key: &str,
+    ) {
+        // Rate-limit: presence arrives every 30-120s; one request per friend
+        // per 5 minutes is plenty to catch up without a request storm.
+        const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+        {
+            let mut sent = self.friend_sync_sent.lock().await;
+            if let Some(last) = sent.get(&friend_user_id) {
+                if last.elapsed() < MIN_INTERVAL {
+                    return;
+                }
+            }
+            sent.insert(friend_user_id, std::time::Instant::now());
+        }
+
+        // Watermark: newest post we hold from this friend, else 7 days ago.
+        let now = chrono::Utc::now().timestamp();
+        let since = self
+            .db
+            .newest_post_time_from_author(friend_user_id)
+            .ok()
+            .flatten()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.timestamp())
+            .unwrap_or(now - 7 * 24 * 3600);
+
+        let payload = super::crypto::ContentPayload::FriendSyncRequest {
+            since,
+            sent_at: now,
+        };
+        if let Err(e) = self
+            .publish_sealed(
+                &payload,
+                std::slice::from_ref(&friend_encryption_key.to_string()),
+            )
+            .await
+        {
+            println!("[BACKFILL] Failed to send friend sync request: {}", e);
+        } else {
+            println!(
+                "[BACKFILL] Requested catch-up from friend {} since {}",
+                friend_user_id, since
+            );
+        }
+    }
+
+    /// Answer a friend's FriendSyncRequest: re-send our recent posts (authored
+    /// after `since`) sealed to them, flagged is_backfill so they render
+    /// silently. Only accepted friends are answered.
+    async fn resend_posts_to_friend(&self, requester_public_key: &str, since: i64) {
+        let requester_id = super::types::SqliteUuid::from_public_key(requester_public_key);
+        if requester_id == self.user_id || !self.is_accepted_friend(requester_id) {
+            println!("[BACKFILL] Ignoring sync request from non-friend");
+            return;
+        }
+        let Some(requester_key) = self.get_encryption_key_for_user(requester_id) else {
+            println!("[BACKFILL] No encryption key for requester - cannot backfill");
+            return;
+        };
+
+        let since_rfc3339 = chrono::DateTime::from_timestamp(since, 0)
+            .unwrap_or_else(chrono::Utc::now)
+            .to_rfc3339();
+        // Cap the response so a long-absent friend can't pull an unbounded feed
+        let posts = match self
+            .db
+            .get_authored_posts_since(self.user_id, &since_rfc3339, 30)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                println!("[BACKFILL] Failed to gather posts: {}", e);
+                return;
+            }
+        };
+        if posts.is_empty() {
+            return;
+        }
+        println!(
+            "[BACKFILL] Re-sending {} post(s) to friend {}",
+            posts.len(),
+            requester_id
+        );
+
+        let node_id = self
+            .our_addr_strings()
+            .await
+            .map(|(id, _)| id)
+            .unwrap_or_default();
+        let recipients = [requester_key];
+        for (post_id, content) in posts {
+            let payload = super::crypto::ContentPayload::Post {
+                post_id: post_id.to_string(),
+                content,
+                node_id: node_id.clone(),
+                blob_refs: vec![],
+                sent_at: chrono::Utc::now().timestamp(),
+                is_backfill: true,
+            };
+            if let Err(e) = self.publish_sealed(&payload, &recipients).await {
+                println!("[BACKFILL] Failed to re-send post {}: {}", post_id, e);
+            }
         }
     }
 
