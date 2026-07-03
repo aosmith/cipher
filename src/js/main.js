@@ -3483,8 +3483,13 @@ async function generateMyQRCode() {
 
         const qrContainer = document.getElementById('myQrCode');
         if (qrContainer) {
-            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="QR" style="width:90%;max-width:500px;border-radius:var(--border-radius-md)"><p style="margin-top:8px;font-weight:600">${currentUser.displayName}</p>`;
+            // Image only - the display name is rendered below on the dark card
+            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="QR" style="display:block;width:240px;max-width:100%;height:auto;border-radius:var(--border-radius-md)">`;
             console.log('[QR-GEN] QR code displayed successfully');
+        }
+        const qrNameEl = document.getElementById('myQrName');
+        if (qrNameEl) {
+            qrNameEl.textContent = currentUser.displayName;
         }
 
         // Show the copy button

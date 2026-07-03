@@ -44,6 +44,26 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
+    // Rotating signed pre-keys for forward secrecy. Senders seal to our CURRENT
+    // pre-key instead of our static identity key; we keep the current + the
+    // immediately-previous private key (one rotation of overlap for lossy
+    // gossip) and delete older ones, so a later identity-key compromise can't
+    // decrypt recorded traffic sealed to a deleted pre-key. Pre-keys are random
+    // (not derived from the recovery phrase), so a restored device simply mints
+    // a fresh one - the old private keys are gone, which is the point.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS signed_prekeys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id BLOB NOT NULL,
+            public_key TEXT NOT NULL,
+            private_key TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            is_current INTEGER NOT NULL DEFAULT 0
+        )",
+        [],
+    )?;
+
     // Create posts table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS posts (
@@ -462,6 +482,13 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
         "ALTER TABLE p2p_connections ADD COLUMN friend_profile_signature TEXT",
         [],
     );
+
+    // Migration: Add a friend's current rotating pre-key (forward secrecy).
+    // prekey_public is the friend's current X25519 pre-key we seal to;
+    // prekey_updated_at gates freshness so we fall back to their identity key
+    // if we've missed too many rotations.
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN prekey_public TEXT", []);
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN prekey_updated_at INTEGER", []);
 
     Ok(())
 }

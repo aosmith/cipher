@@ -112,11 +112,18 @@ pub enum ContentPayload {
         #[serde(default)]
         sent_at: i64,
     },
+    /// Announcement of the sender's new rotating pre-key. Sealed to friends so
+    /// they seal future content to this key instead of the static identity key
+    /// (forward secrecy). The signature is verified against the envelope's
+    /// authenticated sender identity key.
     KeyRotation {
-        /// New signed pre-key (base64)
-        new_signed_prekey: String,
-        /// Signature over the new key (base64)
+        /// New X25519 pre-key public (base64)
+        prekey_public: String,
+        /// Ed25519 signature over prekey_signing_context(prekey_public) by the
+        /// sender's identity key (base64)
         signature: String,
+        #[serde(default)]
+        sent_at: i64,
     },
     /// A post in a community
     CommunityPost {
@@ -178,9 +185,22 @@ pub enum ContentPayload {
         /// Profile signature (display_name|bio|profile_picture), kept for the
         /// profile-tamper checks in the presence handler
         profile_signature: Option<String>,
+        /// Current rotating pre-key (base64 X25519 public), piggybacked so
+        /// friends catch up on rotations even if a KeyRotation envelope was
+        /// lost. Signature is over prekey_signing_context(prekey_public).
+        #[serde(default)]
+        prekey_public: Option<String>,
+        #[serde(default)]
+        prekey_signature: Option<String>,
         #[serde(default)]
         sent_at: i64,
     },
+}
+
+/// Canonical string an identity key signs to authenticate a rotating pre-key.
+/// Verified against the sender's authenticated identity key on receipt.
+pub fn prekey_signing_context(prekey_public: &str) -> String {
+    format!("prekey_v1|{}", prekey_public)
 }
 
 /// What actually gets encrypted into the payload: the payload JSON, the
@@ -851,6 +871,59 @@ mod tests {
     }
 
     #[test]
+    fn test_prekey_signature_roundtrip() {
+        use crate::app::database::Database;
+        let (id_pub, id_priv) = ed25519_keypair();
+        let (prekey_pub, _) = x25519_keypair();
+
+        let ctx = prekey_signing_context(&prekey_pub);
+        let sig = Database::sign_message(&ctx, &id_priv).unwrap();
+
+        // Verifies against the signer's identity key
+        assert!(Database::verify_signature(&ctx, &sig, &id_pub));
+        // Fails against a different identity key
+        let (other_pub, _) = ed25519_keypair();
+        assert!(!Database::verify_signature(&ctx, &sig, &other_pub));
+        // Fails if the pre-key is swapped
+        let (other_prekey, _) = x25519_keypair();
+        assert!(!Database::verify_signature(
+            &prekey_signing_context(&other_prekey),
+            &sig,
+            &id_pub
+        ));
+    }
+
+    #[test]
+    fn test_seal_to_prekey_then_decrypt() {
+        // A message sealed to a recipient's pre-key is readable with the
+        // pre-key's private key but not the recipient's identity key.
+        let (sender_pub, sender_priv) = ed25519_keypair();
+        let (_identity_pub, identity_priv) = x25519_keypair();
+        let (prekey_pub, prekey_priv) = x25519_keypair();
+
+        let envelope = GossipEnvelope::new_post(
+            &sender_pub,
+            "p",
+            "sealed to pre-key",
+            "n",
+            &[],
+            &[prekey_pub], // sender seals to the pre-key
+            &sender_priv,
+        )
+        .unwrap();
+
+        // Decrypts with the pre-key private key
+        let decrypted = envelope.try_decrypt(&prekey_priv).expect("prekey decrypts");
+        match decrypted.payload {
+            ContentPayload::Post { content, .. } => assert_eq!(content, "sealed to pre-key"),
+            _ => panic!("wrong payload"),
+        }
+        // The identity key can't read it (forward secrecy: rotating the pre-key
+        // away and deleting it makes this ciphertext unrecoverable)
+        assert!(envelope.try_decrypt(&identity_priv).is_none());
+    }
+
+    #[test]
     fn test_device_sync_envelope_roundtrip() {
         let (sender_pub, sender_priv) = ed25519_keypair();
         // Device sync seals to the user's OWN encryption key
@@ -899,6 +972,8 @@ mod tests {
             bio: "hi".to_string(),
             profile_picture: String::new(),
             profile_signature: None,
+            prekey_public: None,
+            prekey_signature: None,
             sent_at: chrono::Utc::now().timestamp(),
         };
         let envelope =

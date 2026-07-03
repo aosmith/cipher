@@ -410,9 +410,9 @@ pub async fn publish_community_post(
         .map_err(|e| format!("Failed to get post: {}", e))?
         .ok_or("Post not found")?;
 
-    // Get all member public keys
+    // Get member X25519 encryption keys (recipients for the sealed post)
     let member_keys = db
-        .get_community_member_public_keys(community_id)
+        .get_community_member_encryption_keys(community_id)
         .map_err(|e| format!("Failed to get member keys: {}", e))?;
 
     if member_keys.is_empty() {
@@ -513,9 +513,9 @@ pub async fn announce_community_member(
         .public_key
         .ok_or("New member missing signing public key")?;
 
-    // Get all member public keys (including new member for announcement)
+    // Get member X25519 encryption keys (recipients for the sealed announcement)
     let member_keys = db
-        .get_community_member_public_keys(community_id)
+        .get_community_member_encryption_keys(community_id)
         .map_err(|e| format!("Failed to get member keys: {}", e))?;
 
     if member_keys.is_empty() {

@@ -55,6 +55,7 @@ mod messaging;
 mod notifications;
 mod pending_messages;
 mod posts;
+pub mod prekeys;
 mod safety;
 mod schema;
 pub mod settings;

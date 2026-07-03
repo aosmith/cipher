@@ -1215,6 +1215,14 @@ impl IrohNetwork {
         let node_addr_json = serde_json::to_string(&node_addr)
             .map_err(|e| format!("Failed to serialize node address: {}", e))?;
 
+        // Rotate the pre-key if it's due, then piggyback our current pre-key so
+        // friends stay current even if a KeyRotation envelope was lost
+        self.ensure_prekey_and_maybe_rotate(&signing_key).await;
+        let (prekey_public, prekey_signature) = match self.db.get_current_prekey(self.user_id) {
+            Some(pk) => (Some(pk.public_key), Some(pk.signature)),
+            None => (None, None),
+        };
+
         let payload = super::crypto::ContentPayload::Presence {
             device_id: self
                 .device_id
@@ -1226,6 +1234,8 @@ impl IrohNetwork {
             bio,
             profile_picture,
             profile_signature,
+            prekey_public,
+            prekey_signature,
             sent_at: chrono::Utc::now().timestamp(),
         };
 
@@ -1249,10 +1259,16 @@ impl IrohNetwork {
         let last_success = self.last_presence_success.clone();
 
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            // Adaptive cadence: announce every 30s during a warm-up window (when
+            // peers are still discovering each other and the mesh is settling),
+            // then back off to every 2 minutes once stable. Presence is now
+            // sealed, so the steady-state cost is bandwidth/battery, not privacy;
+            // the warm-up keeps reconnection and pre-key propagation snappy.
+            const WARMUP_SECS: u64 = 30;
+            const STEADY_SECS: u64 = 120;
+            const WARMUP_CYCLES: u32 = 10; // ~5 minutes of fast announcements
+            let mut cycle: u32 = 0;
             loop {
-                interval.tick().await;
-
                 // Check if we should stop
                 if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     println!("[IROH] Presence loop stopping due to shutdown flag");
@@ -1273,6 +1289,16 @@ impl IrohNetwork {
                 // CRITICAL: Also retry FriendAccepted messages every cycle
                 // This ensures FriendAccepted is delivered even if mesh was unstable initially
                 network.resend_friend_accepted_if_needed().await;
+
+                // Announce immediately on the first pass (like the old
+                // interval), then wait before the next one
+                let delay = if cycle < WARMUP_CYCLES {
+                    WARMUP_SECS
+                } else {
+                    STEADY_SECS
+                };
+                cycle = cycle.saturating_add(1);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
             }
         });
         self.track_background_task(handle);
@@ -1699,14 +1725,18 @@ impl IrohNetwork {
                 // Try to decrypt the envelope using our encryption private key
                 println!("[IROH] Received SealedEnvelope - attempting to decrypt...");
 
-                // Get our encryption private key from database
-                let our_encryption_private_key = match self.get_user_encryption_private_key() {
-                    Some(key) => key,
-                    None => {
-                        println!("[IROH] No encryption private key found, cannot decrypt");
+                // Candidate decryption keys: our static identity key plus our
+                // current + previous rotating pre-keys. Senders seal to whichever
+                // of our keys they know is freshest, so we must try them all.
+                let mut candidate_keys = self.db.get_prekey_private_keys(self.user_id);
+                match self.get_user_encryption_private_key() {
+                    Some(key) => candidate_keys.push(key),
+                    None if candidate_keys.is_empty() => {
+                        println!("[IROH] No decryption keys found, cannot decrypt");
                         return;
                     }
-                };
+                    None => {}
+                }
 
                 // Parse the envelope
                 let envelope: super::crypto::GossipEnvelope =
@@ -1743,10 +1773,12 @@ impl IrohNetwork {
                     Err(e) => println!("[IROH] Warning: replay check failed: {}", e),
                 }
 
-                // Trial-decrypt the key boxes (no recipient hints on the wire).
-                // The sender's identity comes back AUTHENTICATED from inside
-                // the ciphertext - the wire carries no sender metadata.
-                match envelope.try_decrypt(&our_encryption_private_key) {
+                // Trial-decrypt the key boxes (no recipient hints on the wire)
+                // with each candidate key. The sender's identity comes back
+                // AUTHENTICATED from inside the ciphertext - the wire carries
+                // no sender metadata.
+                let decrypted_opt = candidate_keys.iter().find_map(|k| envelope.try_decrypt(k));
+                match decrypted_opt {
                     Some(decrypted) => {
                         let sender_public_key = decrypted.sender_public_key;
                         println!(
@@ -2327,6 +2359,8 @@ impl IrohNetwork {
                                 bio,
                                 profile_picture,
                                 profile_signature,
+                                prekey_public,
+                                prekey_signature,
                                 sent_at,
                             } => {
                                 // Replayed presence could poison our address
@@ -2348,6 +2382,13 @@ impl IrohNetwork {
                                             return;
                                         }
                                     };
+                                // Piggybacked pre-key: store it (catch-up path if
+                                // a KeyRotation envelope was lost)
+                                self.store_friend_prekey(
+                                    &sender_public_key,
+                                    prekey_public.as_deref(),
+                                    prekey_signature.as_deref(),
+                                );
                                 // Derive the peer's user_id from the AUTHENTICATED
                                 // sender key rather than trusting a claimed id
                                 let peer_user_id =
@@ -2365,8 +2406,17 @@ impl IrohNetwork {
                                 )
                                 .await;
                             }
-                            _ => {
-                                println!("[IROH] Received other sealed content type");
+                            super::crypto::ContentPayload::KeyRotation {
+                                prekey_public,
+                                signature,
+                                ..
+                            } => {
+                                // Explicit pre-key rotation announcement
+                                self.store_friend_prekey(
+                                    &sender_public_key,
+                                    Some(&prekey_public),
+                                    Some(&signature),
+                                );
                             }
                         }
                     }
@@ -3694,6 +3744,74 @@ impl IrohNetwork {
         })
     }
 
+    /// Ensure we have a current pre-key, rotating if it's older than the
+    /// rotation interval. On rotation (or first creation) broadcast a
+    /// KeyRotation envelope to friends so they adopt the new key promptly;
+    /// presence piggybacking covers anyone who misses it.
+    async fn ensure_prekey_and_maybe_rotate(&self, identity_signing_private_key: &str) {
+        let age = self.db.current_prekey_age_secs(self.user_id);
+        let needs_rotation = match age {
+            None => true, // no pre-key yet
+            Some(a) => a >= super::database::prekeys::PREKEY_ROTATION_SECS,
+        };
+        if !needs_rotation {
+            return;
+        }
+
+        let published = if age.is_none() {
+            self.db
+                .ensure_current_prekey(self.user_id, identity_signing_private_key)
+        } else {
+            self.db
+                .rotate_prekey(self.user_id, identity_signing_private_key)
+        };
+        let published = match published {
+            Ok(p) => p,
+            Err(e) => {
+                println!("[PREKEY] Failed to create/rotate pre-key: {}", e);
+                return;
+            }
+        };
+        println!("[PREKEY] Rotated pre-key, announcing to friends");
+
+        let recipients = self.get_friend_encryption_public_keys();
+        if recipients.is_empty() {
+            return; // no friends to tell yet; presence will carry it later
+        }
+        let payload = super::crypto::ContentPayload::KeyRotation {
+            prekey_public: published.public_key,
+            signature: published.signature,
+            sent_at: chrono::Utc::now().timestamp(),
+        };
+        if let Err(e) = self.publish_sealed(&payload, &recipients).await {
+            println!("[PREKEY] Failed to announce KeyRotation: {}", e);
+        }
+    }
+
+    /// Verify a friend's advertised pre-key against their authenticated identity
+    /// key and store it. `sender_public_key` is the envelope's verified sender.
+    fn store_friend_prekey(
+        &self,
+        sender_public_key: &str,
+        prekey_public: Option<&str>,
+        prekey_signature: Option<&str>,
+    ) {
+        let (Some(prekey), Some(sig)) = (prekey_public, prekey_signature) else {
+            return;
+        };
+        if prekey.is_empty() {
+            return;
+        }
+        let context = super::crypto::sealed_box::prekey_signing_context(prekey);
+        if !Database::verify_signature(&context, sig, sender_public_key) {
+            println!("[PREKEY] Rejecting friend pre-key: bad signature");
+            return;
+        }
+        if let Err(e) = self.db.set_friend_prekey(sender_public_key, prekey) {
+            println!("[PREKEY] Failed to store friend pre-key: {}", e);
+        }
+    }
+
     fn get_user_encryption_private_key(&self) -> Option<String> {
         // Use try_lock to avoid blocking if network handler holds the lock
         let conn = match self.db.conn.try_lock() {
@@ -3773,9 +3891,11 @@ impl IrohNetwork {
 
         // CRITICAL: Check BOTH directions of the friendship relationship
         // Connection can be stored as (user_id=me, friend_user_id=them) OR (user_id=them, friend_user_id=me)
-        // depending on who initiated the friend request
+        // depending on who initiated the friend request.
+        // We select the friend's rotating pre-key alongside their identity key
+        // and prefer the pre-key when it's fresh (forward secrecy).
         let mut stmt = match conn.prepare(
-            "SELECT u.encryption_public_key FROM users u
+            "SELECT u.encryption_public_key, u.prekey_public, u.prekey_updated_at FROM users u
              INNER JOIN p2p_connections p ON
                 (u.id = p.friend_user_id AND p.user_id = ?1) OR
                 (u.id = p.user_id AND p.friend_user_id = ?1)
@@ -3788,16 +3908,21 @@ impl IrohNetwork {
             }
         };
 
-        let result: Vec<String> =
-            match stmt.query_map(rusqlite::params![self.user_id], |row| row.get(0)) {
-                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                Err(e) => {
-                    println!("[DEBUG-KEYS] Query failed: {}", e);
-                    vec![]
-                }
-            };
+        let result: Vec<String> = match stmt.query_map(rusqlite::params![self.user_id], |row| {
+            Ok(super::database::prekeys::best_recipient_key(
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok().flatten()).collect(),
+            Err(e) => {
+                println!("[DEBUG-KEYS] Query failed: {}", e);
+                vec![]
+            }
+        };
         println!(
-            "[DEBUG-KEYS] Final result: {} encryption keys found",
+            "[DEBUG-KEYS] Final result: {} recipient keys found",
             result.len()
         );
         result

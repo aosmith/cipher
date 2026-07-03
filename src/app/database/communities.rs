@@ -336,6 +336,32 @@ impl Database {
         Ok(keys)
     }
 
+    /// X25519 encryption keys of a community's members, for sealing posts to
+    /// them. community_members stores the Ed25519 signing key, so we join to
+    /// users to resolve each member's encryption key. Sealing to the signing
+    /// key (as the old code did) produced boxes no member could ever decrypt.
+    pub fn get_community_member_encryption_keys(
+        &self,
+        community_id: SqliteUuid,
+    ) -> SqliteResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT u.encryption_public_key
+             FROM community_members m
+             INNER JOIN users u ON u.public_key = m.public_key
+             WHERE m.community_id = ?1
+               AND u.encryption_public_key IS NOT NULL
+               AND u.encryption_public_key != ''",
+        )?;
+
+        let keys = stmt
+            .query_map([community_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+
+        Ok(keys)
+    }
+
     /// Check if a user is a member of a community
     pub fn is_community_member(
         &self,
