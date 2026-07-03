@@ -245,8 +245,9 @@ pub async fn iroh_subscribe_friend(
 #[tauri::command]
 pub async fn iroh_send_message(
     to_user_id: SqliteUuid,
-    _to_public_key: String, // Not used in global mesh - filtering by to_user_id
+    _to_public_key: String, // Kept for API compat; recipient resolved by user id
     encrypted_content: String,
+    db: State<'_, Database>,
 ) -> Result<String, String> {
     if is_app_shutting_down() {
         return Err("App is shutting down".to_string());
@@ -261,19 +262,25 @@ pub async fn iroh_send_message(
 
     let message_id = uuid::Uuid::new_v4().to_string();
 
-    let message = P2PMessage::DirectMessage {
+    // DMs are sealed to the recipient's encryption key. The old plaintext
+    // DirectMessage broadcast the sender/recipient pair and timing to the
+    // whole mesh even though the content was encrypted.
+    let recipient_encryption_key = db
+        .get_user_encryption_public_key(to_user_id)
+        .map_err(|e| format!("Failed to look up recipient key: {}", e))?
+        .filter(|k| !k.is_empty())
+        .ok_or("Recipient's encryption key is unknown - wait for their presence or re-add them")?;
+
+    let payload = crate::app::crypto::ContentPayload::DirectMessage {
         message_id: message_id.clone(),
-        from_user_id: network.user_id,
-        to_user_id,
-        encrypted_content,
-        timestamp: chrono::Utc::now().timestamp(),
-        device_id: network.device_id.clone(),
+        content: encrypted_content,
+        thread_id: None,
+        sent_at: chrono::Utc::now().timestamp(),
     };
 
-    // GLOBAL MESH: Broadcast to all nodes, recipient filters by to_user_id
     with_timeout!(
         P2P_OPERATION_TIMEOUT_SECS,
-        network.publish_message(CONTENT_TOPIC, message)
+        network.publish_sealed(&payload, std::slice::from_ref(&recipient_encryption_key))
     )?;
 
     Ok(message_id)
@@ -820,7 +827,9 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     let node_id = node_addr.id.to_string();
     let _relay_url = node_addr.relay_urls().next().map(|url| url.to_string());
 
-    // V2 format: [32 pubkey][32 node][1 name_len][name] - includes display name
+    // V3 format: [32 ed25519 pubkey][32 x25519 enc key][32 node][1 name_len][name]
+    // The encryption key lets the scanner SEAL their friend request to us -
+    // without it the request would have to travel in plaintext.
     use base64::engine::general_purpose::STANDARD;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
@@ -829,6 +838,15 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     let pubkey_bytes = STANDARD
         .decode(&network.public_key)
         .map_err(|e| format!("Invalid public key base64: {}", e))?;
+    let encryption_public_key = network
+        .get_user_encryption_public_key()
+        .ok_or("No encryption public key - cannot generate invite")?;
+    let enc_key_bytes = STANDARD
+        .decode(&encryption_public_key)
+        .map_err(|e| format!("Invalid encryption key base64: {}", e))?;
+    if enc_key_bytes.len() != 32 {
+        return Err("Invalid encryption key length".to_string());
+    }
     let node_bytes = hex::decode(&node_id).map_err(|e| format!("Invalid node id hex: {}", e))?;
 
     // Get display name (truncate to 255 bytes max)
@@ -836,9 +854,10 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     let name_bytes = display_name.as_bytes();
     let name_len = name_bytes.len().min(255) as u8;
 
-    // Build binary payload: [32 pubkey][32 node][1 name_len][name]
+    // Build binary payload: [32 pubkey][32 enc key][32 node][1 name_len][name]
     let mut payload = Vec::new();
     payload.extend_from_slice(&pubkey_bytes); // 32 bytes
+    payload.extend_from_slice(&enc_key_bytes); // 32 bytes
     payload.extend_from_slice(&node_bytes); // 32 bytes
     payload.push(name_len); // 1 byte
     payload.extend_from_slice(&name_bytes[..name_len as usize]); // N bytes
@@ -846,8 +865,8 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     // Encode as base64url
     let encoded = URL_SAFE_NO_PAD.encode(&payload);
 
-    // Create URI
-    let qr_code = format!("cipher://i/{}", encoded);
+    // Create URI (v3 prefix - older i/, f/, add-friend formats are rejected)
+    let qr_code = format!("cipher://v3/{}", encoded);
 
     println!("[IROH] ✓ QR code generated ({} chars)", qr_code.len());
     println!("[IROH]   Public Key: {}", network.public_key);
@@ -862,6 +881,8 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
 #[serde(rename_all = "camelCase")]
 pub struct ParsedInvite {
     pub public_key: String,
+    /// X25519 encryption key (v3 invites) - friend requests are sealed to it
+    pub encryption_public_key: Option<String>,
     pub node_id: String,
     pub relay_url: Option<String>,
     pub display_name: Option<String>,
@@ -879,67 +900,63 @@ pub fn parse_invite_code(invite_code: String) -> Result<ParsedInvite, String> {
         &invite_code[..invite_code.len().min(50)]
     );
 
-    if invite_code.starts_with("cipher://i/") {
-        // V2 minimal format (no relay, no signature)
-        parse_minimal_invite(&invite_code)
-    } else if invite_code.starts_with("cipher://f/") {
-        // V1 compressed format (with relay and signature)
-        parse_compressed_invite(&invite_code)
-    } else if invite_code.starts_with("cipher://add-friend?") {
-        // Legacy URL parameter format
-        parse_legacy_invite(&invite_code)
+    if invite_code.starts_with("cipher://v3/") {
+        // V3: carries the encryption key so friend requests can be sealed
+        parse_v3_invite(&invite_code)
+    } else if invite_code.starts_with("cipher://i/")
+        || invite_code.starts_with("cipher://f/")
+        || invite_code.starts_with("cipher://add-friend?")
+    {
+        // Older formats lack the encryption key, so a friend request would
+        // have to travel in plaintext - refuse instead of leaking
+        Err(
+            "This invite was created by an older version of Cipher and can't be \
+             used securely. Ask your friend to generate a new invite."
+                .to_string(),
+        )
     } else {
         Err("Invalid invite code format. Must start with cipher://".to_string())
     }
 }
 
-/// Parse V2 format: cipher://i/{base64url_data}
-/// Ultra-minimal: [32 pubkey][32 node] = 64 bytes only
-/// Optional legacy: [32 pubkey][32 node][1 name_len][name][64 sig]
-/// No relay (discovered via DHT/DNS), no compression
-fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
+/// Parse V3 format: cipher://v3/{base64url_data}
+/// [32 ed25519 pubkey][32 x25519 enc key][32 node][1 name_len][name]
+fn parse_v3_invite(invite_code: &str) -> Result<ParsedInvite, String> {
     use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
     use base64::Engine;
 
-    // Extract base64url data after cipher://i/
     let encoded = invite_code
-        .strip_prefix("cipher://i/")
-        .ok_or("Invalid v2 invite format")?;
+        .strip_prefix("cipher://v3/")
+        .ok_or("Invalid v3 invite format")?;
 
-    // Decode base64url directly (no compression)
     let payload = URL_SAFE_NO_PAD
         .decode(encoded)
         .map_err(|e| format!("Failed to decode base64url: {}", e))?;
 
-    // Minimum size: 32 + 32 = 64 bytes (ultra-minimal)
-    if payload.len() < 64 {
+    // Minimum size: 32 + 32 + 32 = 96 bytes
+    if payload.len() < 96 {
         return Err(format!(
-            "Payload too short: {} bytes (need at least 64)",
+            "Payload too short: {} bytes (need at least 96)",
             payload.len()
         ));
     }
 
     let mut pos = 0;
-
-    // Read public key (32 bytes) - encode as base64 to match app format
-    let pubkey_bytes = &payload[pos..pos + 32];
-    let public_key = STANDARD.encode(pubkey_bytes);
+    let public_key = STANDARD.encode(&payload[pos..pos + 32]);
+    pos += 32;
+    let encryption_public_key = STANDARD.encode(&payload[pos..pos + 32]);
+    pos += 32;
+    let node_id = hex::encode(&payload[pos..pos + 32]);
     pos += 32;
 
-    // Read node ID (32 bytes) - encode as hex
-    let node_bytes = &payload[pos..pos + 32];
-    let node_id = hex::encode(node_bytes);
-    pos += 32;
-
-    // Optional: Read display name (length-prefixed) - only if payload is longer
     let display_name = if pos < payload.len() {
         let name_len = payload[pos] as usize;
         pos += 1;
         if name_len > 0 && pos + name_len <= payload.len() {
-            let name = String::from_utf8(payload[pos..pos + name_len].to_vec())
-                .map_err(|_| "Invalid display name encoding")?;
-            pos += name_len;
-            Some(name)
+            Some(
+                String::from_utf8(payload[pos..pos + name_len].to_vec())
+                    .map_err(|_| "Invalid display name encoding")?,
+            )
         } else {
             None
         }
@@ -947,188 +964,32 @@ fn parse_minimal_invite(invite_code: &str) -> Result<ParsedInvite, String> {
         None
     };
 
-    // Optional: Read signature (64 bytes) - only if payload is longer
-    let signature = if pos + 64 <= payload.len() {
-        let sig_bytes = &payload[pos..pos + 64];
-        Some(STANDARD.encode(sig_bytes))
-    } else {
-        None
-    };
-
-    println!("[IROH] ✓ Parsed v2 invite (ultra-minimal):");
-    println!("[IROH]   Public Key: {}", public_key);
-    println!("[IROH]   Node ID: {}", node_id);
     println!(
-        "[IROH]   Display Name: {:?} (from FriendRequest if None)",
-        display_name
-    );
-    println!(
-        "[IROH]   Signature: {}",
-        if signature.is_some() {
-            "present"
-        } else {
-            "from FriendRequest"
-        }
+        "[IROH] Parsed v3 invite: pubkey={}..., node={}...",
+        &public_key[..8.min(public_key.len())],
+        &node_id[..8.min(node_id.len())]
     );
 
     Ok(ParsedInvite {
         public_key,
+        encryption_public_key: Some(encryption_public_key),
         node_id,
-        relay_url: None, // Discovered via DHT/DNS
+        relay_url: None,
         display_name,
-        signature,
+        signature: None,
     })
 }
 
-/// Parse V1 compressed format: cipher://f/{base64url_deflate_data}
-fn parse_compressed_invite(invite_code: &str) -> Result<ParsedInvite, String> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    use flate2::read::DeflateDecoder;
-    use std::io::Read;
-
-    // Extract base64url data after cipher://f/
-    let encoded = invite_code
-        .strip_prefix("cipher://f/")
-        .ok_or("Invalid compressed invite format")?;
-
-    // Decode base64url
-    let compressed = URL_SAFE_NO_PAD
-        .decode(encoded)
-        .map_err(|e| format!("Failed to decode base64url: {}", e))?;
-
-    // Decompress DEFLATE
-    let mut decoder = DeflateDecoder::new(&compressed[..]);
-    let mut payload = Vec::new();
-    decoder
-        .read_to_end(&mut payload)
-        .map_err(|e| format!("Failed to decompress: {}", e))?;
-
-    // Parse binary format: [32 pubkey][32 node][1 relay_len][relay][1 name_len][name][64 sig]
-    // Minimum size: 32 + 32 + 1 + 0 + 1 + 0 + 64 = 130 bytes
-    if payload.len() < 130 {
-        return Err(format!("Payload too short: {} bytes", payload.len()));
-    }
-
-    let mut pos = 0;
-
-    // Read public key (32 bytes) - encode as base64 to match app format
-    use base64::engine::general_purpose::STANDARD;
-    let pubkey_bytes = &payload[pos..pos + 32];
-    let public_key = STANDARD.encode(pubkey_bytes);
-    pos += 32;
-
-    // Read node ID (32 bytes) - encode as hex
-    let node_bytes = &payload[pos..pos + 32];
-    let node_id = hex::encode(node_bytes);
-    pos += 32;
-
-    // Read relay URL (length-prefixed)
-    let relay_len = payload[pos] as usize;
-    pos += 1;
-    if pos + relay_len > payload.len() {
-        return Err("Invalid relay URL length".to_string());
-    }
-    let relay_url = if relay_len > 0 {
-        Some(
-            String::from_utf8(payload[pos..pos + relay_len].to_vec())
-                .map_err(|_| "Invalid relay URL encoding")?,
-        )
-    } else {
-        None
-    };
-    pos += relay_len;
-
-    // Read display name (length-prefixed)
-    let name_len = payload[pos] as usize;
-    pos += 1;
-    if pos + name_len > payload.len() {
-        return Err("Invalid display name length".to_string());
-    }
-    let display_name = if name_len > 0 {
-        Some(
-            String::from_utf8(payload[pos..pos + name_len].to_vec())
-                .map_err(|_| "Invalid display name encoding")?,
-        )
-    } else {
-        None
-    };
-    pos += name_len;
-
-    // Read signature (64 bytes) - encode as base64 to match verify_signature format
-    if pos + 64 > payload.len() {
-        return Err("Invalid signature length".to_string());
-    }
-    let sig_bytes = &payload[pos..pos + 64];
-    let signature = Some(STANDARD.encode(sig_bytes));
-
-    println!("[IROH] ✓ Parsed compressed invite:");
-    println!("[IROH]   Public Key: {}", public_key);
-    println!("[IROH]   Node ID: {}", node_id);
-    println!("[IROH]   Relay: {:?}", relay_url);
-    println!("[IROH]   Display Name: {:?}", display_name);
-
-    Ok(ParsedInvite {
-        public_key,
-        node_id,
-        relay_url,
-        display_name,
-        signature,
-    })
-}
-
-/// Parse old URL parameter format: cipher://add-friend?key=...&node=...&relay=...&name=...&sig=...
-fn parse_legacy_invite(invite_code: &str) -> Result<ParsedInvite, String> {
-    let query_part = invite_code
-        .strip_prefix("cipher://add-friend?")
-        .ok_or("Invalid legacy invite format")?;
-
-    let mut public_key = None;
-    let mut node_id = None;
-    let mut relay_url = None;
-    let mut display_name = None;
-    let mut signature = None;
-
-    for param in query_part.split('&') {
-        if let Some((key, value)) = param.split_once('=') {
-            let decoded = urlencoding::decode(value)
-                .map_err(|_| format!("Invalid encoding for {}", key))?
-                .to_string();
-            match key {
-                "key" => public_key = Some(decoded),
-                "node" => node_id = Some(decoded),
-                "relay" => relay_url = Some(decoded),
-                "name" | "display_name" => display_name = Some(decoded),
-                "sig" | "signature" => signature = Some(decoded),
-                _ => {} // Ignore unknown parameters
-            }
-        }
-    }
-
-    let public_key = public_key.ok_or("Missing public key in invite")?;
-    let node_id = node_id.ok_or("Missing node ID in invite")?;
-
-    println!("[IROH] ✓ Parsed legacy invite:");
-    println!("[IROH]   Public Key: {}", public_key);
-    println!("[IROH]   Node ID: {}", node_id);
-    println!("[IROH]   Relay: {:?}", relay_url);
-    println!("[IROH]   Display Name: {:?}", display_name);
-
-    Ok(ParsedInvite {
-        public_key,
-        node_id,
-        relay_url,
-        display_name,
-        signature,
-    })
-}
-
+/// Parse V2 format: cipher://i/{base64url_data}
+/// Ultra-minimal: [32 pubkey][32 node] = 64 bytes only
+/// Optional legacy: [32 pubkey][32 node][1 name_len][name][64 sig]
 /// Add a friend by public key with optional compact node info
 /// Verifies signed display name if provided
 /// GLOBAL MESH: Creates friendship in database and sends FriendRequest to global mesh
 #[tauri::command]
 pub async fn iroh_add_friend_by_public_key(
     friend_public_key: String,
+    encryption_public_key: Option<String>,
     node_id: Option<String>,
     relay_url: Option<String>,
     display_name: Option<String>,
@@ -1158,6 +1019,18 @@ pub async fn iroh_add_friend_by_public_key(
     if friend_public_key == network.public_key {
         return Err("Cannot add yourself as a friend".to_string());
     }
+
+    // Friend requests are SEALED to the target's encryption key - a v3 invite
+    // carries it. Old invites can't be used: sending the request in plaintext
+    // would leak the new friendship to the entire mesh.
+    let friend_encryption_key =
+        encryption_public_key
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| {
+                "This invite was created by an older version of Cipher and can't be \
+             used securely. Ask your friend to generate a new invite."
+                    .to_string()
+            })?;
 
     // Generate deterministic user_id from friend's public key
     let friend_user_id = super::types::SqliteUuid::from_public_key(&friend_public_key);
@@ -1202,12 +1075,16 @@ pub async fn iroh_add_friend_by_public_key(
         .lock()
         .unwrap()
         .execute(
-            "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(public_key) DO UPDATE SET
+            encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+            updated_at = excluded.updated_at",
             rusqlite::params![
                 friend_user_id,
                 &verified_display_name,
                 &friend_public_key,
+                &friend_encryption_key,
                 &now,
                 &now
             ],
@@ -1286,45 +1163,19 @@ pub async fn iroh_add_friend_by_public_key(
         }
     }
 
-    // 4. GLOBAL MESH: Send FriendRequest via global content topic
-    println!("[IROH] Sending FriendRequest via global mesh...");
-    // Clone endpoint to avoid holding lock during await
-    let endpoint_clone = network.endpoint.lock().await.clone();
-    if let Some(endpoint) = endpoint_clone.as_ref() {
-        {
-            let our_node_addr = endpoint.addr();
-            // Get our encryption public key for sealed envelope encryption (comments, reactions)
-            let our_encryption_public_key = db
-                .get_user_encryption_public_key(network.user_id)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-
-            let friend_request = P2PMessage::FriendRequest {
-                from_public_key: network.public_key.clone(),
-                from_encryption_public_key: our_encryption_public_key,
-                from_user_id: network.user_id,
-                from_display_name: network.display_name.clone(),
-                from_node_id: our_node_addr.id.to_string(),
-                from_relay_url: our_node_addr
-                    .relay_urls()
-                    .next()
-                    .map(|url| url.to_string())
-                    .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string()),
-                to_public_key: friend_public_key.clone(),
-                timestamp: chrono::Utc::now().timestamp(),
-            };
-
-            match network.publish_message(CONTENT_TOPIC, friend_request).await {
-                Ok(_) => {
-                    println!("[IROH] ✓ FriendRequest sent via global mesh!");
-                    println!("[IROH]   Target: {}", friend_public_key);
-                    println!("[IROH]   All nodes see it, only target processes it");
-                }
-                Err(e) => {
-                    println!("[IROH] Warning: Failed to send FriendRequest: {}", e);
-                }
-            }
+    // 4. Send the FriendRequest sealed to the friend's encryption key - only
+    // they can even see that a request happened
+    println!("[IROH] Sending sealed FriendRequest...");
+    match network
+        .send_friend_request_sealed(&friend_encryption_key)
+        .await
+    {
+        Ok(_) => {
+            println!("[IROH] ✓ Sealed FriendRequest sent");
+            println!("[IROH]   Target: {}", friend_public_key);
+        }
+        Err(e) => {
+            println!("[IROH] Warning: Failed to send FriendRequest: {}", e);
         }
     }
 

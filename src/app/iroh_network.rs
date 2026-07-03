@@ -22,41 +22,29 @@ use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
 
-use super::types::{BlobReference, MediaAttachmentWithData, SqliteUuid};
+use super::types::SqliteUuid;
 use super::Database;
 
 /// Global topic for all encrypted content
 pub const CONTENT_TOPIC: &str = "cipher/content/v1";
 
-/// P2P message types for the social network
-/// All messages are broadcast to the global mesh; encryption ensures privacy
+/// P2P message types for the social network.
+/// ALL application content (posts, comments, reactions, DMs, presence, friend
+/// handshake, device sync data) travels as SealedEnvelope - signed inside,
+/// encrypted to its recipients, metadata-free on the wire. The only other
+/// messages are the signed sync request and neighbor-scoped heartbeats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum P2PMessage {
-    /// User presence announcement (for device discovery and mesh health)
-    /// Broadcast to global mesh - all nodes see presence, helps with peer discovery
-    /// SECURITY: Includes signed profile data so friends can verify identity
-    Presence {
-        user_id: SqliteUuid,
-        public_key: String,
-        /// X25519 encryption public key for sealed envelopes (comments, reactions, etc.)
-        #[serde(default)]
-        encryption_public_key: Option<String>,
-        device_id: String,
-        node_addr: iroh::EndpointAddr, // Full addressing info for direct peer connection
-        timestamp: i64,
-        // Profile data for identity verification
-        display_name: String,
-        bio: String,
-        profile_picture: String,
-        /// Cryptographic signature of profile data (display_name|bio|profile_picture)
-        /// Signed with user's Ed25519 private key, verifiable with public_key
-        profile_signature: Option<String>,
+    /// Sealed envelope containing encrypted, sender-signed content.
+    /// All nodes relay these; only intended recipients can decrypt.
+    SealedEnvelope {
+        /// The full GossipEnvelope with key boxes and encrypted payload
+        envelope_json: String,
     },
     /// Device sync request (same user, different device).
     /// SECURITY: signed with the user's Ed25519 key - without the signature,
     /// anyone could broadcast a request claiming our public key and trigger a
-    /// sync response. Fields default for decode-compat with old clients, whose
-    /// unsigned requests then fail verification (fail closed).
+    /// sync response.
     DeviceSyncRequest {
         public_key: String,
         device_id: String,
@@ -66,79 +54,13 @@ pub enum P2PMessage {
         #[serde(default)]
         signature: String,
     },
-    /// Device sync response with data
-    DeviceSyncResponse {
-        public_key: String,
-        device_id: String,
-        data_json: String,
-        timestamp: i64,
-    },
-    /// Direct encrypted message between users (legacy - kept for backwards compatibility)
-    DirectMessage {
-        message_id: String,
-        from_user_id: SqliteUuid,
-        to_user_id: SqliteUuid,
-        encrypted_content: String,
-        timestamp: i64,
-        device_id: Option<String>,
-    },
-    /// Post from a user (legacy - kept for backwards compatibility, unencrypted)
-    /// NOTE: All new posts should use SealedEnvelope for encryption
-    #[deprecated(note = "Use SealedEnvelope instead - all content must be encrypted")]
-    Post {
-        user_id: SqliteUuid,
-        public_key: String, // Sender's public key for user record creation
-        content: String,
-        timestamp: i64,
-        device_id: Option<String>,
-        attachments: Option<Vec<MediaAttachmentWithData>>,
-    },
-    /// PHASE 2: Sealed envelope containing encrypted content
-    /// All nodes receive this, but only friends can decrypt
-    SealedEnvelope {
-        /// The full GossipEnvelope with sealed boxes
-        envelope_json: String,
-    },
-    /// Friend request sent when scanning QR code
-    /// Broadcast to global mesh - only the target can process it
-    FriendRequest {
-        from_public_key: String, // Requester's signing public key (Ed25519)
-        from_encryption_public_key: String, // Requester's encryption public key (X25519)
-        from_user_id: SqliteUuid, // Requester's user ID
-        from_display_name: String, // Requester's display name
-        from_node_id: String,    // Requester's Iroh NodeId
-        from_relay_url: String,  // Requester's relay URL
-        to_public_key: String,   // Target's public key (for filtering)
-        timestamp: i64,
-    },
-    /// Friend request acceptance
-    /// Broadcast to global mesh - only the requester can process it
-    FriendAccepted {
-        from_user_id: SqliteUuid,           // Accepter's user ID
-        from_public_key: String,            // Accepter's signing public key (Ed25519)
-        from_encryption_public_key: String, // Accepter's encryption public key (X25519)
-        from_display_name: String,          // Accepter's display name
-        from_node_id: String,               // Accepter's Iroh NodeId
-        from_relay_url: String,             // Accepter's relay URL
-        to_public_key: String,              // Original requester's public key (for filtering)
-    },
-    /// Heartbeat message to verify peer is still connected
-    /// Broadcast to global mesh for accurate peer counting
+    /// Heartbeat to confirm a live connection. Sent to direct gossip
+    /// neighbors only (broadcast_neighbors) - neighbors already know our
+    /// EndpointId from the QUIC connection, so this reveals nothing new,
+    /// and it is never relayed mesh-wide.
     Heartbeat {
         node_id: String, // Sender's Iroh NodeId
         timestamp: i64,
-    },
-    /// Unified content message for all content types (posts, comments, reactions)
-    /// Single transport mechanism for all unencrypted content
-    Content {
-        content_type: String, // "post", "comment", "reaction"
-        user_id: SqliteUuid,
-        public_key: String,
-        node_id: String,      // Sender's NodeId for blob fetching
-        payload_json: String, // Type-specific data as JSON
-        timestamp: i64,
-        device_id: Option<String>,
-        blob_refs: Vec<BlobReference>,
     },
 }
 
@@ -849,25 +771,9 @@ impl IrohNetwork {
                                         Ok(p2p_msg) => {
                                             println!("[IROH-STREAM]   Message type: {:?}",
                                                 match &p2p_msg {
-                                                    P2PMessage::Presence { .. } => "Presence",
-                                                    P2PMessage::DirectMessage { .. } => "DirectMessage",
-                                                    #[allow(deprecated)]
-                                                    P2PMessage::Post { .. } => "Post (legacy)",
                                                     P2PMessage::SealedEnvelope { .. } => "SealedEnvelope",
-                                                    P2PMessage::FriendRequest { .. } => "FriendRequest",
-                                                    P2PMessage::FriendAccepted { .. } => "FriendAccepted",
                                                     P2PMessage::DeviceSyncRequest { .. } => "DeviceSyncRequest",
-                                                    P2PMessage::DeviceSyncResponse { .. } => "DeviceSyncResponse",
                                                     P2PMessage::Heartbeat { .. } => "Heartbeat",
-                                                    P2PMessage::Content { content_type, .. } => {
-                                                        // Show the content type for unified Content messages
-                                                        match content_type.as_str() {
-                                                            "post" => "Content(post)",
-                                                            "comment" => "Content(comment)",
-                                                            "reaction" => "Content(reaction)",
-                                                            _ => "Content(unknown)",
-                                                        }
-                                                    },
                                                 }
                                             );
                                             self.handle_message(p2p_msg).await;
@@ -1669,17 +1575,6 @@ impl IrohNetwork {
     /// Handle received P2P message
     async fn handle_message(&self, message: P2PMessage) {
         match message {
-            P2PMessage::Presence { device_id, .. } => {
-                // Plaintext presence is no longer processed: it broadcast
-                // profile data and network addresses (IPs) unencrypted to the
-                // entire mesh. Presence now arrives sealed to friends and our
-                // own devices as ContentPayload::Presence.
-                println!(
-                    "[IROH] Ignoring plaintext Presence from device {} (deprecated)",
-                    device_id
-                );
-            }
-
             P2PMessage::DeviceSyncRequest {
                 public_key,
                 device_id,
@@ -1796,112 +1691,6 @@ impl IrohNetwork {
                         Err(e) => println!("[IROH] Failed to get sync data: {}", e),
                     }
                 }
-            }
-
-            P2PMessage::DeviceSyncResponse { device_id, .. } => {
-                // Plaintext sync responses are no longer accepted: they were
-                // unauthenticated (anyone could inject posts/messages/friends
-                // into our database by stamping our public key on one) and
-                // broadcast the entire database readable to the whole mesh.
-                // Sync now travels as ContentPayload::DeviceSync inside a
-                // signed SealedEnvelope. Old clients may still send these.
-                println!(
-                    "[IROH] Ignoring plaintext DeviceSyncResponse from device {} (deprecated)",
-                    device_id
-                );
-            }
-
-            P2PMessage::DirectMessage {
-                ref message_id,
-                ref from_user_id,
-                to_user_id,
-                ref encrypted_content,
-                timestamp,
-                ref device_id,
-            } => {
-                // Handle direct messages to this user
-                if to_user_id == self.user_id {
-                    println!("[IROH] Received direct message");
-
-                    // Emit to UI
-                    #[derive(serde::Serialize, Clone)]
-                    struct MessageEvent {
-                        message: P2PMessage,
-                    }
-
-                    let _ = self.app_handle.emit(
-                        "p2p-message-received",
-                        MessageEvent {
-                            message: P2PMessage::DirectMessage {
-                                message_id: message_id.clone(),
-                                from_user_id: *from_user_id,
-                                to_user_id,
-                                encrypted_content: encrypted_content.clone(),
-                                timestamp,
-                                device_id: device_id.clone(),
-                            },
-                        },
-                    );
-                }
-            }
-
-            P2PMessage::Post {
-                user_id,
-                ref public_key,
-                ref content,
-                timestamp,
-                ref device_id,
-                ref attachments,
-            } => {
-                println!(
-                    "[IROH] Received post from user {} ({})",
-                    user_id, public_key
-                );
-
-                // Skip our own posts (they're already in DB)
-                if public_key == &self.public_key {
-                    println!("[IROH] Skipping own post");
-                    return;
-                }
-
-                // Ensure the sender's user record exists before saving post
-                // This prevents foreign key constraint violations in the posts table
-                // NOTE: Using try_lock to avoid blocking executor - INSERT OR IGNORE is idempotent
-                if let Ok(conn) = self.db.conn.try_lock() {
-                    if let Err(e) = conn.execute(
-                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                        rusqlite::params![
-                            user_id,
-                            format!("User_{}", &public_key[..8.min(public_key.len())]),
-                            public_key,
-                            chrono::Utc::now().to_rfc3339(),
-                            chrono::Utc::now().to_rfc3339()
-                        ],
-                    ) {
-                        println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
-                    }
-                }
-
-                // Emit to UI
-                #[derive(serde::Serialize, Clone)]
-                struct MessageEvent {
-                    message: P2PMessage,
-                }
-
-                let _ = self.app_handle.emit(
-                    "p2p-message-received",
-                    MessageEvent {
-                        message: P2PMessage::Post {
-                            user_id,
-                            public_key: public_key.clone(),
-                            content: content.clone(),
-                            timestamp,
-                            device_id: device_id.clone(),
-                            attachments: attachments.clone(),
-                        },
-                    },
-                );
             }
 
             // PostWithBlobs removed - all posts use SealedEnvelope (encrypted)
@@ -2030,7 +1819,17 @@ impl IrohNetwork {
                                 );
                                 println!("[IROH] [OK] Emitted decrypted post to UI");
                             }
-                            super::crypto::ContentPayload::DirectMessage { content, thread_id } => {
+                            super::crypto::ContentPayload::DirectMessage {
+                                message_id,
+                                content,
+                                thread_id,
+                                sent_at,
+                            } => {
+                                let timestamp = if sent_at > 0 {
+                                    sent_at
+                                } else {
+                                    envelope.timestamp
+                                };
                                 let sender_user_id =
                                     super::types::SqliteUuid::from_public_key(&sender_public_key);
                                 println!(
@@ -2038,25 +1837,25 @@ impl IrohNetwork {
                                     sender_public_key,
                                     content.len()
                                 );
+                                let _ = thread_id; // threads handled app-side
 
-                                #[derive(serde::Serialize, Clone)]
-                                struct DecryptedDMEvent {
-                                    from_user_id: super::types::SqliteUuid,
-                                    from_public_key: String,
-                                    content: String,
-                                    thread_id: Option<super::types::SqliteUuid>,
-                                    timestamp: i64,
-                                }
-
+                                // Same event shape the frontend has always
+                                // consumed for incoming DMs
                                 let _ = self.app_handle.emit(
-                                    "sealed-dm-received",
-                                    DecryptedDMEvent {
-                                        from_user_id: sender_user_id,
-                                        from_public_key: sender_public_key.clone(),
-                                        content,
-                                        thread_id,
-                                        timestamp: envelope.timestamp,
-                                    },
+                                    "p2p-message-received",
+                                    serde_json::json!({
+                                        "message": {
+                                            "DirectMessage": {
+                                                "message_id": message_id,
+                                                "from_user_id": sender_user_id,
+                                                "from_public_key": sender_public_key,
+                                                "to_user_id": self.user_id,
+                                                "encrypted_content": content,
+                                                "timestamp": timestamp,
+                                                "device_id": null,
+                                            }
+                                        }
+                                    }),
                                 );
                             }
                             super::crypto::ContentPayload::CommunityPost {
@@ -2488,6 +2287,38 @@ impl IrohNetwork {
                                     ),
                                 }
                             }
+                            super::crypto::ContentPayload::FriendRequest {
+                                display_name,
+                                encryption_public_key,
+                                node_id,
+                                relay_url,
+                                ..
+                            } => {
+                                self.handle_friend_request(
+                                    sender_public_key.clone(),
+                                    encryption_public_key,
+                                    display_name,
+                                    node_id,
+                                    relay_url,
+                                )
+                                .await;
+                            }
+                            super::crypto::ContentPayload::FriendAccepted {
+                                display_name,
+                                encryption_public_key,
+                                node_id,
+                                relay_url,
+                                ..
+                            } => {
+                                self.handle_friend_accepted(
+                                    sender_public_key.clone(),
+                                    encryption_public_key,
+                                    display_name,
+                                    node_id,
+                                    relay_url,
+                                )
+                                .await;
+                            }
                             super::crypto::ContentPayload::Presence {
                                 device_id,
                                 node_addr_json,
@@ -2547,421 +2378,6 @@ impl IrohNetwork {
                 }
             }
 
-            P2PMessage::FriendRequest {
-                from_public_key,
-                from_encryption_public_key,
-                from_user_id: _from_user_id, // Unused - we compute from public_key for consistency
-                from_display_name,
-                from_node_id,
-                from_relay_url,
-                to_public_key,
-                timestamp: _,
-            } => {
-                println!(
-                    "[IROH] Received FriendRequest from {} ({}) (global mesh)",
-                    from_display_name, from_public_key
-                );
-
-                // GLOBAL MESH: Filter messages - only process if intended for us
-                if to_public_key != self.public_key {
-                    // Not for us - ignore (in global mesh, everyone sees everything)
-                    return;
-                }
-
-                // Skip if trying to add ourselves
-                if from_public_key == self.public_key {
-                    println!("[IROH] Cannot add ourselves as friend, ignoring");
-                    return;
-                }
-
-                println!(
-                    "[IROH] Processing friend request from {} ({})",
-                    from_display_name, from_public_key
-                );
-
-                // CRITICAL: Compute friend's user_id from their public key to ensure consistency
-                // Don't trust from_user_id from the message - derive it deterministically
-                let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
-                println!(
-                    "[IROH] Computed friend_user_id {} from public_key",
-                    friend_user_id
-                );
-
-                // 1. Ensure the friend user exists in database with their actual display name and encryption key
-                // Use ON CONFLICT(public_key) since that's the reliable unique identifier
-                // CRITICAL: Store encryption_public_key so we can encrypt comments/reactions to them
-                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
-                {
-                    let conn = self.db.conn.lock().unwrap();
-                    // Use empty string check since encryption_public_key might be "" for old clients
-                    let enc_key = if from_encryption_public_key.is_empty() {
-                        None
-                    } else {
-                        Some(&from_encryption_public_key)
-                    };
-                    if let Err(e) = conn.execute(
-                        "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                         ON CONFLICT(public_key) DO UPDATE SET
-                            display_name = excluded.display_name,
-                            encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
-                            updated_at = excluded.updated_at",
-                        rusqlite::params![
-                            friend_user_id,  // Use computed ID, not from message
-                            &from_display_name,
-                            &from_public_key,
-                            enc_key,
-                            chrono::Utc::now().to_rfc3339(),
-                            chrono::Utc::now().to_rfc3339()
-                        ],
-                    ) {
-                        println!("[IROH] Warning: Failed to create/update friend user: {}", e);
-                    } else {
-                        println!("[IROH] [OK] Created/updated friend user {} with display name: {} (enc_key: {})",
-                            friend_user_id, from_display_name, if enc_key.is_some() { "yes" } else { "no" });
-                    }
-                }
-
-                // 2. Create incoming friend request in database (status = 'pending')
-                // User must accept this request before friendship is established
-                // Convention: user_id = sender (initiator), friend_user_id = receiver
-                // IMPORTANT: Check both directions to avoid duplicate rows when both users send requests
-                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
-                let mut auto_accepted = false;
-                {
-                    let conn = self.db.conn.lock().unwrap();
-                    let now = chrono::Utc::now().to_rfc3339();
-
-                    // Check if any connection exists in either direction
-                    let existing: Option<(String, super::types::SqliteUuid)> = conn.query_row(
-                        "SELECT status, initiated_by FROM p2p_connections
-                         WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                        rusqlite::params![self.user_id, friend_user_id],
-                        |row| Ok((row.get(0)?, row.get(1)?))
-                    ).ok();
-
-                    match existing {
-                        Some((status, _)) if status == "accepted" => {
-                            // Already friends - just update their node info
-                            println!(
-                                "[IROH] Already friends with {}, updating node info",
-                                from_public_key
-                            );
-                            let _ = conn.execute(
-                                "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
-                                 WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
-                            );
-                        }
-                        Some((status, initiated_by))
-                            if status == "pending" && initiated_by == self.user_id =>
-                        {
-                            // We already sent THEM a request and they're sending us one - auto-accept!
-                            println!(
-                                "[IROH] Mutual friend request detected! Auto-accepting with {}",
-                                from_public_key
-                            );
-                            let _ = conn.execute(
-                                "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
-                                 WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
-                            );
-                            auto_accepted = true;
-                        }
-                        Some((status, _)) if status == "pending" => {
-                            // They already sent us a request (we haven't accepted) - update their node info
-                            println!(
-                                "[IROH] Already have pending request from {}, updating node info",
-                                from_public_key
-                            );
-                            let _ = conn.execute(
-                                "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
-                                 WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
-                            );
-                        }
-                        _ => {
-                            // No existing connection - create new incoming request
-                            // CRITICAL: user_id must ALWAYS be the local user (self) for queries to work
-                            // friend_user_id is the friend we're connecting to (computed from public key)
-                            // initiated_by tracks who sent the original request
-                            if let Err(e) = conn.execute(
-                                "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at, iroh_node_id, friend_relay_url)
-                                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8)",
-                                rusqlite::params![
-                                    super::types::SqliteUuid::new(),
-                                    self.user_id,     // user_id = ALWAYS the local user (us)
-                                    friend_user_id,   // friend_user_id = computed from sender's public key
-                                    friend_user_id,   // initiated_by = sender (they sent the request)
-                                    &now,
-                                    &now,
-                                    &from_node_id,
-                                    &from_relay_url,
-                                ],
-                            ) {
-                                println!("[IROH] Warning: Failed to create friend request: {}", e);
-                            } else {
-                                println!("[IROH] [OK] Incoming friend request created from {} (our user_id={}, friend_user_id={})",
-                                    from_public_key, self.user_id, friend_user_id);
-                            }
-                        }
-                    }
-                }
-
-                // Emit acceptance event AFTER releasing the database lock
-                if auto_accepted {
-                    let _ = self.app_handle.emit(
-                        "friend-request-accepted",
-                        serde_json::json!({
-                            "friend_user_id": friend_user_id.to_string(),
-                            "friend_public_key": from_public_key,
-                        }),
-                    );
-                }
-
-                // Emit event to UI so it can show the pending request
-                let _ = self.app_handle.emit(
-                    "friend-request-received",
-                    serde_json::json!({
-                        "from_user_id": friend_user_id.to_string(),
-                        "from_public_key": from_public_key,
-                        "from_node_id": from_node_id,
-                    }),
-                );
-
-                // 3. Add friend's node address to the address book for direct connection
-                if let Ok(peer_node_id) = from_node_id.parse::<iroh::EndpointId>() {
-                    if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
-                        let node_addr = iroh::EndpointAddr::new(peer_node_id)
-                            .with_relay_url(relay_url_parsed.into());
-
-                        self.address_book.add_endpoint_info(node_addr);
-                        println!("[IROH] [OK] Added friend's address to the address book");
-
-                        // NOTE: We do NOT resubscribe here because if we received this message via gossip,
-                        // the mesh is already working. Resubscribing would disrupt the mesh and cause
-                        // message loss. The sender will resubscribe on their end when they join with us
-                        // as bootstrap, which is sufficient for bidirectional connectivity.
-                        println!("[IROH] Gossip mesh already functional (received message), skipping resubscription");
-                    }
-                }
-
-                println!("[IROH] [OK] Friend request received, waiting for user to accept");
-            }
-
-            P2PMessage::FriendAccepted {
-                from_user_id: _from_user_id, // Unused - we compute deterministically from public key
-                from_public_key,
-                from_encryption_public_key,
-                from_display_name,
-                from_node_id,
-                from_relay_url,
-                to_public_key,
-            } => {
-                println!(
-                    "[IROH] Received FriendAccepted from {} ({}) (global mesh)",
-                    from_display_name, from_public_key
-                );
-
-                // GLOBAL MESH: Filter messages - only process if intended for us
-                if to_public_key != self.public_key {
-                    // Not for us - ignore (in global mesh, everyone sees everything)
-                    return;
-                }
-
-                // Skip if from ourselves
-                if from_public_key == self.public_key {
-                    println!("[IROH] FriendAccepted from ourselves, ignoring");
-                    return;
-                }
-
-                // CRITICAL: Compute friend_user_id deterministically from public key
-                // This ensures it matches exactly how it was stored when the outgoing request was created
-                let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
-                println!(
-                    "[IROH] Computed friend_user_id from public key: {}",
-                    friend_user_id
-                );
-
-                // Ensure the friend user exists with their proper display name and encryption key
-                // CRITICAL: Store encryption_public_key so we can encrypt comments/reactions to them
-                // Use INSERT ON CONFLICT to handle both new users and stub-named users
-                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
-                {
-                    let conn = self.db.conn.lock().unwrap();
-                    // Use empty string check since encryption_public_key might be "" for old clients
-                    let enc_key = if from_encryption_public_key.is_empty() {
-                        None
-                    } else {
-                        Some(&from_encryption_public_key)
-                    };
-                    if let Err(e) = conn.execute(
-                        "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                         ON CONFLICT(public_key) DO UPDATE SET
-                            display_name = excluded.display_name,
-                            encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
-                            updated_at = excluded.updated_at",
-                        rusqlite::params![
-                            friend_user_id,
-                            &from_display_name,
-                            &from_public_key,
-                            enc_key,
-                            chrono::Utc::now().to_rfc3339(),
-                            chrono::Utc::now().to_rfc3339()
-                        ],
-                    ) {
-                        println!("[IROH] Warning: Failed to create/update friend user: {}", e);
-                    } else {
-                        println!("[IROH] [OK] Created/updated friend user with display name: {} (enc_key: {})",
-                            from_display_name, if enc_key.is_some() { "yes" } else { "no" });
-                    }
-                }
-
-                // Update our pending request to accepted (check both directions for safety)
-                // Also save their node_id and relay_url for reconnection
-                // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
-                {
-                    let conn = self.db.conn.lock().unwrap();
-                    let now = chrono::Utc::now().to_rfc3339();
-                    println!(
-                        "[IROH] Updating p2p_connections: user_id={}, friend_user_id={}",
-                        self.user_id, friend_user_id
-                    );
-
-                    // First try to update existing pending request (check both directions)
-                    let rows_affected = match conn.execute(
-                        "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1, iroh_node_id = ?4, friend_relay_url = ?5
-                         WHERE ((user_id = ?2 AND friend_user_id = ?3) OR (user_id = ?3 AND friend_user_id = ?2)) AND status = 'pending'",
-                        rusqlite::params![
-                            &now,
-                            self.user_id,
-                            friend_user_id,
-                            &from_node_id,
-                            &from_relay_url,
-                        ],
-                    ) {
-                        Ok(n) => n,
-                        Err(e) => {
-                            println!("[IROH] Warning: Failed to update friend request to accepted: {}", e);
-                            0
-                        }
-                    };
-
-                    if rows_affected > 0 {
-                        println!(
-                            "[IROH] [OK] Friend request accepted by {}, {} row(s) updated",
-                            from_public_key, rows_affected
-                        );
-                    } else {
-                        // No pending request found - check if already accepted or need to create
-                        // Check both directions since connection could be stored either way
-                        let existing_status: Option<String> = conn.query_row(
-                            "SELECT status FROM p2p_connections
-                             WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
-                            rusqlite::params![self.user_id, friend_user_id],
-                            |row| row.get(0)
-                        ).ok();
-
-                        match existing_status.as_deref() {
-                            Some("accepted") => {
-                                println!("[IROH] Friendship already accepted, updating node info");
-                                // Update node info even if already accepted
-                                let _ = conn.execute(
-                                    "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
-                                     WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                    rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
-                                );
-                            }
-                            Some(status) => {
-                                println!(
-                                    "[IROH] Unexpected status '{}', forcing to accepted",
-                                    status
-                                );
-                                let _ = conn.execute(
-                                    "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
-                                     WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
-                                    rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
-                                );
-                            }
-                            None => {
-                                // CRITICAL FIX: No connection exists - create the user and friendship directly
-                                // This handles the case where our data was cleared or we never received the original FriendRequest
-                                println!("[IROH] No existing connection - creating accepted friendship directly from FriendAccepted");
-
-                                // First ensure the user record exists
-                                if let Err(e) = conn.execute(
-                                    "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                                    rusqlite::params![
-                                        friend_user_id,
-                                        &from_display_name,
-                                        &from_public_key,
-                                        &now,
-                                        &now,
-                                    ],
-                                ) {
-                                    println!("[IROH] Warning: Failed to create user record: {}", e);
-                                }
-
-                                // Create the p2p_connection as already accepted
-                                // initiated_by is set to friend_user_id because THEY initiated by accepting (sending FriendAccepted)
-                                if let Err(e) = conn.execute(
-                                    "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, iroh_node_id, friend_relay_url, created_at, updated_at)
-                                     VALUES (?1, ?2, ?3, 'accepted', ?4, ?5, ?6, ?7, ?8)",
-                                    rusqlite::params![
-                                        super::types::SqliteUuid::new(),
-                                        self.user_id,
-                                        friend_user_id,
-                                        friend_user_id, // They initiated (we're receiving their acceptance)
-                                        &from_node_id,
-                                        &from_relay_url,
-                                        &now,
-                                        &now,
-                                    ],
-                                ) {
-                                    println!("[IROH] Warning: Failed to create accepted friendship: {}", e);
-                                } else {
-                                    println!("[IROH] [OK] Created accepted friendship directly from FriendAccepted message");
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Emit event to UI so it can refresh the friends list
-                let _ = self.app_handle.emit(
-                    "friend-accepted",
-                    serde_json::json!({
-                        "from_user_id": friend_user_id.to_string(),
-                        "from_public_key": from_public_key,
-                    }),
-                );
-
-                // Add their node address to the address book for direct connection
-                if let Ok(peer_node_id) = from_node_id.parse::<iroh::EndpointId>() {
-                    if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
-                        let node_addr = iroh::EndpointAddr::new(peer_node_id)
-                            .with_relay_url(relay_url_parsed.into());
-
-                        self.address_book.add_endpoint_info(node_addr);
-                        println!("[IROH] [OK] Added friend's address to the address book");
-
-                        // NOTE: No resubscription needed! The gossip protocol handles mesh formation
-                        // automatically. Since we received this FriendAccepted message via gossip,
-                        // we already have a working gossip connection to the peer.
-                        // Resubscribing would tear down that connection and cause message loss.
-                        println!("[IROH] [OK] Friend's node address added - gossip mesh already established");
-                        self.add_connected_peer(peer_node_id).await;
-                    }
-                }
-
-                println!(
-                    "[IROH] [OK] Friendship fully established with {}!",
-                    from_public_key
-                );
-            }
-
             P2PMessage::Heartbeat {
                 node_id,
                 timestamp: _,
@@ -2981,178 +2397,6 @@ impl IrohNetwork {
                     }
                     Err(e) => {
                         println!("[HEARTBEAT] Failed to parse node_id from heartbeat: {}", e);
-                    }
-                }
-            }
-
-            P2PMessage::Content {
-                content_type,
-                user_id: sender_user_id,
-                public_key,
-                node_id,
-                payload_json,
-                timestamp,
-                device_id,
-                blob_refs,
-            } => {
-                println!(
-                    "[IROH] Received Content({}) from {}",
-                    content_type, public_key
-                );
-
-                // Ensure sender exists in database
-                {
-                    let conn = self.db.conn.lock().unwrap();
-                    let now = chrono::Utc::now().to_rfc3339();
-
-                    let _ = conn.execute(
-                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                        rusqlite::params![
-                            sender_user_id,
-                            format!("User_{}", &public_key[..8.min(public_key.len())]),
-                            &public_key,
-                            &now,
-                            &now
-                        ],
-                    );
-                }
-
-                // Handle based on content_type
-                match content_type.as_str() {
-                    "post" => {
-                        // Parse post payload
-                        #[derive(serde::Deserialize)]
-                        struct PostPayload {
-                            content: String,
-                        }
-                        if let Ok(payload) = serde_json::from_str::<PostPayload>(&payload_json) {
-                            // Emit post event via sealed-post-received
-                            let _ = self.app_handle.emit(
-                                "p2p-post-with-blobs",
-                                serde_json::json!({
-                                    "userId": sender_user_id.to_string(),
-                                    "publicKey": public_key,
-                                    "nodeId": node_id,
-                                    "content": payload.content,
-                                    "timestamp": timestamp,
-                                    "deviceId": device_id,
-                                    "blobRefs": blob_refs
-                                }),
-                            );
-                            println!("[IROH] ✓ Emitted Content(post) event");
-                        }
-                    }
-                    "comment" => {
-                        // Parse comment payload
-                        #[derive(serde::Deserialize)]
-                        struct CommentPayload {
-                            comment_id: String,
-                            post_id: String,
-                            content: String,
-                            parent_comment_id: Option<String>,
-                        }
-                        if let Ok(payload) = serde_json::from_str::<CommentPayload>(&payload_json) {
-                            let comment_uuid =
-                                super::types::SqliteUuid::parse_str(&payload.comment_id).ok();
-                            let post_uuid =
-                                super::types::SqliteUuid::parse_str(&payload.post_id).ok();
-                            let parent_uuid = payload
-                                .parent_comment_id
-                                .as_ref()
-                                .and_then(|id| super::types::SqliteUuid::parse_str(id).ok());
-
-                            if let (Some(comment_id), Some(post_id)) = (comment_uuid, post_uuid) {
-                                // Save comment
-                                {
-                                    let conn = self.db.conn.lock().unwrap();
-                                    let now = chrono::Utc::now().to_rfc3339();
-                                    if let Err(e) = conn.execute(
-                                        "INSERT OR IGNORE INTO post_comments (id, post_id, user_id, content, parent_comment_id, created_at, updated_at)
-                                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                                        rusqlite::params![comment_id, post_id, sender_user_id, &payload.content, parent_uuid, &now, &now],
-                                    ) {
-                                        println!("[IROH] Warning: Failed to save comment: {}", e);
-                                    } else {
-                                        println!("[IROH] ✓ Saved Content(comment) to database");
-                                    }
-                                }
-
-                                // Emit to UI
-                                let _ = self.app_handle.emit(
-                                    "p2p-post-comment",
-                                    serde_json::json!({
-                                        "commentId": payload.comment_id,
-                                        "postId": payload.post_id,
-                                        "userId": sender_user_id.to_string(),
-                                        "publicKey": public_key,
-                                        "content": payload.content,
-                                        "parentCommentId": payload.parent_comment_id,
-                                        "timestamp": timestamp
-                                    }),
-                                );
-                                println!("[IROH] ✓ Emitted Content(comment) event");
-                            }
-                        }
-                    }
-                    "reaction" => {
-                        // Parse reaction payload
-                        #[derive(serde::Deserialize)]
-                        struct ReactionPayload {
-                            post_id: String,
-                            emoji: String,
-                            action: String,
-                        }
-                        if let Ok(payload) = serde_json::from_str::<ReactionPayload>(&payload_json)
-                        {
-                            if let Ok(post_uuid) =
-                                super::types::SqliteUuid::parse_str(&payload.post_id)
-                            {
-                                // Save or remove reaction
-                                {
-                                    let conn = self.db.conn.lock().unwrap();
-                                    let now = chrono::Utc::now().to_rfc3339();
-
-                                    if payload.action == "add" {
-                                        if let Err(e) = conn.execute(
-                                            "INSERT OR REPLACE INTO post_reactions (id, post_id, user_id, emoji, created_at)
-                                             VALUES (?1, ?2, ?3, ?4, ?5)",
-                                            rusqlite::params![super::types::SqliteUuid::new(), post_uuid, sender_user_id, &payload.emoji, &now],
-                                        ) {
-                                            println!("[IROH] Warning: Failed to save reaction: {}", e);
-                                        } else {
-                                            println!("[IROH] ✓ Saved Content(reaction) to database");
-                                        }
-                                    } else if payload.action == "remove" {
-                                        if let Err(e) = conn.execute(
-                                            "DELETE FROM post_reactions WHERE post_id = ?1 AND user_id = ?2",
-                                            rusqlite::params![post_uuid, sender_user_id],
-                                        ) {
-                                            println!("[IROH] Warning: Failed to remove reaction: {}", e);
-                                        } else {
-                                            println!("[IROH] ✓ Removed Content(reaction) from database");
-                                        }
-                                    }
-                                }
-
-                                // Emit to UI
-                                let _ = self.app_handle.emit(
-                                    "p2p-post-reaction",
-                                    serde_json::json!({
-                                        "postId": payload.post_id,
-                                        "userId": sender_user_id.to_string(),
-                                        "publicKey": public_key,
-                                        "emoji": payload.emoji,
-                                        "action": payload.action,
-                                        "timestamp": timestamp
-                                    }),
-                                );
-                                println!("[IROH] ✓ Emitted Content(reaction) event");
-                            }
-                        }
-                    }
-                    _ => {
-                        println!("[IROH] Unknown content_type: {}", content_type);
                     }
                 }
             }
@@ -3308,42 +2552,26 @@ impl IrohNetwork {
             accepted_connections.len()
         );
 
-        // Get our node address for the FriendAccepted message
-        // Clone endpoint to avoid holding lock during await
-        let endpoint_clone = self.endpoint.lock().await.clone();
-        let (our_node_id, our_relay_url) = if let Some(endpoint) = endpoint_clone.as_ref() {
-            let addr = endpoint.addr();
-            let relay = addr
-                .relay_urls()
-                .next()
-                .map(|u| u.to_string())
-                .unwrap_or_default();
-            (addr.id.to_string(), relay)
-        } else {
-            println!("[FRIEND-RESEND] No endpoint available");
-            return;
-        };
-
-        // Get our encryption public key for sealed envelope encryption
-        let our_encryption_public_key = self.get_user_encryption_public_key().unwrap_or_default();
-
         for (friend_user_id, friend_public_key) in accepted_connections {
             println!(
                 "[FRIEND-RESEND] Resending FriendAccepted to {} ({})",
                 friend_user_id, friend_public_key
             );
 
-            let friend_accepted = P2PMessage::FriendAccepted {
-                from_user_id: self.user_id,
-                from_public_key: self.public_key.clone(),
-                from_encryption_public_key: our_encryption_public_key.clone(),
-                from_display_name: self.display_name.clone(),
-                from_node_id: our_node_id.clone(),
-                from_relay_url: our_relay_url.clone(),
-                to_public_key: friend_public_key.clone(),
+            // Seal to the friend's encryption key - without it we can't (and
+            // shouldn't) tell them anything
+            let Some(friend_enc_key) = super::types::SqliteUuid::parse_str(&friend_user_id)
+                .ok()
+                .and_then(|id| self.get_encryption_key_for_user(id))
+            else {
+                println!(
+                    "[FRIEND-RESEND] No encryption key for {} - skipping",
+                    friend_public_key
+                );
+                continue;
             };
 
-            if let Err(e) = self.publish_message(CONTENT_TOPIC, friend_accepted).await {
+            if let Err(e) = self.send_friend_accepted_sealed(&friend_enc_key).await {
                 println!(
                     "[FRIEND-RESEND] Warning: Failed to resend FriendAccepted to {}: {}",
                     friend_public_key, e
@@ -3478,7 +2706,7 @@ impl IrohNetwork {
     }
 
     /// Get current user's encryption public key from database
-    fn get_user_encryption_public_key(&self) -> Option<String> {
+    pub fn get_user_encryption_public_key(&self) -> Option<String> {
         // Use try_lock to avoid blocking if network handler holds the lock
         let conn = match self.db.conn.try_lock() {
             Ok(c) => c,
@@ -3815,55 +3043,26 @@ impl IrohNetwork {
                     if initiated_by == Some(peer_user_id) {
                         println!("[IROH] Peer {} initiated this friendship - resending FriendAccepted to ensure delivery", peer_user_id);
 
-                        // Get our node address for the FriendAccepted message
-                        // Use try_lock to avoid blocking the gossip stream handler if endpoint is busy
-                        let endpoint_clone = match tokio::time::timeout(
-                            tokio::time::Duration::from_millis(100),
-                            self.endpoint.lock(),
-                        )
-                        .await
-                        {
-                            Ok(guard) => guard.clone(),
-                            Err(_) => {
-                                println!("[IROH] Skipping FriendAccepted resend - endpoint busy");
-                                None
+                        // Seal the FriendAccepted to the friend's encryption
+                        // key (we have it - their presence just delivered it,
+                        // and the handshake stored it)
+                        match self.get_encryption_key_for_user(peer_user_id) {
+                            Some(friend_enc_key) => {
+                                if let Err(e) =
+                                    self.send_friend_accepted_sealed(&friend_enc_key).await
+                                {
+                                    println!(
+                                        "[IROH] Warning: Failed to resend FriendAccepted: {}",
+                                        e
+                                    );
+                                } else {
+                                    println!("[IROH] [OK] Resent FriendAccepted to {} (ensuring they know we accepted)", public_key);
+                                }
                             }
-                        };
-                        let (our_node_id, our_relay_url) =
-                            if let Some(endpoint) = endpoint_clone.as_ref() {
-                                let addr = endpoint.addr();
-                                let relay = addr
-                                    .relay_urls()
-                                    .next()
-                                    .map(|u| u.to_string())
-                                    .unwrap_or_default();
-                                (addr.id.to_string(), relay)
-                            } else {
-                                (String::new(), String::new())
-                            };
-
-                        if !our_node_id.is_empty() {
-                            // Get our encryption public key for sealed envelope encryption
-                            let our_encryption_public_key =
-                                self.get_user_encryption_public_key().unwrap_or_default();
-
-                            let friend_accepted = P2PMessage::FriendAccepted {
-                                from_user_id: self.user_id,
-                                from_public_key: self.public_key.clone(),
-                                from_encryption_public_key: our_encryption_public_key,
-                                from_display_name: self.display_name.clone(),
-                                from_node_id: our_node_id,
-                                from_relay_url: our_relay_url,
-                                to_public_key: public_key.clone(),
-                            };
-
-                            if let Err(e) =
-                                self.publish_message(CONTENT_TOPIC, friend_accepted).await
-                            {
-                                println!("[IROH] Warning: Failed to resend FriendAccepted: {}", e);
-                            } else {
-                                println!("[IROH] [OK] Resent FriendAccepted to {} (ensuring they know we accepted)", public_key);
-                            }
+                            None => println!(
+                                "[IROH] No encryption key for {} - cannot resend FriendAccepted",
+                                public_key
+                            ),
                         }
                     }
                 }
@@ -3887,45 +3086,26 @@ impl IrohNetwork {
                     if initiated_by == Some(self.user_id) {
                         println!("[IROH] We initiated friendship with {} - resending FriendRequest to ensure delivery", peer_user_id);
 
-                        // Get our node address for the FriendRequest message
-                        // Clone endpoint first to avoid holding lock during await
-                        let endpoint_clone = self.endpoint.lock().await.clone();
-                        let (our_node_id, our_relay_url) =
-                            if let Some(endpoint) = endpoint_clone.as_ref() {
-                                let addr = endpoint.addr();
-                                let relay = addr
-                                    .relay_urls()
-                                    .next()
-                                    .map(|u| u.to_string())
-                                    .unwrap_or_default();
-                                (addr.id.to_string(), relay)
-                            } else {
-                                (String::new(), String::new())
-                            };
-
-                        if !our_node_id.is_empty() {
-                            // Get our encryption public key for sealed envelope encryption
-                            let our_encryption_public_key =
-                                self.get_user_encryption_public_key().unwrap_or_default();
-
-                            let friend_request = P2PMessage::FriendRequest {
-                                from_user_id: self.user_id,
-                                from_public_key: self.public_key.clone(),
-                                from_encryption_public_key: our_encryption_public_key,
-                                from_display_name: self.display_name.clone(),
-                                from_node_id: our_node_id,
-                                from_relay_url: our_relay_url,
-                                to_public_key: public_key.clone(),
-                                timestamp: chrono::Utc::now().timestamp(),
-                            };
-
-                            if let Err(e) =
-                                self.publish_message(CONTENT_TOPIC, friend_request).await
-                            {
-                                println!("[IROH] Warning: Failed to resend FriendRequest: {}", e);
-                            } else {
-                                println!("[IROH] [OK] Resent FriendRequest to {} (in case they lost our original request)", public_key);
+                        // Seal the FriendRequest to the friend's encryption
+                        // key (stored when we scanned their invite; their
+                        // presence just refreshed it)
+                        match self.get_encryption_key_for_user(peer_user_id) {
+                            Some(friend_enc_key) => {
+                                if let Err(e) =
+                                    self.send_friend_request_sealed(&friend_enc_key).await
+                                {
+                                    println!(
+                                        "[IROH] Warning: Failed to resend FriendRequest: {}",
+                                        e
+                                    );
+                                } else {
+                                    println!("[IROH] [OK] Resent FriendRequest to {} (in case they lost our original request)", public_key);
+                                }
                             }
+                            None => println!(
+                                "[IROH] No encryption key for {} - cannot resend FriendRequest",
+                                public_key
+                            ),
                         }
                     }
                 }
@@ -3968,6 +3148,498 @@ impl IrohNetwork {
                 }
             }
         }
+    }
+
+    /// Process an authenticated friend request. Arrives sealed to our
+    /// encryption key; `from_public_key` is the envelope's verified sender, so
+    /// friend requests can no longer be forged or observed by third parties.
+    async fn handle_friend_request(
+        &self,
+        from_public_key: String,
+        from_encryption_public_key: String,
+        from_display_name: String,
+        from_node_id: String,
+        from_relay_url: String,
+    ) {
+        println!(
+            "[IROH] Received FriendRequest from {} ({}) (global mesh)",
+            from_display_name, from_public_key
+        );
+
+        // Skip if trying to add ourselves
+        if from_public_key == self.public_key {
+            println!("[IROH] Cannot add ourselves as friend, ignoring");
+            return;
+        }
+
+        println!(
+            "[IROH] Processing friend request from {} ({})",
+            from_display_name, from_public_key
+        );
+
+        // CRITICAL: Compute friend's user_id from their public key to ensure consistency
+        // Don't trust from_user_id from the message - derive it deterministically
+        let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
+        println!(
+            "[IROH] Computed friend_user_id {} from public_key",
+            friend_user_id
+        );
+
+        // 1. Ensure the friend user exists in database with their actual display name and encryption key
+        // Use ON CONFLICT(public_key) since that's the reliable unique identifier
+        // CRITICAL: Store encryption_public_key so we can encrypt comments/reactions to them
+        // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+        {
+            let conn = self.db.conn.lock().unwrap();
+            // Use empty string check since encryption_public_key might be "" for old clients
+            let enc_key = if from_encryption_public_key.is_empty() {
+                None
+            } else {
+                Some(&from_encryption_public_key)
+            };
+            if let Err(e) = conn.execute(
+                        "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                         ON CONFLICT(public_key) DO UPDATE SET
+                            display_name = excluded.display_name,
+                            encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+                            updated_at = excluded.updated_at",
+                        rusqlite::params![
+                            friend_user_id,  // Use computed ID, not from message
+                            &from_display_name,
+                            &from_public_key,
+                            enc_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to create/update friend user: {}", e);
+                    } else {
+                        println!("[IROH] [OK] Created/updated friend user {} with display name: {} (enc_key: {})",
+                            friend_user_id, from_display_name, if enc_key.is_some() { "yes" } else { "no" });
+                    }
+        }
+
+        // 2. Create incoming friend request in database (status = 'pending')
+        // User must accept this request before friendship is established
+        // Convention: user_id = sender (initiator), friend_user_id = receiver
+        // IMPORTANT: Check both directions to avoid duplicate rows when both users send requests
+        // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+        let mut auto_accepted = false;
+        {
+            let conn = self.db.conn.lock().unwrap();
+            let now = chrono::Utc::now().to_rfc3339();
+
+            // Check if any connection exists in either direction
+            let existing: Option<(String, super::types::SqliteUuid)> = conn.query_row(
+                        "SELECT status, initiated_by FROM p2p_connections
+                         WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                        rusqlite::params![self.user_id, friend_user_id],
+                        |row| Ok((row.get(0)?, row.get(1)?))
+                    ).ok();
+
+            match existing {
+                Some((status, _)) if status == "accepted" => {
+                    // Already friends - just update their node info
+                    println!(
+                        "[IROH] Already friends with {}, updating node info",
+                        from_public_key
+                    );
+                    let _ = conn.execute(
+                                "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
+                                 WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
+                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
+                            );
+                }
+                Some((status, initiated_by))
+                    if status == "pending" && initiated_by == self.user_id =>
+                {
+                    // We already sent THEM a request and they're sending us one - auto-accept!
+                    println!(
+                        "[IROH] Mutual friend request detected! Auto-accepting with {}",
+                        from_public_key
+                    );
+                    let _ = conn.execute(
+                                "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
+                                 WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
+                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
+                            );
+                    auto_accepted = true;
+                }
+                Some((status, _)) if status == "pending" => {
+                    // They already sent us a request (we haven't accepted) - update their node info
+                    println!(
+                        "[IROH] Already have pending request from {}, updating node info",
+                        from_public_key
+                    );
+                    let _ = conn.execute(
+                                "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
+                                 WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
+                                rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
+                            );
+                }
+                _ => {
+                    // No existing connection - create new incoming request
+                    // CRITICAL: user_id must ALWAYS be the local user (self) for queries to work
+                    // friend_user_id is the friend we're connecting to (computed from public key)
+                    // initiated_by tracks who sent the original request
+                    if let Err(e) = conn.execute(
+                                "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at, iroh_node_id, friend_relay_url)
+                                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8)",
+                                rusqlite::params![
+                                    super::types::SqliteUuid::new(),
+                                    self.user_id,     // user_id = ALWAYS the local user (us)
+                                    friend_user_id,   // friend_user_id = computed from sender's public key
+                                    friend_user_id,   // initiated_by = sender (they sent the request)
+                                    &now,
+                                    &now,
+                                    &from_node_id,
+                                    &from_relay_url,
+                                ],
+                            ) {
+                                println!("[IROH] Warning: Failed to create friend request: {}", e);
+                            } else {
+                                println!("[IROH] [OK] Incoming friend request created from {} (our user_id={}, friend_user_id={})",
+                                    from_public_key, self.user_id, friend_user_id);
+                            }
+                }
+            }
+        }
+
+        // Emit acceptance event AFTER releasing the database lock
+        if auto_accepted {
+            let _ = self.app_handle.emit(
+                "friend-request-accepted",
+                serde_json::json!({
+                    "friend_user_id": friend_user_id.to_string(),
+                    "friend_public_key": from_public_key,
+                }),
+            );
+        }
+
+        // Emit event to UI so it can show the pending request
+        let _ = self.app_handle.emit(
+            "friend-request-received",
+            serde_json::json!({
+                "from_user_id": friend_user_id.to_string(),
+                "from_public_key": from_public_key,
+                "from_node_id": from_node_id,
+            }),
+        );
+
+        // 3. Add friend's node address to the address book for direct connection
+        if let Ok(peer_node_id) = from_node_id.parse::<iroh::EndpointId>() {
+            if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
+                let node_addr =
+                    iroh::EndpointAddr::new(peer_node_id).with_relay_url(relay_url_parsed.into());
+
+                self.address_book.add_endpoint_info(node_addr);
+                println!("[IROH] [OK] Added friend's address to the address book");
+
+                // NOTE: We do NOT resubscribe here because if we received this message via gossip,
+                // the mesh is already working. Resubscribing would disrupt the mesh and cause
+                // message loss. The sender will resubscribe on their end when they join with us
+                // as bootstrap, which is sufficient for bidirectional connectivity.
+                println!("[IROH] Gossip mesh already functional (received message), skipping resubscription");
+            }
+        }
+
+        println!("[IROH] [OK] Friend request received, waiting for user to accept");
+    }
+
+    /// Process an authenticated friend acceptance (sealed + signed, like
+    /// handle_friend_request)
+    async fn handle_friend_accepted(
+        &self,
+        from_public_key: String,
+        from_encryption_public_key: String,
+        from_display_name: String,
+        from_node_id: String,
+        from_relay_url: String,
+    ) {
+        println!(
+            "[IROH] Received FriendAccepted from {} ({}) (global mesh)",
+            from_display_name, from_public_key
+        );
+
+        // Skip if from ourselves
+        if from_public_key == self.public_key {
+            println!("[IROH] FriendAccepted from ourselves, ignoring");
+            return;
+        }
+
+        // CRITICAL: Compute friend_user_id deterministically from public key
+        // This ensures it matches exactly how it was stored when the outgoing request was created
+        let friend_user_id = super::types::SqliteUuid::from_public_key(&from_public_key);
+        println!(
+            "[IROH] Computed friend_user_id from public key: {}",
+            friend_user_id
+        );
+
+        // Ensure the friend user exists with their proper display name and encryption key
+        // CRITICAL: Store encryption_public_key so we can encrypt comments/reactions to them
+        // Use INSERT ON CONFLICT to handle both new users and stub-named users
+        // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+        {
+            let conn = self.db.conn.lock().unwrap();
+            // Use empty string check since encryption_public_key might be "" for old clients
+            let enc_key = if from_encryption_public_key.is_empty() {
+                None
+            } else {
+                Some(&from_encryption_public_key)
+            };
+            if let Err(e) = conn.execute(
+                        "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                         ON CONFLICT(public_key) DO UPDATE SET
+                            display_name = excluded.display_name,
+                            encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+                            updated_at = excluded.updated_at",
+                        rusqlite::params![
+                            friend_user_id,
+                            &from_display_name,
+                            &from_public_key,
+                            enc_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to create/update friend user: {}", e);
+                    } else {
+                        println!("[IROH] [OK] Created/updated friend user with display name: {} (enc_key: {})",
+                            from_display_name, if enc_key.is_some() { "yes" } else { "no" });
+                    }
+        }
+
+        // Update our pending request to accepted (check both directions for safety)
+        // Also save their node_id and relay_url for reconnection
+        // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+        {
+            let conn = self.db.conn.lock().unwrap();
+            let now = chrono::Utc::now().to_rfc3339();
+            println!(
+                "[IROH] Updating p2p_connections: user_id={}, friend_user_id={}",
+                self.user_id, friend_user_id
+            );
+
+            // First try to update existing pending request (check both directions)
+            let rows_affected = match conn.execute(
+                        "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1, iroh_node_id = ?4, friend_relay_url = ?5
+                         WHERE ((user_id = ?2 AND friend_user_id = ?3) OR (user_id = ?3 AND friend_user_id = ?2)) AND status = 'pending'",
+                        rusqlite::params![
+                            &now,
+                            self.user_id,
+                            friend_user_id,
+                            &from_node_id,
+                            &from_relay_url,
+                        ],
+                    ) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            println!("[IROH] Warning: Failed to update friend request to accepted: {}", e);
+                            0
+                        }
+                    };
+
+            if rows_affected > 0 {
+                println!(
+                    "[IROH] [OK] Friend request accepted by {}, {} row(s) updated",
+                    from_public_key, rows_affected
+                );
+            } else {
+                // No pending request found - check if already accepted or need to create
+                // Check both directions since connection could be stored either way
+                let existing_status: Option<String> = conn.query_row(
+                            "SELECT status FROM p2p_connections
+                             WHERE (user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1)",
+                            rusqlite::params![self.user_id, friend_user_id],
+                            |row| row.get(0)
+                        ).ok();
+
+                match existing_status.as_deref() {
+                    Some("accepted") => {
+                        println!("[IROH] Friendship already accepted, updating node info");
+                        // Update node info even if already accepted
+                        let _ = conn.execute(
+                                    "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
+                                     WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
+                                    rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
+                                );
+                    }
+                    Some(status) => {
+                        println!("[IROH] Unexpected status '{}', forcing to accepted", status);
+                        let _ = conn.execute(
+                                    "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
+                                     WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
+                                    rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
+                                );
+                    }
+                    None => {
+                        // CRITICAL FIX: No connection exists - create the user and friendship directly
+                        // This handles the case where our data was cleared or we never received the original FriendRequest
+                        println!("[IROH] No existing connection - creating accepted friendship directly from FriendAccepted");
+
+                        // First ensure the user record exists
+                        if let Err(e) = conn.execute(
+                                    "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                                    rusqlite::params![
+                                        friend_user_id,
+                                        &from_display_name,
+                                        &from_public_key,
+                                        &now,
+                                        &now,
+                                    ],
+                                ) {
+                                    println!("[IROH] Warning: Failed to create user record: {}", e);
+                                }
+
+                        // Create the p2p_connection as already accepted
+                        // initiated_by is set to friend_user_id because THEY initiated by accepting (sending FriendAccepted)
+                        if let Err(e) = conn.execute(
+                                    "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, iroh_node_id, friend_relay_url, created_at, updated_at)
+                                     VALUES (?1, ?2, ?3, 'accepted', ?4, ?5, ?6, ?7, ?8)",
+                                    rusqlite::params![
+                                        super::types::SqliteUuid::new(),
+                                        self.user_id,
+                                        friend_user_id,
+                                        friend_user_id, // They initiated (we're receiving their acceptance)
+                                        &from_node_id,
+                                        &from_relay_url,
+                                        &now,
+                                        &now,
+                                    ],
+                                ) {
+                                    println!("[IROH] Warning: Failed to create accepted friendship: {}", e);
+                                } else {
+                                    println!("[IROH] [OK] Created accepted friendship directly from FriendAccepted message");
+                                }
+                    }
+                }
+            }
+        }
+
+        // Emit event to UI so it can refresh the friends list
+        let _ = self.app_handle.emit(
+            "friend-accepted",
+            serde_json::json!({
+                "from_user_id": friend_user_id.to_string(),
+                "from_public_key": from_public_key,
+            }),
+        );
+
+        // Add their node address to the address book for direct connection
+        if let Ok(peer_node_id) = from_node_id.parse::<iroh::EndpointId>() {
+            if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
+                let node_addr =
+                    iroh::EndpointAddr::new(peer_node_id).with_relay_url(relay_url_parsed.into());
+
+                self.address_book.add_endpoint_info(node_addr);
+                println!("[IROH] [OK] Added friend's address to the address book");
+
+                // NOTE: No resubscription needed! The gossip protocol handles mesh formation
+                // automatically. Since we received this FriendAccepted message via gossip,
+                // we already have a working gossip connection to the peer.
+                // Resubscribing would tear down that connection and cause message loss.
+                println!(
+                    "[IROH] [OK] Friend's node address added - gossip mesh already established"
+                );
+                self.add_connected_peer(peer_node_id).await;
+            }
+        }
+
+        println!(
+            "[IROH] [OK] Friendship fully established with {}!",
+            from_public_key
+        );
+    }
+
+    /// Seal a payload for the given recipients and publish it on the content
+    /// topic. This is the ONLY way application content leaves this node.
+    pub async fn publish_sealed(
+        &self,
+        payload: &super::crypto::ContentPayload,
+        recipients: &[String],
+    ) -> Result<(), String> {
+        let signing_key = self
+            .get_user_signing_private_key()
+            .ok_or_else(|| "No signing private key".to_string())?;
+        let envelope = super::crypto::GossipEnvelope::seal(
+            payload,
+            recipients,
+            &self.public_key,
+            &signing_key,
+        )?;
+        let envelope_json = serde_json::to_string(&envelope)
+            .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
+        self.publish_message(CONTENT_TOPIC, P2PMessage::SealedEnvelope { envelope_json })
+            .await
+    }
+
+    /// Our node id and relay URL as strings, for handshake payloads
+    async fn our_addr_strings(&self) -> Option<(String, String)> {
+        let endpoint_clone = self.endpoint.lock().await.clone();
+        let endpoint = endpoint_clone.as_ref()?;
+        let addr = endpoint.addr();
+        let relay = addr
+            .relay_urls()
+            .next()
+            .map(|u| u.to_string())
+            .unwrap_or_default();
+        Some((addr.id.to_string(), relay))
+    }
+
+    /// Look up a user's stored X25519 encryption public key by user id
+    fn get_encryption_key_for_user(&self, user_id: super::types::SqliteUuid) -> Option<String> {
+        let conn = self.db.conn.try_lock().ok()?;
+        conn.query_row(
+            "SELECT encryption_public_key FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .filter(|k| !k.is_empty())
+    }
+
+    /// Build and send a sealed FriendRequest to a friend's encryption key
+    pub async fn send_friend_request_sealed(
+        &self,
+        recipient_encryption_key: &str,
+    ) -> Result<(), String> {
+        let (node_id, relay_url) = self
+            .our_addr_strings()
+            .await
+            .ok_or_else(|| "Endpoint not initialized".to_string())?;
+        let payload = super::crypto::ContentPayload::FriendRequest {
+            display_name: self.display_name.clone(),
+            encryption_public_key: self.get_user_encryption_public_key().unwrap_or_default(),
+            node_id,
+            relay_url,
+            sent_at: chrono::Utc::now().timestamp(),
+        };
+        self.publish_sealed(&payload, &[recipient_encryption_key.to_string()])
+            .await
+    }
+
+    /// Build and send a sealed FriendAccepted to a friend's encryption key
+    pub async fn send_friend_accepted_sealed(
+        &self,
+        recipient_encryption_key: &str,
+    ) -> Result<(), String> {
+        let (node_id, relay_url) = self
+            .our_addr_strings()
+            .await
+            .ok_or_else(|| "Endpoint not initialized".to_string())?;
+        let payload = super::crypto::ContentPayload::FriendAccepted {
+            display_name: self.display_name.clone(),
+            encryption_public_key: self.get_user_encryption_public_key().unwrap_or_default(),
+            node_id,
+            relay_url,
+            sent_at: chrono::Utc::now().timestamp(),
+        };
+        self.publish_sealed(&payload, &[recipient_encryption_key.to_string()])
+            .await
     }
 
     /// Get our Ed25519 signing private key (used to sign sealed-envelope

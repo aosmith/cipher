@@ -3364,6 +3364,7 @@ async function addFriendFromTab() {
         // Use the P2P-enabled add friend command
         await TauriAPI.invoke('iroh_add_friend_by_public_key', {
             friendPublicKey: parsed.publicKey,
+            encryptionPublicKey: parsed.encryptionPublicKey || null,
             nodeId: parsed.nodeId,
             relayUrl: parsed.relayUrl || null,
             displayName: parsed.displayName || null,
@@ -3599,6 +3600,7 @@ async function scanQRCode() {
                     console.log('[QR] Adding friend by public key...');
                     const addedPublicKey = await TauriAPI.invoke('iroh_add_friend_by_public_key', {
                         friendPublicKey: parsed.publicKey,
+                        encryptionPublicKey: parsed.encryptionPublicKey || null,
                         nodeId: parsed.nodeId,
                         relayUrl: parsed.relayUrl || null,
                         displayName: parsed.displayName || null,
@@ -4371,6 +4373,7 @@ async function handleScannedQRCode(data) {
         console.log('[QR-SCAN] Adding friend by public key...');
         const addedPublicKey = await TauriAPI.invoke('iroh_add_friend_by_public_key', {
             friendPublicKey: parsed.publicKey,
+            encryptionPublicKey: parsed.encryptionPublicKey || null,
             nodeId: parsed.nodeId,
             relayUrl: parsed.relayUrl || null,
             displayName: parsed.displayName || null,
@@ -4587,6 +4590,7 @@ async function addFriendFromModal() {
         // Use the P2P-enabled add friend command
         await TauriAPI.invoke('iroh_add_friend_by_public_key', {
             friendPublicKey: parsed.publicKey,
+            encryptionPublicKey: parsed.encryptionPublicKey || null,
             nodeId: parsed.nodeId,
             relayUrl: parsed.relayUrl || null,
             displayName: parsed.displayName || null,

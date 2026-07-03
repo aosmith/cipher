@@ -85,15 +85,32 @@ pub enum ContentPayload {
         sent_at: i64,
     },
     DirectMessage {
+        #[serde(default)]
+        message_id: String,
         content: String,
         thread_id: Option<SqliteUuid>,
+        #[serde(default)]
+        sent_at: i64,
     },
+    /// Friend request, sealed to the target's encryption key (from their
+    /// invite QR). Sender identity/authenticity comes from the envelope
+    /// signature; carries everything the target needs to connect back.
     FriendRequest {
-        username: String,
-        message: Option<String>,
+        display_name: String,
+        encryption_public_key: String,
+        node_id: String,
+        relay_url: String,
+        #[serde(default)]
+        sent_at: i64,
     },
+    /// Friend request acceptance, sealed to the requester's encryption key
     FriendAccepted {
-        username: String,
+        display_name: String,
+        encryption_public_key: String,
+        node_id: String,
+        relay_url: String,
+        #[serde(default)]
+        sent_at: i64,
     },
     KeyRotation {
         /// New signed pre-key (base64)

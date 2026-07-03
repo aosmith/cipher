@@ -494,3 +494,88 @@ mod tests {
         );
     }
 }
+
+// ===== Real invite format tests (exercise the actual parser) =====
+mod invite_v3 {
+    use app::iroh_commands::parse_invite_code;
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use base64::Engine;
+
+    /// Build a v3 invite: [32 ed25519][32 x25519][32 node][1 name_len][name]
+    fn build_v3(name: Option<&str>) -> (String, String, String, String) {
+        let pubkey = [1u8; 32];
+        let enc = [2u8; 32];
+        let node = [3u8; 32];
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&pubkey);
+        payload.extend_from_slice(&enc);
+        payload.extend_from_slice(&node);
+        if let Some(n) = name {
+            payload.push(n.len() as u8);
+            payload.extend_from_slice(n.as_bytes());
+        }
+        (
+            format!("cipher://v3/{}", URL_SAFE_NO_PAD.encode(&payload)),
+            STANDARD.encode(pubkey),
+            STANDARD.encode(enc),
+            hex::encode(node),
+        )
+    }
+
+    #[test]
+    fn test_parse_v3_invite_with_name() {
+        let (invite, pubkey, enc_key, node_id) = build_v3(Some("Alice"));
+        let parsed = parse_invite_code(invite).expect("v3 invite should parse");
+        assert_eq!(parsed.public_key, pubkey);
+        assert_eq!(
+            parsed.encryption_public_key.as_deref(),
+            Some(enc_key.as_str())
+        );
+        assert_eq!(parsed.node_id, node_id);
+        assert_eq!(parsed.display_name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn test_parse_v3_invite_without_name() {
+        let (invite, pubkey, enc_key, node_id) = build_v3(None);
+        let parsed = parse_invite_code(invite).expect("v3 invite should parse");
+        assert_eq!(parsed.public_key, pubkey);
+        assert_eq!(
+            parsed.encryption_public_key.as_deref(),
+            Some(enc_key.as_str())
+        );
+        assert_eq!(parsed.node_id, node_id);
+        assert_eq!(parsed.display_name, None);
+    }
+
+    #[test]
+    fn test_old_invite_formats_are_rejected() {
+        // Old formats lack the encryption key, so friend requests would have
+        // to travel in plaintext - the parser must refuse them
+        for old in [
+            "cipher://i/AAAA",
+            "cipher://f/AAAA",
+            "cipher://add-friend?key=x&node=y",
+        ] {
+            let err = parse_invite_code(old.to_string())
+                .expect_err("old invite formats must be rejected");
+            assert!(
+                err.contains("older version"),
+                "error should tell the user to get a new invite, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_truncated_v3_invite_is_rejected() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let short = format!("cipher://v3/{}", URL_SAFE_NO_PAD.encode([0u8; 64]));
+        assert!(parse_invite_code(short).is_err());
+    }
+
+    #[test]
+    fn test_garbage_is_rejected() {
+        assert!(parse_invite_code("https://example.com".to_string()).is_err());
+        assert!(parse_invite_code("cipher://v3/!!!not-base64!!!".to_string()).is_err());
+    }
+}

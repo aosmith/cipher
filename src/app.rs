@@ -307,69 +307,47 @@ pub async fn accept_friend_request(
         // Get our encryption key and friend's public key - use spawn_blocking for DB calls
         let db_clone2 = db.inner().clone();
         let our_user_id = user_id;
-        let (friend_opt, our_enc_key) = tokio::task::spawn_blocking(move || {
+        let (friend_opt, friend_enc_key) = tokio::task::spawn_blocking(move || {
             let friend = db_clone2.find_user_by_id(friend_user_id).ok().flatten();
+            // The requester's encryption key was stored when their sealed
+            // FriendRequest arrived - the acceptance is sealed back to it
             let enc_key = db_clone2
-                .get_user_encryption_public_key(our_user_id)
+                .get_user_encryption_public_key(friend_user_id)
                 .ok()
-                .flatten()
-                .unwrap_or_default();
+                .flatten();
             (friend, enc_key)
         })
         .await
-        .unwrap_or((None, String::new()));
+        .unwrap_or((None, None));
+        let _ = our_user_id; // friendship row lookups above already used it
 
         if let Some(friend) = friend_opt {
             if let Some(friend_public_key) = friend.public_key {
-                // Spawn P2P notification in background - don't block the accept
-                let friend_key = friend_public_key.clone();
-                let our_encryption_public_key = our_enc_key;
-                tokio::spawn(async move {
-                    // Get our node address with a timeout
-                    let endpoint_guard = network.endpoint.lock().await;
-                    let (node_id_str, relay_url_str) = if let Some(endpoint) =
-                        endpoint_guard.as_ref()
-                    {
-                        // endpoint.addr() is synchronous in iroh 1.0
-                        let node_addr = endpoint.addr();
-                        let node_id = node_addr.id.to_string();
-                        let relay_url = node_addr
-                            .relay_urls()
-                            .next()
-                            .map(|url| url.to_string())
-                            .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string());
-                        (node_id, relay_url)
-                    } else {
-                        (String::new(), String::new())
-                    };
-                    drop(endpoint_guard);
-
-                    let message = iroh_network::P2PMessage::FriendAccepted {
-                        from_user_id: network.user_id,
-                        from_public_key: network.public_key.clone(),
-                        from_encryption_public_key: our_encryption_public_key,
-                        from_display_name: network.display_name.clone(),
-                        from_node_id: node_id_str,
-                        from_relay_url: relay_url_str,
-                        to_public_key: friend_key.clone(),
-                    };
-
-                    // GLOBAL MESH: Publish to global content topic
-                    if let Err(e) = network
-                        .publish_message(iroh_network::CONTENT_TOPIC, message)
-                        .await
-                    {
-                        println!(
-                            "[FRIEND-ACCEPT] Warning: Failed to send FriendAccepted message: {}",
-                            e
-                        );
-                    } else {
-                        println!(
-                            "[FRIEND-ACCEPT] Sent FriendAccepted via global mesh to {}",
-                            friend_key
-                        );
+                match friend_enc_key {
+                    Some(friend_enc_key) => {
+                        // Spawn P2P notification in background - don't block the accept
+                        tokio::spawn(async move {
+                            if let Err(e) =
+                                network.send_friend_accepted_sealed(&friend_enc_key).await
+                            {
+                                println!(
+                                    "[FRIEND-ACCEPT] Warning: Failed to send FriendAccepted: {}",
+                                    e
+                                );
+                            } else {
+                                println!(
+                                    "[FRIEND-ACCEPT] Sent sealed FriendAccepted to {}",
+                                    friend_public_key
+                                );
+                            }
+                        });
                     }
-                });
+                    None => println!(
+                        "[FRIEND-ACCEPT] No encryption key stored for {} - cannot notify; \
+                         the presence-triggered resend will deliver once their key is known",
+                        friend_public_key
+                    ),
+                }
             }
         }
     }
