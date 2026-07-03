@@ -2855,28 +2855,26 @@ function setupTauriEventListeners() {
 
     const { listen } = window.__TAURI__.event;
 
-    // Listen for incoming friend requests
+    // Listen for incoming friend requests.
+    // Refresh unconditionally: loadFriends() renders into the (possibly hidden)
+    // friends container, so the pending request is there the moment you look,
+    // whatever tab you're on. Gating on tab visibility was why incoming
+    // requests/posts only appeared after manually navigating.
     listen('friend-request-received', (event) => {
         console.log('[EVENT] Friend request received:', event.payload);
-        // Refresh friends list if on friends tab
-        const friendsTab = document.getElementById('friendsTab');
-        if (friendsTab && !friendsTab.classList.contains('hidden')) {
-            loadFriends();
+        loadFriends();
+        if (typeof UI !== 'undefined' && UI.showToast) {
+            UI.showToast('New friend request received', 'info', 4000);
         }
     });
 
     // Listen for friend request acceptances
     listen('friend-accepted', (event) => {
         console.log('[EVENT] Friend request accepted:', event.payload);
-        // Refresh friends list if on friends tab
-        const friendsTab = document.getElementById('friendsTab');
-        if (friendsTab && !friendsTab.classList.contains('hidden')) {
-            loadFriends();
-        }
-        // Also refresh posts since we can now see their posts
-        const postsTab = document.getElementById('postsTab');
-        if (postsTab && !postsTab.classList.contains('hidden')) {
-            loadPosts();
+        loadFriends();
+        loadPosts(); // we can now see their posts
+        if (typeof UI !== 'undefined' && UI.showToast) {
+            UI.showToast('Friend request accepted', 'info', 4000);
         }
     });
 
@@ -2893,11 +2891,8 @@ function setupTauriEventListeners() {
             UI.showToast(`ℹ️ "${oldName}" changed their name to "${newName}"`, 'info', 5000);
         }
 
-        // Refresh friends list to show new name
-        const friendsTab = document.getElementById('friendsTab');
-        if (friendsTab && !friendsTab.classList.contains('hidden')) {
-            loadFriends();
-        }
+        // Refresh friends list to show new name (renders even if hidden)
+        loadFriends();
     });
 
     // Listen for decrypted posts from sealed envelopes (Phase 2 encryption)
@@ -2951,11 +2946,13 @@ function setupTauriEventListeners() {
                 console.log(`[EVENT] Saved blob ${blobRef.blobHash} as attachment`);
             }
 
-            // Step 4: Refresh posts if on posts tab
-            const postsTab = document.getElementById('postsTab');
-            if (postsTab && !postsTab.classList.contains('hidden')) {
-                console.log('[EVENT] Refreshing posts...');
-                await loadPosts();
+            // Step 4: Refresh the feed. Unconditional - loadPosts() renders into
+            // the posts container whether or not the feed tab is currently shown,
+            // so a friend's post appears live instead of only after you navigate.
+            console.log('[EVENT] Refreshing posts...');
+            await loadPosts();
+            if (typeof UI !== 'undefined' && UI.showToast) {
+                UI.showToast('New post from a friend', 'info', 4000);
             }
         } catch (error) {
             console.error('[EVENT] Error saving sealed post:', error);
@@ -2965,15 +2962,9 @@ function setupTauriEventListeners() {
     // Listen for device sync completion
     listen('device-sync-completed', (event) => {
         console.log('[EVENT] Device sync completed from:', event.payload);
-        // Refresh posts and friends after sync
-        const postsTab = document.getElementById('postsTab');
-        if (postsTab && !postsTab.classList.contains('hidden')) {
-            loadPosts();
-        }
-        const friendsTab = document.getElementById('friendsTab');
-        if (friendsTab && !friendsTab.classList.contains('hidden')) {
-            loadFriends();
-        }
+        // Refresh posts and friends after sync (renders even if tab hidden)
+        loadPosts();
+        loadFriends();
     });
 
     // Listen for native app lifecycle events (from Rust lifecycle hooks)
