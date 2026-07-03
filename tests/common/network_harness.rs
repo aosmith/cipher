@@ -4,9 +4,12 @@
 // It creates isolated test networks with multiple nodes that can communicate.
 
 use futures_lite::StreamExt;
-use iroh::{Endpoint, NodeAddr, NodeId, RelayMode, SecretKey};
+use iroh::address_lookup::memory::MemoryLookup;
+use iroh::endpoint::presets;
+use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use iroh_gossip::{
-    net::{Event, Gossip, GossipEvent, GOSSIP_ALPN},
+    api::Event,
+    net::{Gossip, GOSSIP_ALPN},
     proto::TopicId,
 };
 use std::collections::HashMap;
@@ -20,34 +23,40 @@ pub struct TestNode {
     pub endpoint: Endpoint,
     pub gossip: Gossip,
     pub router: iroh::protocol::Router,
-    pub node_id: NodeId,
+    pub node_id: EndpointId,
+    /// Out-of-band peer address registry (replaces 0.35 endpoint.add_node_addr)
+    address_book: MemoryLookup,
     subscriptions: Arc<Mutex<HashMap<String, TopicSubscription>>>,
 }
 
 /// A subscription to a gossip topic with send/receive capabilities
 pub struct TopicSubscription {
     pub topic_id: TopicId,
-    sender: iroh_gossip::net::GossipSender,
-    receiver: Arc<Mutex<iroh_gossip::net::GossipReceiver>>,
+    sender: iroh_gossip::api::GossipSender,
+    receiver: Arc<Mutex<iroh_gossip::api::GossipReceiver>>,
 }
 
 impl TestNode {
     /// Create a new test node with a random identity
     pub async fn new(name: &str) -> anyhow::Result<Self> {
-        let secret = SecretKey::generate(rand::rngs::OsRng);
+        let secret = SecretKey::generate();
         Self::with_secret(name, secret).await
     }
 
     /// Create a new test node with a specific secret key
     pub async fn with_secret(name: &str, secret: SecretKey) -> anyhow::Result<Self> {
-        let endpoint = Endpoint::builder()
+        // Address book lets add_peer() teach this endpoint about peers out-of-band,
+        // replacing the removed endpoint.add_node_addr().
+        let address_book = MemoryLookup::new();
+        let endpoint = Endpoint::builder(presets::N0)
             .secret_key(secret)
-            .relay_mode(RelayMode::Default)
+            .address_lookup(address_book.clone())
             .bind()
             .await?;
 
-        let node_id = endpoint.node_id();
-        let gossip = Gossip::builder().spawn(endpoint.clone()).await?;
+        let node_id = endpoint.id();
+        // Gossip::spawn is synchronous in iroh-gossip 0.101
+        let gossip = Gossip::builder().spawn(endpoint.clone());
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(GOSSIP_ALPN, gossip.clone())
             .spawn();
@@ -58,24 +67,28 @@ impl TestNode {
             gossip,
             router,
             node_id,
+            address_book,
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     /// Get this node's full address (for sharing with other nodes)
-    pub async fn node_addr(&self) -> anyhow::Result<NodeAddr> {
-        self.endpoint.node_addr().await
+    pub async fn node_addr(&self) -> anyhow::Result<EndpointAddr> {
+        Ok(self.endpoint.addr())
     }
 
     /// Add another node's address to enable direct connection
-    pub fn add_peer(&self, addr: NodeAddr) -> anyhow::Result<()> {
-        self.endpoint.add_node_addr(addr)?;
+    pub fn add_peer(&self, addr: EndpointAddr) -> anyhow::Result<()> {
+        self.address_book.add_endpoint_info(addr);
         Ok(())
     }
 
     /// Connect to a peer via QUIC to verify connectivity
-    pub async fn connect_to(&self, peer_id: NodeId) -> anyhow::Result<()> {
-        let conn = self.endpoint.connect(peer_id, &GOSSIP_ALPN).await?;
+    pub async fn connect_to(&self, peer_id: EndpointId) -> anyhow::Result<()> {
+        let conn = self
+            .endpoint
+            .connect(EndpointAddr::new(peer_id), GOSSIP_ALPN)
+            .await?;
         drop(conn); // We just want to verify connectivity
         Ok(())
     }
@@ -83,7 +96,7 @@ impl TestNode {
     /// Subscribe to a topic as a root node (no bootstrap peers)
     pub async fn subscribe_as_root(&self, topic_name: &str) -> anyhow::Result<()> {
         let topic_id = topic_name_to_id(topic_name);
-        let subscription = self.gossip.subscribe(topic_id, vec![])?;
+        let subscription = self.gossip.subscribe(topic_id, vec![]).await?;
         let (sender, receiver) = subscription.split();
 
         let mut subs = self.subscriptions.lock().await;
@@ -102,7 +115,7 @@ impl TestNode {
     pub async fn subscribe_and_join(
         &self,
         topic_name: &str,
-        bootstrap_peers: Vec<NodeId>,
+        bootstrap_peers: Vec<EndpointId>,
         timeout: Duration,
     ) -> anyhow::Result<()> {
         let topic_id = topic_name_to_id(topic_name);
@@ -160,7 +173,7 @@ impl TestNode {
         match tokio::time::timeout(timeout, async {
             while let Some(event) = receiver.try_next().await.transpose() {
                 match event {
-                    Ok(Event::Gossip(GossipEvent::Received(msg))) => {
+                    Ok(Event::Received(msg)) => {
                         return Some(msg.content);
                     }
                     Ok(_) => continue, // Skip other events
@@ -181,7 +194,7 @@ impl TestNode {
         &self,
         topic_name: &str,
         timeout: Duration,
-    ) -> anyhow::Result<NodeId> {
+    ) -> anyhow::Result<EndpointId> {
         let subs = self.subscriptions.lock().await;
         let sub = subs
             .get(topic_name)
@@ -194,7 +207,7 @@ impl TestNode {
 
         tokio::time::timeout(timeout, async {
             while let Some(event) = receiver.try_next().await.transpose() {
-                if let Ok(Event::Gossip(GossipEvent::NeighborUp(node_id))) = event {
+                if let Ok(Event::NeighborUp(node_id)) = event {
                     return Ok(node_id);
                 }
             }

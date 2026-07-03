@@ -54,11 +54,15 @@ mod tests {
             post_id: String,
             content: String,
             parent_comment_id: Option<String>,
+            #[serde(default)]
+            sent_at: i64,
         },
         PostReaction {
             post_id: String,
             emoji: String,
             action: String, // "add" or "remove"
+            #[serde(default)]
+            sent_at: i64,
         },
     }
 
@@ -161,6 +165,7 @@ mod tests {
             post_id: Uuid::new_v4().to_string(),
             content: "Great post!".to_string(),
             parent_comment_id: None,
+            sent_at: 1_700_000_000,
         };
 
         let json = serde_json::to_string(&comment).unwrap();
@@ -177,6 +182,7 @@ mod tests {
             post_id: Uuid::new_v4().to_string(),
             content: "Reply to your comment".to_string(),
             parent_comment_id: Some(parent_comment_id.clone()),
+            sent_at: 1_700_000_000,
         };
 
         let json = serde_json::to_string(&comment).unwrap();
@@ -204,6 +210,7 @@ mod tests {
             post_id: post_id.clone(),
             content: "Test".to_string(),
             parent_comment_id: None,
+            sent_at: 1_700_000_000,
         };
 
         let json = serde_json::to_string(&comment).unwrap();
@@ -231,6 +238,7 @@ mod tests {
             post_id: Uuid::new_v4().to_string(),
             emoji: "👍".to_string(),
             action: "add".to_string(),
+            sent_at: 1_700_000_000,
         };
 
         let json = serde_json::to_string(&reaction).unwrap();
@@ -245,6 +253,7 @@ mod tests {
             post_id: Uuid::new_v4().to_string(),
             emoji: "❤️".to_string(),
             action: "remove".to_string(),
+            sent_at: 1_700_000_000,
         };
 
         let json = serde_json::to_string(&reaction).unwrap();
@@ -266,6 +275,7 @@ mod tests {
                 post_id: Uuid::new_v4().to_string(),
                 emoji: emoji.to_string(),
                 action: "add".to_string(),
+                sent_at: 1_700_000_000,
             };
 
             let json = serde_json::to_string(&reaction).unwrap();
@@ -297,6 +307,7 @@ mod tests {
                 post_id: Uuid::new_v4().to_string(),
                 emoji: emoji.to_string(),
                 action: "add".to_string(),
+                sent_at: 1_700_000_000,
             };
 
             let json = serde_json::to_string(&reaction).unwrap();
@@ -356,6 +367,7 @@ mod tests {
             post_id: Uuid::new_v4().to_string(),
             content: "Great post!".to_string(),
             parent_comment_id: None,
+            sent_at: 1_700_000_000,
         };
 
         let envelope = TestEnvelope {
@@ -379,6 +391,7 @@ mod tests {
             post_id: Uuid::new_v4().to_string(),
             emoji: "👍".to_string(),
             action: "add".to_string(),
+            sent_at: 1_700_000_000,
         };
 
         let envelope = TestEnvelope {
@@ -467,6 +480,7 @@ mod tests {
                     post_id: "2".to_string(),
                     content: "test".to_string(),
                     parent_comment_id: None,
+                    sent_at: 1_700_000_000,
                 },
             ),
             (
@@ -475,6 +489,7 @@ mod tests {
                     post_id: "1".to_string(),
                     emoji: "👍".to_string(),
                     action: "add".to_string(),
+                    sent_at: 1_700_000_000,
                 },
             ),
         ];
@@ -570,6 +585,7 @@ mod tests {
             content: "Hello, encrypted world!".to_string(),
             node_id: "test-node-id".to_string(),
             blob_refs: vec![],
+            sent_at: 1_700_000_000,
         };
 
         let sealed =
@@ -597,6 +613,7 @@ mod tests {
             post_id: post_id.clone(),
             content: "Great post!".to_string(),
             parent_comment_id: None,
+            sent_at: 1_700_000_000,
         };
 
         let sealed =
@@ -629,6 +646,7 @@ mod tests {
             post_id: post_id.clone(),
             emoji: "👍".to_string(),
             action: "add".to_string(),
+            sent_at: 1_700_000_000,
         };
 
         let sealed =
@@ -641,6 +659,7 @@ mod tests {
                 post_id: pid,
                 emoji,
                 action,
+                ..
             } => {
                 assert_eq!(pid, post_id);
                 assert_eq!(emoji, "👍");
@@ -830,6 +849,7 @@ mod tests {
                 post_id: pid,
                 content,
                 parent_comment_id,
+                ..
             }) => {
                 assert_eq!(cid, comment_id);
                 assert_eq!(pid, post_id);
@@ -865,6 +885,7 @@ mod tests {
                 post_id: pid,
                 emoji,
                 action,
+                ..
             }) => {
                 assert_eq!(pid, post_id);
                 assert_eq!(emoji, "❤️");
@@ -899,6 +920,7 @@ mod tests {
                 post_id: pid,
                 emoji,
                 action,
+                ..
             }) => {
                 assert_eq!(pid, post_id);
                 assert_eq!(emoji, "👎");

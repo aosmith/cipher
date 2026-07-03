@@ -9,9 +9,12 @@
 // - Non-friends relay and optionally cache for later purging
 
 use bytes::Bytes;
+use iroh::address_lookup::memory::MemoryLookup;
 use iroh::protocol::Router;
-use iroh_blobs::net_protocol::Blobs;
-use iroh_gossip::net::{Event as GossipNetEvent, GossipEvent, GossipReceiver, GossipSender};
+use iroh_blobs::api::downloader::Downloader;
+use iroh_blobs::store::mem::MemStore;
+use iroh_blobs::BlobsProtocol;
+use iroh_gossip::api::{Event as GossipEvent, GossipReceiver, GossipSender};
 use iroh_gossip::ALPN;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -39,7 +42,7 @@ pub enum P2PMessage {
         #[serde(default)]
         encryption_public_key: Option<String>,
         device_id: String,
-        node_addr: iroh::NodeAddr, // Full addressing info for direct peer connection
+        node_addr: iroh::EndpointAddr, // Full addressing info for direct peer connection
         timestamp: i64,
         // Profile data for identity verification
         display_name: String,
@@ -135,9 +138,19 @@ pub enum P2PMessage {
 /// The GossipSender allows dynamic peer joining without re-subscription
 /// The actual GossipReceiver is owned by the stream handler task
 struct TopicSubscription {
-    broadcast_tx: tokio::sync::mpsc::UnboundedSender<Bytes>,
+    broadcast_tx: tokio::sync::mpsc::UnboundedSender<OutgoingMessage>,
     #[allow(dead_code)] // Kept for future dynamic peer joining
-    gossip_sender: Arc<iroh_gossip::net::GossipSender>,
+    gossip_sender: Arc<iroh_gossip::api::GossipSender>,
+}
+
+/// A message queued for gossip broadcast.
+/// `neighbors_only` uses broadcast_neighbors() - delivered to direct gossip
+/// neighbors without mesh-wide relay. Used for heartbeats, which only need to
+/// confirm live connections; flooding them lets every mesh node track every
+/// device's online times.
+struct OutgoingMessage {
+    data: Bytes,
+    neighbors_only: bool,
 }
 
 /// Track retry state for peer reconnection attempts
@@ -193,11 +206,17 @@ pub struct IrohNetwork {
     pub router: Arc<Mutex<Option<Router>>>,
     /// Blob store for large file transfers (images, attachments)
     /// Uses iroh-blobs for efficient P2P transfer over existing NAT-traversed connections
-    pub blobs: Arc<Mutex<Option<Blobs<iroh_blobs::store::mem::Store>>>>,
+    pub store: Arc<Mutex<Option<MemStore>>>,
+    /// Downloader for fetching blobs from peers (created once the endpoint is bound)
+    pub downloader: Arc<Mutex<Option<Downloader>>>,
+    /// Runtime registry of known peer addresses (replaces iroh 0.35 `add_node_addr`).
+    /// Seeded from stored relay URLs and Presence messages so gossip can dial peers
+    /// by EndpointId even before DHT/DNS lookups resolve them. Arc-based, cheap to clone.
+    address_book: MemoryLookup,
     topics: Arc<Mutex<HashMap<String, TopicSubscription>>>,
-    connected_peers: Arc<Mutex<std::collections::HashSet<iroh::NodeId>>>,
-    peer_retry_counts: Arc<Mutex<HashMap<iroh::NodeId, PeerRetryState>>>, // Exponential backoff tracking
-    peer_heartbeats: Arc<Mutex<HashMap<iroh::NodeId, std::time::Instant>>>, // Last heartbeat time from each peer
+    connected_peers: Arc<Mutex<std::collections::HashSet<iroh::EndpointId>>>,
+    peer_retry_counts: Arc<Mutex<HashMap<iroh::EndpointId, PeerRetryState>>>, // Exponential backoff tracking
+    peer_heartbeats: Arc<Mutex<HashMap<iroh::EndpointId, std::time::Instant>>>, // Last heartbeat time from each peer
     pending_subscriptions: Arc<Mutex<Vec<String>>>, // Topics queued for subscription (processed in background)
     /// Recent message hashes for deduplication (gossip protocols may deliver same message via multiple paths)
     recent_message_hashes: Arc<Mutex<std::collections::HashSet<u64>>>,
@@ -251,7 +270,9 @@ impl IrohNetwork {
             endpoint: Arc::new(Mutex::new(None)),
             gossip: Arc::new(Mutex::new(None)),
             router: Arc::new(Mutex::new(None)),
-            blobs: Arc::new(Mutex::new(None)),
+            store: Arc::new(Mutex::new(None)),
+            downloader: Arc::new(Mutex::new(None)),
+            address_book: MemoryLookup::new(),
             topics: Arc::new(Mutex::new(HashMap::new())),
             connected_peers: Arc::new(Mutex::new(std::collections::HashSet::new())),
             peer_retry_counts: Arc::new(Mutex::new(HashMap::new())),
@@ -296,38 +317,41 @@ impl IrohNetwork {
         // Convert device seed to Iroh SecretKey for DHT publishing and endpoint identity
         let secret_key = iroh::SecretKey::from_bytes(&self.device_seed);
 
-        let mut endpoint_builder = iroh::Endpoint::builder().secret_key(secret_key.clone());
-
-        // Configure Pkarr DHT discovery (BitTorrent Mainline DHT)
-        // CRITICAL: Provide secret_key to enable DHT PUBLISHING
-        // Without this, we only consume DHT but never publish our NodeAddr
-        let dht_discovery = iroh::discovery::pkarr::dht::DhtDiscovery::builder()
-            .secret_key(secret_key.clone()) // Enable DHT publishing!
+        // Configure BitTorrent Mainline DHT address lookup (PRIMARY, censorship-resistant).
+        // CRITICAL: Provide secret_key to enable DHT PUBLISHING - without this we only
+        // consume the DHT but never publish our own address, so peers can't find us.
+        let dht_lookup = iroh_mainline_address_lookup::DhtAddressLookup::builder()
+            .secret_key(secret_key.clone())
             .build()
-            .map_err(|e| format!("Failed to create DHT discovery: {}", e))?;
+            .map_err(|e| format!("Failed to create DHT address lookup: {}", e))?;
 
-        endpoint_builder = endpoint_builder
-            .discovery(Box::new(dht_discovery)) // BitTorrent DHT - fully decentralized
-            .discovery_n0() // DNS-based peer discovery (distributed)
-            .relay_mode(iroh::RelayMode::Default); // Relays for NAT traversal
-
-        #[cfg(feature = "mdns")]
-        {
-            let public_key_for_mdns = secret_key.public();
-            endpoint_builder = endpoint_builder.discovery(Box::new(
-                iroh::discovery::local_swarm_discovery::LocalSwarmDiscovery::new(
-                    public_key_for_mdns,
-                )
-                .map_err(|e| format!("Failed to create mDNS discovery: {}", e))?,
-            ));
-        }
-
-        let endpoint = endpoint_builder
+        // Build endpoint with the N0 preset (n0 DNS discovery + relays for NAT traversal),
+        // adding our DHT lookup and the MemoryLookup address book on top. Multiple
+        // address_lookup() calls compose and fail over, matching our multi-path design.
+        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+            .secret_key(secret_key.clone())
+            .address_lookup(dht_lookup) // BitTorrent DHT - fully decentralized
+            .address_lookup(self.address_book.clone()) // Out-of-band peer addresses
             .bind()
             .await
             .map_err(|e| format!("Failed to create Iroh endpoint: {}", e))?;
 
-        let node_id = endpoint.node_id();
+        // mDNS local-network discovery is registered at runtime because it needs our
+        // EndpointId, which only exists after the endpoint is bound.
+        #[cfg(feature = "mdns")]
+        {
+            match iroh_mdns_address_lookup::MdnsAddressLookup::builder().build(endpoint.id()) {
+                Ok(mdns) => {
+                    if let Some(lookup) = endpoint.address_lookup() {
+                        lookup.add(mdns);
+                        println!("[IROH] mDNS local-network address lookup enabled");
+                    }
+                }
+                Err(e) => println!("[IROH] Warning: Failed to create mDNS lookup: {}", e),
+            }
+        }
+
+        let node_id = endpoint.id();
         let public_key = secret_key.public();
 
         println!("[IROH] ========================================");
@@ -351,12 +375,9 @@ impl IrohNetwork {
             }
 
             // Also store our relay URL for reconnection
-            let our_node_addr = endpoint
-                .node_addr()
-                .await
-                .map_err(|e| format!("Failed to get node address: {}", e))?;
-            if let Some(relay_url) = our_node_addr.relay_url() {
-                let relay_url_str = relay_url.to_string();
+            let our_node_addr = endpoint.addr();
+            let relay_url_owned = our_node_addr.relay_urls().next().map(|u| u.to_string());
+            if let Some(relay_url_str) = relay_url_owned {
                 if let Err(e) = self.db.update_device_relay_url(device_id, &relay_url_str) {
                     println!(
                         "[IROH] Warning: Failed to store relay URL in database: {}",
@@ -371,33 +392,33 @@ impl IrohNetwork {
             }
         }
 
-        // Create gossip protocol
-        let gossip = iroh_gossip::net::Gossip::builder()
-            .spawn(endpoint.clone())
-            .await
-            .map_err(|e| format!("Failed to create gossip: {}", e))?;
+        // Create gossip protocol (spawn is synchronous in iroh-gossip 0.101)
+        let gossip = iroh_gossip::net::Gossip::builder().spawn(endpoint.clone());
 
         println!("[IROH] Gossip protocol initialized");
 
         // Create blob store for large file transfers (images, attachments)
         // Uses in-memory store - blobs are ephemeral and fetched on-demand from peers
-        let blobs = Blobs::memory().build(&endpoint);
+        let store = MemStore::new();
+        let downloader = store.downloader(&endpoint);
+        let blobs = BlobsProtocol::new(&store, None);
         println!("[IROH] Blob store initialized (in-memory)");
 
         // Create Router to accept incoming gossip AND blob connections
         // Both protocols share the same NAT-traversed QUIC connection
         let router = Router::builder(endpoint.clone())
             .accept(ALPN, gossip.clone())
-            .accept(iroh_blobs::ALPN, blobs.clone())
+            .accept(iroh_blobs::ALPN, blobs)
             .spawn();
 
         println!("[IROH] Router created - accepting gossip and blob connections");
         println!("[IROH] Direct RPC acceptor ready for incoming Presence handshakes");
 
-        // Store endpoint, gossip, blobs, and router
+        // Store endpoint, gossip, blob store, downloader, and router
         *self.endpoint.lock().await = Some(endpoint.clone());
         *self.gossip.lock().await = Some(gossip);
-        *self.blobs.lock().await = Some(blobs);
+        *self.store.lock().await = Some(store);
+        *self.downloader.lock().await = Some(downloader);
         *self.router.lock().await = Some(router);
 
         // Query for peer NodeIds from database (other devices with same user)
@@ -445,7 +466,7 @@ impl IrohNetwork {
                     "[IROH] Processing peer address: node_id={}, relay={:?}",
                     node_id_str, relay_url_opt
                 );
-                match node_id_str.parse::<iroh::NodeId>() {
+                match node_id_str.parse::<iroh::EndpointId>() {
                     Ok(peer_id) => {
                         println!("[IROH] Parsed peer NodeId: {}", peer_id);
                         println!("[IROH] Our NodeId: {}", node_id);
@@ -466,10 +487,10 @@ impl IrohNetwork {
                     }
                 }
 
-                if let Ok(peer_id) = node_id_str.parse::<iroh::NodeId>() {
+                if let Ok(peer_id) = node_id_str.parse::<iroh::EndpointId>() {
                     if peer_id != node_id {
-                        // Construct full NodeAddr with relay URL for reliable connection
-                        let mut peer_node_addr = iroh::NodeAddr::new(peer_id);
+                        // Construct full EndpointAddr with relay URL for reliable connection
+                        let mut peer_node_addr = iroh::EndpointAddr::new(peer_id);
                         if let Some(relay_url) = relay_url_opt {
                             if let Ok(url) = relay_url.parse() {
                                 peer_node_addr = peer_node_addr.with_relay_url(url);
@@ -485,10 +506,9 @@ impl IrohNetwork {
                             println!("[IROH] Note: No relay URL for peer {}, trying direct connection only", peer_id);
                         }
 
-                        // Add full NodeAddr to endpoint before connecting
-                        if let Err(e) = endpoint.add_node_addr(peer_node_addr.clone()) {
-                            println!("[IROH] Warning: Failed to add node address: {}", e);
-                        }
+                        // Register the peer's address in the address book so gossip (which
+                        // dials by EndpointId) can resolve it. Replaces 0.35 add_node_addr.
+                        self.address_book.add_endpoint_info(peer_node_addr.clone());
 
                         // Now try to connect with full addressing info.
                         // Bound the attempt - an unreachable peer otherwise stalls app
@@ -496,7 +516,7 @@ impl IrohNetwork {
                         println!("[IROH] Attempting to connect to peer: {}", peer_id);
                         match tokio::time::timeout(
                             tokio::time::Duration::from_secs(5),
-                            endpoint.connect(peer_id, iroh_gossip::ALPN),
+                            endpoint.connect(peer_node_addr.clone(), iroh_gossip::ALPN),
                         )
                         .await
                         {
@@ -595,12 +615,12 @@ impl IrohNetwork {
         self.subscribe_topic_with_peers(topic, vec![]).await
     }
 
-    /// Subscribe to a gossip topic with bootstrap peers (takes iroh::NodeId directly)
+    /// Subscribe to a gossip topic with bootstrap peers (takes iroh::EndpointId directly)
     #[allow(dead_code)]
     pub async fn subscribe_with_bootstrap(
         &self,
         topic: &str,
-        bootstrap_peers: Vec<iroh::NodeId>,
+        bootstrap_peers: Vec<iroh::EndpointId>,
     ) -> Result<(), String> {
         // Convert NodeIds to strings for the internal method
         let peer_node_ids: Vec<String> = bootstrap_peers.iter().map(|id| id.to_string()).collect();
@@ -627,10 +647,10 @@ impl IrohNetwork {
         // Convert topic string to TopicId
         let topic_id = iroh_gossip::proto::TopicId::from(Self::topic_to_id(topic));
 
-        // Convert String NodeIds to iroh::NodeId types
-        let bootstrap_peers: Vec<iroh::NodeId> = peer_node_ids
+        // Convert String NodeIds to iroh::EndpointId types
+        let bootstrap_peers: Vec<iroh::EndpointId> = peer_node_ids
             .iter()
-            .filter_map(|id_str| match id_str.parse::<iroh::NodeId>() {
+            .filter_map(|id_str| match id_str.parse::<iroh::EndpointId>() {
                 Ok(node_id) => Some(node_id),
                 Err(e) => {
                     println!("[IROH] Warning: Failed to parse NodeId '{}': {}", id_str, e);
@@ -675,7 +695,7 @@ impl IrohNetwork {
         // All nodes use subscribe() - mesh forms dynamically via join_peers() calls
         // No "root" node concept - every peer is equal
         println!("[IROH-GOSSIP] Creating gossip subscription...");
-        let gossip_topic = match gossip.subscribe(topic_id, bootstrap_peers.clone()) {
+        let gossip_topic = match gossip.subscribe(topic_id, bootstrap_peers.clone()).await {
             Ok(result) => {
                 println!(
                     "[IROH-GOSSIP] [OK] Subscription created for topic '{}'",
@@ -737,8 +757,8 @@ impl IrohNetwork {
         topic: String,
         gossip_sender: Arc<GossipSender>,
         mut gossip_receiver: GossipReceiver,
-        mut broadcast_rx: tokio::sync::mpsc::UnboundedReceiver<Bytes>,
-        bootstrap_peers: Vec<iroh::NodeId>,
+        mut broadcast_rx: tokio::sync::mpsc::UnboundedReceiver<OutgoingMessage>,
+        bootstrap_peers: Vec<iroh::EndpointId>,
     ) {
         use futures::StreamExt;
 
@@ -770,9 +790,7 @@ impl IrohNetwork {
                 // Incoming gossip messages from the receiver
                 event = gossip_receiver.next() => {
                     match event {
-                        Some(Ok(GossipNetEvent::Gossip(gossip_event))) => {
-                            match gossip_event {
-                                GossipEvent::Received(msg) => {
+                        Some(Ok(GossipEvent::Received(msg))) => {
                                     // DEDUPLICATION: Hash the message content and check if we've seen it recently
                                     // Gossip protocols may deliver the same message via multiple paths
                                     use std::hash::{Hash, Hasher};
@@ -837,32 +855,13 @@ impl IrohNetwork {
                                         }
                                     }
                                 }
-                                GossipEvent::Joined(peers) => {
-                                    println!("[IROH-STREAM] 🤝 Peer(s) joined topic '{}': {:?}", topic, peers);
-                                    // Add all joined peers to connected_peers (they're in our gossip mesh!)
-                                    for peer_id in peers.clone() {
-                                        println!("[IROH-STREAM]   Adding peer to connected_peers: {}", peer_id);
-                                        self.add_connected_peer(peer_id).await;
-                                    }
-
-                                    // CRITICAL: When peers join us, we also need to join them back
-                                    // This ensures bidirectional gossip mesh connectivity
-                                    let topics_guard = self.topics.lock().await;
-                                    if let Some(subscription) = topics_guard.get(&topic) {
-                                        match subscription.gossip_sender.join_peers(peers.clone()).await {
-                                            Ok(_) => println!("[IROH-STREAM] [OK] Joined gossip mesh back with {} peer(s)", peers.len()),
-                                            Err(e) => println!("[IROH-STREAM] Warning: Failed to join back: {}", e),
-                                        }
-                                    }
-                                    drop(topics_guard);
-                                }
-                                GossipEvent::NeighborUp(peer) => {
+                        Some(Ok(GossipEvent::NeighborUp(peer))) => {
                                     println!("[IROH-STREAM] 📡 Neighbor UP on topic '{}': {}", topic, peer);
                                     // Peer became our neighbor - add to connected_peers
                                     println!("[IROH-STREAM]   Adding peer to connected_peers: {}", peer);
                                     self.add_connected_peer(peer).await;
                                 }
-                                GossipEvent::NeighborDown(peer) => {
+                        Some(Ok(GossipEvent::NeighborDown(peer))) => {
                                     println!("[IROH-STREAM] 📴 Neighbor DOWN on topic '{}': {}", topic, peer);
                                     // NeighborDown indicates the gossip neighbor relationship has ended.
                                     // This typically happens when:
@@ -885,9 +884,7 @@ impl IrohNetwork {
                                     }
                                     drop(retry_states);
                                 }
-                            }
-                        }
-                        Some(Ok(GossipNetEvent::Lagged)) => {
+                        Some(Ok(GossipEvent::Lagged)) => {
                             println!("[IROH-STREAM] ⚠️  Stream lagged on topic: {}", topic);
                         }
                         Some(Err(e)) => {
@@ -906,9 +903,15 @@ impl IrohNetwork {
                 }
 
                 // Outgoing broadcast messages via the sender
-                Some(data) = broadcast_rx.recv() => {
-                    println!("[IROH-STREAM] 📤 Broadcasting message to topic '{}' ({} bytes)", topic, data.len());
-                    match gossip_sender.broadcast(data.clone()).await {
+                Some(outgoing) = broadcast_rx.recv() => {
+                    let OutgoingMessage { data, neighbors_only } = outgoing;
+                    println!("[IROH-STREAM] 📤 Broadcasting message to topic '{}' ({} bytes{})", topic, data.len(), if neighbors_only { ", neighbors only" } else { "" });
+                    let result = if neighbors_only {
+                        gossip_sender.broadcast_neighbors(data).await
+                    } else {
+                        gossip_sender.broadcast(data).await
+                    };
+                    match result {
                         Ok(_) => {
                             println!("[IROH-STREAM] [OK] Successfully broadcast message to topic '{}'", topic);
                             // Record REAL broadcast success for health_check()
@@ -959,7 +962,7 @@ impl IrohNetwork {
     #[allow(dead_code)]
     pub async fn join_gossip_mesh_with_peer(
         &self,
-        bootstrap_peer: iroh::NodeId,
+        bootstrap_peer: iroh::EndpointId,
     ) -> Result<(), String> {
         println!(
             "[IROH-JOIN] Joining gossip mesh with peer: {} (atomic)",
@@ -1074,6 +1077,26 @@ impl IrohNetwork {
 
     /// Publish a message to a gossip topic
     pub async fn publish_message(&self, topic: &str, message: P2PMessage) -> Result<(), String> {
+        self.publish_message_inner(topic, message, false).await
+    }
+
+    /// Publish a message to direct gossip neighbors only (not relayed mesh-wide).
+    /// Use for connection-liveness traffic like heartbeats that has no business
+    /// being flooded to - and recorded by - every node in the mesh.
+    pub async fn publish_message_to_neighbors(
+        &self,
+        topic: &str,
+        message: P2PMessage,
+    ) -> Result<(), String> {
+        self.publish_message_inner(topic, message, true).await
+    }
+
+    async fn publish_message_inner(
+        &self,
+        topic: &str,
+        message: P2PMessage,
+        neighbors_only: bool,
+    ) -> Result<(), String> {
         println!("[IROH] publish_message() called for topic: {}", topic);
 
         // Serialize message
@@ -1097,7 +1120,10 @@ impl IrohNetwork {
         println!("[IROH] Sending message to broadcast channel...");
         subscription
             .broadcast_tx
-            .send(Bytes::from(data))
+            .send(OutgoingMessage {
+                data: Bytes::from(data),
+                neighbors_only,
+            })
             .map_err(|e| format!("Failed to send to broadcast channel: {}", e))?;
 
         println!("[IROH] Message queued for broadcast to topic: {}", topic);
@@ -1109,24 +1135,26 @@ impl IrohNetwork {
     // For large files (images, attachments) that exceed gossip message size limits
     // ============================================================================
 
+    /// Register a known peer address so gossip and direct dials can resolve it by
+    /// EndpointId. Replaces iroh 0.35's `endpoint.add_node_addr()`.
+    pub fn register_peer_address(&self, addr: iroh::EndpointAddr) {
+        self.address_book.add_endpoint_info(addr);
+    }
+
     /// Store a blob locally and return its hash
     /// The hash can then be shared via gossip, and peers can fetch the blob directly
     pub async fn store_blob(&self, data: Vec<u8>) -> Result<iroh_blobs::Hash, String> {
-        use iroh_blobs::store::Store;
+        let store_guard = self.store.lock().await;
+        let store = store_guard.as_ref().ok_or("Blob store not initialized")?;
 
-        let blobs_guard = self.blobs.lock().await;
-        let blobs = blobs_guard.as_ref().ok_or("Blob store not initialized")?;
-
-        let store = blobs.store();
-        let bytes = Bytes::from(data);
-
-        // Import the bytes into the store
+        // Add the bytes to the store (raw format). AddProgress resolves to TagInfo.
         let tag = store
-            .import_bytes(bytes, iroh_blobs::BlobFormat::Raw)
+            .blobs()
+            .add_bytes(data)
             .await
             .map_err(|e| format!("Failed to import blob: {}", e))?;
 
-        let hash = *tag.hash();
+        let hash = tag.hash;
         println!("[IROH-BLOBS] Stored blob with hash: {}", hash);
 
         Ok(hash)
@@ -1138,74 +1166,50 @@ impl IrohNetwork {
     pub async fn fetch_blob(
         &self,
         hash: iroh_blobs::Hash,
-        from_node_id: iroh::NodeId,
+        from_node_id: iroh::EndpointId,
     ) -> Result<Vec<u8>, String> {
-        use iroh_blobs::store::bao_tree::io::fsm::AsyncSliceReader;
-        use iroh_blobs::store::{Map, MapEntry};
-
-        let blobs_guard = self.blobs.lock().await;
-        let blobs = blobs_guard.as_ref().ok_or("Blob store not initialized")?;
-
         println!(
             "[IROH-BLOBS] Fetching blob {} from peer {}",
             hash, from_node_id
         );
 
-        // Queue the download request
-        let downloader = blobs.downloader();
-        let request = iroh_blobs::downloader::DownloadRequest::new(
-            iroh_blobs::HashAndFormat::raw(hash),
-            vec![from_node_id],
-        );
+        // Clone the downloader so we don't hold the lock across the download.
+        let downloader = self
+            .downloader
+            .lock()
+            .await
+            .clone()
+            .ok_or("Downloader not initialized")?;
 
-        // Start the download and wait for completion
-        let handle = downloader.queue(request).await;
-        handle
+        // Download the blob from the given provider. The downloader establishes
+        // (or reuses) a connection to the peer via the endpoint and address lookups.
+        downloader
+            .download(hash, vec![from_node_id])
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
 
         println!("[IROH-BLOBS] Download complete, reading blob from store");
 
-        // Read the blob from local store
-        let store = blobs.store();
-        let entry = store
-            .get(&hash)
-            .await
-            .map_err(|e| format!("Failed to get blob entry: {}", e))?
-            .ok_or("Blob not found in store after download")?;
-
-        let size = entry.size().value() as usize;
-
-        // Use read_at to read all data at once (returns Send-safe future)
-        let mut reader = entry
-            .data_reader()
-            .await
-            .map_err(|e| format!("Failed to get data reader: {}", e))?;
-
-        // Read all bytes using read_at (0 to size)
-        let data = reader
-            .read_at(0, size)
+        // Read the blob back out of the local store.
+        let store_guard = self.store.lock().await;
+        let store = store_guard.as_ref().ok_or("Blob store not initialized")?;
+        let data = store
+            .blobs()
+            .get_bytes(hash)
             .await
             .map_err(|e| format!("Failed to read blob: {}", e))?;
 
-        println!(
-            "[IROH-BLOBS] [OK] Fetched blob, size: {} bytes (expected: {})",
-            data.len(),
-            size
-        );
+        println!("[IROH-BLOBS] [OK] Fetched blob, size: {} bytes", data.len());
         Ok(data.to_vec())
     }
 
     /// Check if we have a blob locally
     #[allow(dead_code)]
     pub async fn has_blob(&self, hash: iroh_blobs::Hash) -> bool {
-        use iroh_blobs::store::Map;
-
-        // Clone blobs to avoid holding lock during await
-        let blobs_clone = self.blobs.lock().await.clone();
-        if let Some(blobs) = blobs_clone.as_ref() {
-            let store = blobs.store();
-            store.get(&hash).await.ok().flatten().is_some()
+        // Clone the store handle to avoid holding the lock during await
+        let store_clone = self.store.lock().await.clone();
+        if let Some(store) = store_clone.as_ref() {
+            store.blobs().has(hash).await.unwrap_or(false)
         } else {
             false
         }
@@ -1216,7 +1220,7 @@ impl IrohNetwork {
         // Clone endpoint to avoid holding lock - prevents potential deadlocks
         let endpoint_clone = self.endpoint.lock().await.clone();
         if let Some(endpoint) = endpoint_clone.as_ref() {
-            endpoint.node_id().to_string()
+            endpoint.id().to_string()
         } else {
             String::new()
         }
@@ -1228,10 +1232,7 @@ impl IrohNetwork {
         // Clone endpoint to avoid holding lock during await
         let endpoint_clone = self.endpoint.lock().await.clone();
         let node_addr = if let Some(endpoint) = endpoint_clone.as_ref() {
-            endpoint
-                .node_addr()
-                .await
-                .map_err(|e| format!("Failed to get node address: {}", e))?
+            endpoint.addr()
         } else {
             return Err("Endpoint not initialized".to_string());
         };
@@ -1369,7 +1370,7 @@ impl IrohNetwork {
             // Clone the endpoint so the lock isn't held across awaits
             let endpoint_clone = network.endpoint.lock().await.clone();
             if let Some(endpoint) = endpoint_clone.as_ref() {
-                let our_node_id = endpoint.node_id();
+                let our_node_id = endpoint.id();
                 println!("[IROH-RENDEZVOUS] Our NodeId: {}", our_node_id);
 
                 println!("╔════════════════════════════════════════════════════════════════════╗");
@@ -1392,15 +1393,17 @@ impl IrohNetwork {
                     hex::encode(rendezvous_bytes)
                 );
 
-                // Get our NodeAddr to publish
-                if let Ok(our_node_addr) = endpoint.node_addr().await {
-                    println!("[IROH-RENDEZVOUS] Our NodeAddr: {:?}", our_node_addr);
-                    println!("[IROH-RENDEZVOUS]   Relay: {:?}", our_node_addr.relay_url());
-                    println!(
-                        "[IROH-RENDEZVOUS]   Direct addrs: {}",
-                        our_node_addr.direct_addresses().count()
-                    );
-                }
+                // Get our EndpointAddr to publish
+                let our_node_addr = endpoint.addr();
+                println!("[IROH-RENDEZVOUS] Our EndpointAddr: {:?}", our_node_addr);
+                println!(
+                    "[IROH-RENDEZVOUS]   Relay: {:?}",
+                    our_node_addr.relay_urls().next()
+                );
+                println!(
+                    "[IROH-RENDEZVOUS]   Direct addrs: {}",
+                    our_node_addr.ip_addrs().count()
+                );
             }
 
             // Continuously try database peers with EXPONENTIAL BACKOFF
@@ -1421,7 +1424,7 @@ impl IrohNetwork {
                         println!("[IROH-DISCOVERY] Found {} peer addresses in database, checking for reconnection candidates...", peer_addrs.len());
 
                         for (node_id_str, relay_url) in peer_addrs {
-                            match node_id_str.parse::<iroh::NodeId>() {
+                            match node_id_str.parse::<iroh::EndpointId>() {
                                 Ok(peer_id) => {
                                     // CRITICAL: Skip already-connected peers!
                                     // Reconnecting to already-connected peers causes gossip state
@@ -1437,7 +1440,7 @@ impl IrohNetwork {
                                     // attempt (tens of seconds for unreachable peers).
                                     let endpoint_clone = network.endpoint.lock().await.clone();
                                     if let Some(endpoint) = endpoint_clone.as_ref() {
-                                        let our_node_id = endpoint.node_id();
+                                        let our_node_id = endpoint.id();
 
                                         // Skip if it's our own NodeId
                                         if peer_id == our_node_id {
@@ -1469,8 +1472,8 @@ impl IrohNetwork {
                                         );
                                         drop(retry_states);
 
-                                        // Construct full NodeAddr with relay URL for reliable connection
-                                        let mut peer_node_addr = iroh::NodeAddr::new(peer_id);
+                                        // Construct full EndpointAddr with relay URL for reliable connection
+                                        let mut peer_node_addr = iroh::EndpointAddr::new(peer_id);
                                         if let Ok(url) = relay_url.parse() {
                                             peer_node_addr = peer_node_addr.with_relay_url(url);
                                             println!("[IROH-DISCOVERY] Connecting to peer {} with relay: {}", peer_id, &relay_url);
@@ -1479,12 +1482,11 @@ impl IrohNetwork {
                                             continue;
                                         }
 
-                                        // Add full NodeAddr to endpoint before connecting
-                                        if let Err(e) =
-                                            endpoint.add_node_addr(peer_node_addr.clone())
-                                        {
-                                            println!("[IROH-DISCOVERY] Warning: Failed to add node address: {}", e);
-                                        }
+                                        // Register the peer's address so gossip can resolve
+                                        // it by EndpointId. Replaces 0.35 add_node_addr.
+                                        network
+                                            .address_book
+                                            .add_endpoint_info(peer_node_addr.clone());
 
                                         // Try to connect with full addressing info.
                                         // Bound the attempt so one unreachable peer can't
@@ -1492,7 +1494,8 @@ impl IrohNetwork {
                                         println!("[IROH-DISCOVERY] Discovering peer {} via DHT/DNS/Relay...", peer_id);
                                         match tokio::time::timeout(
                                             tokio::time::Duration::from_secs(15),
-                                            endpoint.connect(peer_id, iroh_gossip::ALPN),
+                                            endpoint
+                                                .connect(peer_node_addr.clone(), iroh_gossip::ALPN),
                                         )
                                         .await
                                         {
@@ -1627,7 +1630,7 @@ impl IrohNetwork {
                 profile_picture,
                 profile_signature,
             } => {
-                let peer_node_id = node_addr.node_id;
+                let peer_node_id = node_addr.id;
                 println!(
                     "[IROH] Received presence from user {} ({}) device {} (NodeId: {})",
                     display_name,
@@ -1637,8 +1640,8 @@ impl IrohNetwork {
                 );
                 println!(
                     "[IROH]   Relay: {:?}, Direct addresses: {}",
-                    node_addr.relay_url(),
-                    node_addr.direct_addresses().count()
+                    node_addr.relay_urls().next(),
+                    node_addr.ip_addrs().count()
                 );
 
                 // SECURITY: Verify profile signature if present
@@ -1712,7 +1715,7 @@ impl IrohNetwork {
                             );
                             // Also remove stale node_ids from connected_peers
                             for stale_node_id in stale_node_ids {
-                                if let Ok(stale_id) = stale_node_id.parse::<iroh::NodeId>() {
+                                if let Ok(stale_id) = stale_node_id.parse::<iroh::EndpointId>() {
                                     self.remove_connected_peer(stale_id).await;
                                     println!(
                                         "[IROH] Removed stale peer {} from connected set",
@@ -1737,16 +1740,10 @@ impl IrohNetwork {
                 // 2. Track the peer as connected (since we received their presence via gossip)
                 // 3. Store their info in the database for future reconnection
 
-                // Add node address for better routing info
-                let endpoint_guard = self.endpoint.lock().await;
-                if let Some(endpoint) = endpoint_guard.as_ref() {
-                    if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
-                        println!("[IROH] Warning: Failed to add node address: {}", e);
-                    } else {
-                        println!("[IROH] [OK] Added peer's node address to endpoint");
-                    }
-                }
-                drop(endpoint_guard);
+                // Register the peer's address in the address book for better routing /
+                // gossip resolution. Replaces 0.35 endpoint.add_node_addr().
+                self.address_book.add_endpoint_info(node_addr.clone());
+                println!("[IROH] [OK] Added peer's address to the address book");
 
                 // Track this peer as connected (we received their presence via gossip!)
                 self.add_connected_peer(peer_node_id).await;
@@ -1883,7 +1880,7 @@ impl IrohNetwork {
 
                         // CRITICAL: Always update NodeId for reconnection - even if relay_url is missing
                         // This ensures the discovery loop has the correct NodeId after peer wipes/restarts
-                        if let Some(relay_url) = node_addr.relay_url() {
+                        if let Some(relay_url) = node_addr.relay_urls().next() {
                             // Have relay URL: update both NodeId and relay URL
                             let relay_url_str = relay_url.to_string();
                             if let Err(e) = self.db.save_friend_peer_address(
@@ -1952,20 +1949,13 @@ impl IrohNetwork {
                                 };
                                 let (our_node_id, our_relay_url) =
                                     if let Some(endpoint) = endpoint_clone.as_ref() {
-                                        match tokio::time::timeout(
-                                            tokio::time::Duration::from_millis(500),
-                                            endpoint.node_addr(),
-                                        )
-                                        .await
-                                        {
-                                            Ok(Ok(addr)) => (
-                                                addr.node_id.to_string(),
-                                                addr.relay_url()
-                                                    .map(|u| u.to_string())
-                                                    .unwrap_or_default(),
-                                            ),
-                                            _ => (String::new(), String::new()),
-                                        }
+                                        let addr = endpoint.addr();
+                                        let relay = addr
+                                            .relay_urls()
+                                            .next()
+                                            .map(|u| u.to_string())
+                                            .unwrap_or_default();
+                                        (addr.id.to_string(), relay)
                                     } else {
                                         (String::new(), String::new())
                                     };
@@ -2023,15 +2013,13 @@ impl IrohNetwork {
                                 let endpoint_clone = self.endpoint.lock().await.clone();
                                 let (our_node_id, our_relay_url) =
                                     if let Some(endpoint) = endpoint_clone.as_ref() {
-                                        match endpoint.node_addr().await {
-                                            Ok(addr) => (
-                                                addr.node_id.to_string(),
-                                                addr.relay_url()
-                                                    .map(|u| u.to_string())
-                                                    .unwrap_or_default(),
-                                            ),
-                                            Err(_) => (String::new(), String::new()),
-                                        }
+                                        let addr = endpoint.addr();
+                                        let relay = addr
+                                            .relay_urls()
+                                            .next()
+                                            .map(|u| u.to_string())
+                                            .unwrap_or_default();
+                                        (addr.id.to_string(), relay)
                                     } else {
                                         (String::new(), String::new())
                                     };
@@ -2365,7 +2353,15 @@ impl IrohNetwork {
                                 content,
                                 node_id,
                                 blob_refs,
+                                sent_at,
                             } => {
+                                // Precise time is inside the ciphertext; envelope
+                                // timestamp (hour-coarse) is the legacy fallback
+                                let timestamp = if sent_at > 0 {
+                                    sent_at
+                                } else {
+                                    envelope.timestamp
+                                };
                                 // Get sender's user_id from their public key
                                 let sender_user_id = super::types::SqliteUuid::from_public_key(
                                     &envelope.sender_public_key,
@@ -2410,7 +2406,7 @@ impl IrohNetwork {
                                         public_key: envelope.sender_public_key.clone(),
                                         node_id,
                                         content,
-                                        timestamp: envelope.timestamp,
+                                        timestamp,
                                         blob_refs,
                                     },
                                 );
@@ -2452,7 +2448,13 @@ impl IrohNetwork {
                                 content,
                                 attachments,
                                 show_in_main_feed,
+                                sent_at,
                             } => {
+                                let timestamp = if sent_at > 0 {
+                                    sent_at
+                                } else {
+                                    envelope.timestamp
+                                };
                                 let sender_user_id = super::types::SqliteUuid::from_public_key(
                                     &envelope.sender_public_key,
                                 );
@@ -2529,7 +2531,7 @@ impl IrohNetwork {
                                                 public_key: envelope.sender_public_key.clone(),
                                                 content,
                                                 show_in_main_feed,
-                                                timestamp: envelope.timestamp,
+                                                timestamp,
                                                 attachments,
                                             },
                                         );
@@ -2630,7 +2632,13 @@ impl IrohNetwork {
                                 post_id,
                                 content,
                                 parent_comment_id,
+                                sent_at,
                             } => {
+                                let timestamp = if sent_at > 0 {
+                                    sent_at
+                                } else {
+                                    envelope.timestamp
+                                };
                                 let sender_user_id = super::types::SqliteUuid::from_public_key(
                                     &envelope.sender_public_key,
                                 );
@@ -2709,7 +2717,7 @@ impl IrohNetwork {
                                         "publicKey": envelope.sender_public_key,
                                         "content": content,
                                         "parentCommentId": parent_comment_id,
-                                        "timestamp": envelope.timestamp
+                                        "timestamp": timestamp
                                     }),
                                 );
                                 println!("[IROH] ✓ Emitted p2p-post-comment event");
@@ -2718,7 +2726,13 @@ impl IrohNetwork {
                                 post_id,
                                 emoji,
                                 action,
+                                sent_at,
                             } => {
+                                let timestamp = if sent_at > 0 {
+                                    sent_at
+                                } else {
+                                    envelope.timestamp
+                                };
                                 let sender_user_id = super::types::SqliteUuid::from_public_key(
                                     &envelope.sender_public_key,
                                 );
@@ -2794,7 +2808,7 @@ impl IrohNetwork {
                                         "publicKey": envelope.sender_public_key,
                                         "emoji": emoji,
                                         "action": action,
-                                        "timestamp": envelope.timestamp
+                                        "timestamp": timestamp
                                     }),
                                 );
                                 println!("[IROH] ✓ Emitted p2p-post-reaction event");
@@ -2993,27 +3007,14 @@ impl IrohNetwork {
                     }),
                 );
 
-                // 3. Add friend's node address to endpoint for direct connection
-                if let Ok(peer_node_id) = from_node_id.parse::<iroh::NodeId>() {
+                // 3. Add friend's node address to the address book for direct connection
+                if let Ok(peer_node_id) = from_node_id.parse::<iroh::EndpointId>() {
                     if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
-                        let node_addr = iroh::NodeAddr::from_parts(
-                            peer_node_id,
-                            Some(relay_url_parsed.into()),
-                            vec![],
-                        );
+                        let node_addr = iroh::EndpointAddr::new(peer_node_id)
+                            .with_relay_url(relay_url_parsed.into());
 
-                        let endpoint_guard = self.endpoint.lock().await;
-                        if let Some(endpoint) = endpoint_guard.as_ref() {
-                            if let Err(e) = endpoint.add_node_addr(node_addr) {
-                                println!(
-                                    "[IROH] Warning: Failed to add friend's node address: {}",
-                                    e
-                                );
-                            } else {
-                                println!("[IROH] [OK] Added friend's node address to endpoint");
-                            }
-                        }
-                        drop(endpoint_guard);
+                        self.address_book.add_endpoint_info(node_addr);
+                        println!("[IROH] [OK] Added friend's address to the address book");
 
                         // NOTE: We do NOT resubscribe here because if we received this message via gossip,
                         // the mesh is already working. Resubscribing would disrupt the mesh and cause
@@ -3215,27 +3216,14 @@ impl IrohNetwork {
                     }),
                 );
 
-                // Add their node address to endpoint for direct connection
-                if let Ok(peer_node_id) = from_node_id.parse::<iroh::NodeId>() {
+                // Add their node address to the address book for direct connection
+                if let Ok(peer_node_id) = from_node_id.parse::<iroh::EndpointId>() {
                     if let Ok(relay_url_parsed) = from_relay_url.parse::<url::Url>() {
-                        let node_addr = iroh::NodeAddr::from_parts(
-                            peer_node_id,
-                            Some(relay_url_parsed.into()),
-                            vec![],
-                        );
+                        let node_addr = iroh::EndpointAddr::new(peer_node_id)
+                            .with_relay_url(relay_url_parsed.into());
 
-                        let endpoint_guard = self.endpoint.lock().await;
-                        if let Some(endpoint) = endpoint_guard.as_ref() {
-                            if let Err(e) = endpoint.add_node_addr(node_addr) {
-                                println!(
-                                    "[IROH] Warning: Failed to add friend's node address: {}",
-                                    e
-                                );
-                            } else {
-                                println!("[IROH] [OK] Added friend's node address to endpoint");
-                            }
-                        }
-                        drop(endpoint_guard);
+                        self.address_book.add_endpoint_info(node_addr);
+                        println!("[IROH] [OK] Added friend's address to the address book");
 
                         // NOTE: No resubscription needed! The gossip protocol handles mesh formation
                         // automatically. Since we received this FriendAccepted message via gossip,
@@ -3257,7 +3245,7 @@ impl IrohNetwork {
                 timestamp: _,
             } => {
                 // Parse the node_id from string
-                match node_id.parse::<iroh::NodeId>() {
+                match node_id.parse::<iroh::EndpointId>() {
                     Ok(peer_node_id) => {
                         println!("[HEARTBEAT] Received heartbeat from peer: {}", peer_node_id);
 
@@ -3602,16 +3590,13 @@ impl IrohNetwork {
         // Clone endpoint to avoid holding lock during await
         let endpoint_clone = self.endpoint.lock().await.clone();
         let (our_node_id, our_relay_url) = if let Some(endpoint) = endpoint_clone.as_ref() {
-            match endpoint.node_addr().await {
-                Ok(addr) => (
-                    addr.node_id.to_string(),
-                    addr.relay_url().map(|u| u.to_string()).unwrap_or_default(),
-                ),
-                Err(e) => {
-                    println!("[FRIEND-RESEND] Failed to get node address: {}", e);
-                    return;
-                }
-            }
+            let addr = endpoint.addr();
+            let relay = addr
+                .relay_urls()
+                .next()
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+            (addr.id.to_string(), relay)
         } else {
             println!("[FRIEND-RESEND] No endpoint available");
             return;
@@ -3657,7 +3642,9 @@ impl IrohNetwork {
             endpoint: self.endpoint.clone(),
             gossip: self.gossip.clone(),
             router: self.router.clone(),
-            blobs: self.blobs.clone(),
+            store: self.store.clone(),
+            downloader: self.downloader.clone(),
+            address_book: self.address_book.clone(),
             topics: self.topics.clone(),
             connected_peers: self.connected_peers.clone(),
             peer_retry_counts: self.peer_retry_counts.clone(),
@@ -3726,7 +3713,7 @@ impl IrohNetwork {
     }
 
     /// Add a peer to the connected set
-    pub async fn add_connected_peer(&self, node_id: iroh::NodeId) {
+    pub async fn add_connected_peer(&self, node_id: iroh::EndpointId) {
         let mut peers = self.connected_peers.lock().await;
         if peers.insert(node_id) {
             println!(
@@ -3738,7 +3725,7 @@ impl IrohNetwork {
     }
 
     /// Remove a peer from the connected set
-    pub async fn remove_connected_peer(&self, node_id: iroh::NodeId) {
+    pub async fn remove_connected_peer(&self, node_id: iroh::EndpointId) {
         let mut peers = self.connected_peers.lock().await;
         if peers.remove(&node_id) {
             println!(
@@ -3750,7 +3737,7 @@ impl IrohNetwork {
     }
 
     /// Check if a peer is in the connected set
-    pub async fn is_peer_connected(&self, node_id: iroh::NodeId) -> bool {
+    pub async fn is_peer_connected(&self, node_id: iroh::EndpointId) -> bool {
         let peers = self.connected_peers.lock().await;
         peers.contains(&node_id)
     }
@@ -3906,14 +3893,13 @@ impl IrohNetwork {
     pub async fn get_connection_status(&self) -> Result<serde_json::Value, String> {
         let endpoint_guard = self.endpoint.lock().await;
         let (has_endpoint, node_id, relay_url) = if let Some(endpoint) = endpoint_guard.as_ref() {
-            let node_id = endpoint.node_id().to_string();
-            // home_relay() returns Watcher<Option<RelayUrl>>
-            // Watcher.get() returns Result<Option<RelayUrl>, Disconnected>
+            let node_id = endpoint.id().to_string();
+            // Relay URL now comes from our current EndpointAddr (populated once a relay
+            // connection is established). Replaces the removed home_relay() watcher.
             let relay_url = endpoint
-                .home_relay()
-                .get()
-                .ok()
-                .flatten()
+                .addr()
+                .relay_urls()
+                .next()
                 .map(|url| url.to_string())
                 .unwrap_or_default();
             (true, node_id, relay_url)
@@ -3986,7 +3972,7 @@ impl IrohNetwork {
                 // Get our node_id
                 let endpoint_guard = network.endpoint.lock().await;
                 if let Some(endpoint) = endpoint_guard.as_ref() {
-                    let our_node_id = endpoint.node_id();
+                    let our_node_id = endpoint.id();
                     drop(endpoint_guard);
 
                     // Create heartbeat message
@@ -3995,8 +3981,13 @@ impl IrohNetwork {
                         timestamp: chrono::Utc::now().timestamp(),
                     };
 
-                    // Send to global content topic
-                    match network.publish_message(CONTENT_TOPIC, heartbeat).await {
+                    // Send to direct gossip neighbors only - heartbeats confirm
+                    // live connections and don't need mesh-wide relay, which
+                    // would let every node track every device's online times
+                    match network
+                        .publish_message_to_neighbors(CONTENT_TOPIC, heartbeat)
+                        .await
+                    {
                         Ok(_) => {
                             println!("[HEARTBEAT] [OK] Sent heartbeat");
                             // Track successful heartbeat
@@ -4042,7 +4033,7 @@ impl IrohNetwork {
                 let heartbeats = network.peer_heartbeats.lock().await;
 
                 // Find stale peers (no heartbeat in 45 seconds)
-                let stale_peers: Vec<iroh::NodeId> = heartbeats
+                let stale_peers: Vec<iroh::EndpointId> = heartbeats
                     .iter()
                     .filter(|(_, &last_heartbeat)| {
                         now.duration_since(last_heartbeat) > heartbeat_timeout
@@ -4088,7 +4079,7 @@ impl IrohNetwork {
         let has_endpoint = endpoint_guard.is_some();
         let relay_connected = if let Some(endpoint) = endpoint_guard.as_ref() {
             // Check if we have a relay URL (indicates relay connection)
-            endpoint.home_relay().get().ok().flatten().is_some()
+            endpoint.addr().relay_urls().next().is_some()
         } else {
             false
         };

@@ -112,7 +112,7 @@ pub async fn create_community_invite(
     let node_id = {
         let endpoint_guard = network.endpoint.blocking_lock();
         if let Some(endpoint) = endpoint_guard.as_ref() {
-            endpoint.node_id().to_string()
+            endpoint.id().to_string()
         } else {
             return Err("Endpoint not initialized".to_string());
         }

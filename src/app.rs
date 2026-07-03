@@ -327,32 +327,21 @@ pub async fn accept_friend_request(
                 tokio::spawn(async move {
                     // Get our node address with a timeout
                     let endpoint_guard = network.endpoint.lock().await;
-                    let (node_id_str, relay_url_str) =
-                        if let Some(endpoint) = endpoint_guard.as_ref() {
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                endpoint.node_addr(),
-                            )
-                            .await
-                            {
-                                Ok(Ok(node_addr)) => {
-                                    let node_id = node_addr.node_id.to_string();
-                                    let relay_url = node_addr
-                                        .relay_url()
-                                        .map(|url| url.to_string())
-                                        .unwrap_or_else(|| {
-                                            "https://euw1-1.relay.iroh.network.".to_string()
-                                        });
-                                    (node_id, relay_url)
-                                }
-                                _ => (
-                                    endpoint.node_id().to_string(),
-                                    "https://euw1-1.relay.iroh.network.".to_string(),
-                                ),
-                            }
-                        } else {
-                            (String::new(), String::new())
-                        };
+                    let (node_id_str, relay_url_str) = if let Some(endpoint) =
+                        endpoint_guard.as_ref()
+                    {
+                        // endpoint.addr() is synchronous in iroh 1.0
+                        let node_addr = endpoint.addr();
+                        let node_id = node_addr.id.to_string();
+                        let relay_url = node_addr
+                            .relay_urls()
+                            .next()
+                            .map(|url| url.to_string())
+                            .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string());
+                        (node_id, relay_url)
+                    } else {
+                        (String::new(), String::new())
+                    };
                     drop(endpoint_guard);
 
                     let message = iroh_network::P2PMessage::FriendAccepted {

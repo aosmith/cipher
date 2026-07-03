@@ -721,8 +721,8 @@ async fn test_qr_scan_network_discovery() -> anyhow::Result<()> {
     // Alice's QR code contains her NodeAddr
     let alice_addr = alice.node_addr().await?;
     println!("Alice's QR code contains:");
-    println!("  NodeId: {}", alice_addr.node_id);
-    println!("  Relay: {:?}", alice_addr.relay_url());
+    println!("  NodeId: {}", alice_addr.id);
+    println!("  Relay: {:?}", alice_addr.relay_urls().next());
 
     // Bob "scans" the QR code - adds Alice's address
     bob.add_peer(alice_addr.clone())?;

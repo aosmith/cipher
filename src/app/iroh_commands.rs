@@ -227,19 +227,12 @@ pub async fn iroh_subscribe_friend(
             "[IROH] Adding friend peer info: NodeId={}, Relay={}",
             node_id, relay_url
         );
-        if let Ok(peer_node_id) = node_id.parse::<iroh::NodeId>() {
+        if let Ok(peer_node_id) = node_id.parse::<iroh::EndpointId>() {
             if let Ok(relay_url_parsed) = relay_url.parse::<url::Url>() {
-                let node_addr = iroh::NodeAddr::from_parts(
-                    peer_node_id,
-                    Some(iroh::RelayUrl::from(relay_url_parsed)),
-                    vec![],
-                );
-                let endpoint_guard = network.endpoint.lock().await;
-                if let Some(endpoint) = endpoint_guard.as_ref() {
-                    let _ = endpoint.add_node_addr(node_addr);
-                    println!("[IROH] Added friend node address to endpoint");
-                }
-                drop(endpoint_guard);
+                let node_addr = iroh::EndpointAddr::new(peer_node_id)
+                    .with_relay_url(iroh::RelayUrl::from(relay_url_parsed));
+                network.register_peer_address(node_addr);
+                println!("[IROH] Added friend address to the address book");
             }
         }
     }
@@ -544,31 +537,11 @@ pub async fn iroh_publish_post_comment(
     let friend_encryption_keys = network.get_friend_encryption_public_keys();
 
     if friend_encryption_keys.is_empty() {
-        // No friends with encryption keys - use unified Content message (same transport as posts)
-        println!("[PUBLISH-COMMENT] No friends with encryption keys - using Content message");
-
-        let node_id = network.get_node_id().await;
-        let payload = serde_json::json!({
-            "comment_id": comment_id.to_string(),
-            "post_id": post_id.to_string(),
-            "content": content,
-            "parent_comment_id": parent_comment_id.map(|id| id.to_string())
-        });
-
-        let message = P2PMessage::Content {
-            content_type: "comment".to_string(),
-            user_id: network.user_id,
-            public_key: network.public_key.clone(),
-            node_id,
-            payload_json: payload.to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            device_id: network.device_id.clone(),
-            blob_refs: vec![],
-        };
-
-        network.publish_message(CONTENT_TOPIC, message).await?;
-        println!("[PUBLISH-COMMENT] ✓ Comment published via Content message");
-        return Ok("Comment published".to_string());
+        // No friends with encryption keys - skip P2P broadcast (comment is saved
+        // locally). ALL content on the wire must be encrypted; the old plaintext
+        // Content fallback broadcast to the whole mesh with no one able to read it.
+        println!("[PUBLISH-COMMENT] No friends with encryption keys - skipping P2P broadcast (comment saved locally)");
+        return Ok("Comment saved locally (no friends to broadcast to)".to_string());
     }
 
     // Get our encryption keys for sealed envelope
@@ -632,30 +605,11 @@ pub async fn iroh_publish_post_reaction(
     let friend_encryption_keys = network.get_friend_encryption_public_keys();
 
     if friend_encryption_keys.is_empty() {
-        // No friends with encryption keys - use unified Content message (same transport as posts)
-        println!("[PUBLISH-REACTION] No friends with encryption keys - using Content message");
-
-        let node_id = network.get_node_id().await;
-        let payload = serde_json::json!({
-            "post_id": post_id.to_string(),
-            "emoji": emoji,
-            "action": action
-        });
-
-        let message = P2PMessage::Content {
-            content_type: "reaction".to_string(),
-            user_id: network.user_id,
-            public_key: network.public_key.clone(),
-            node_id,
-            payload_json: payload.to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            device_id: network.device_id.clone(),
-            blob_refs: vec![],
-        };
-
-        network.publish_message(CONTENT_TOPIC, message).await?;
-        println!("[PUBLISH-REACTION] ✓ Reaction published via Content message");
-        return Ok("Reaction published".to_string());
+        // No friends with encryption keys - skip P2P broadcast (reaction is saved
+        // locally). ALL content on the wire must be encrypted; the old plaintext
+        // Content fallback broadcast to the whole mesh with no one able to read it.
+        println!("[PUBLISH-REACTION] No friends with encryption keys - skipping P2P broadcast (reaction saved locally)");
+        return Ok("Reaction saved locally (no friends to broadcast to)".to_string());
     }
 
     // Get our encryption keys for sealed envelope
@@ -855,17 +809,14 @@ pub async fn iroh_generate_invite() -> Result<String, String> {
     // Clone endpoint to avoid holding lock during await
     let endpoint_clone = network.endpoint.lock().await.clone();
     let node_addr = if let Some(endpoint) = endpoint_clone.as_ref() {
-        endpoint
-            .node_addr()
-            .await
-            .map_err(|e| format!("Failed to get node address: {}", e))?
+        endpoint.addr()
     } else {
         return Err("Endpoint not initialized".to_string());
     };
 
     // Extract NodeId (relay discovered via DHT, not in invite)
-    let node_id = node_addr.node_id.to_string();
-    let _relay_url = node_addr.relay_url().map(|url| url.to_string());
+    let node_id = node_addr.id.to_string();
+    let _relay_url = node_addr.relay_urls().next().map(|url| url.to_string());
 
     // V2 format: [32 pubkey][32 node][1 name_len][name] - includes display name
     use base64::engine::general_purpose::STANDARD;
@@ -1282,35 +1233,27 @@ pub async fn iroh_add_friend_by_public_key(
         println!("[IROH] Node ID provided - adding to endpoint...");
 
         // Parse NodeId
-        if let Ok(peer_node_id) = node_id_str.parse::<iroh::NodeId>() {
+        if let Ok(peer_node_id) = node_id_str.parse::<iroh::EndpointId>() {
             // Parse relay URL if provided (optional)
             let relay_url_parsed = relay_url
                 .as_ref()
                 .and_then(|url| url.parse::<url::Url>().ok());
 
-            // Construct NodeAddr - relay is optional, DHT will discover it
-            let node_addr = iroh::NodeAddr::from_parts(
-                peer_node_id,
-                relay_url_parsed.map(|u| u.into()),
-                vec![],
-            );
-
-            // Add NodeAddr to endpoint - this enables gossip to find the peer
-            let endpoint_guard = network.endpoint.lock().await;
-            if let Some(endpoint) = endpoint_guard.as_ref() {
-                if let Err(e) = endpoint.add_node_addr(node_addr.clone()) {
-                    println!("[IROH] Warning: Failed to add node address: {}", e);
-                } else {
-                    println!(
-                        "[IROH] ✓ Node address added to endpoint (relay: {})",
-                        relay_url
-                            .as_ref()
-                            .map(|_| "provided")
-                            .unwrap_or("DHT discovery")
-                    );
-                }
+            // Construct EndpointAddr - relay is optional, DHT will discover it
+            let mut node_addr = iroh::EndpointAddr::new(peer_node_id);
+            if let Some(url) = relay_url_parsed {
+                node_addr = node_addr.with_relay_url(url.into());
             }
-            drop(endpoint_guard);
+
+            // Register the address so gossip can find the peer (replaces add_node_addr)
+            network.register_peer_address(node_addr.clone());
+            println!(
+                "[IROH] ✓ Node address added to address book (relay: {})",
+                relay_url
+                    .as_ref()
+                    .map(|_| "provided")
+                    .unwrap_or("DHT discovery")
+            );
 
             // CRITICAL: Join the gossip mesh with the new friend as bootstrap
             // This is the INITIATING device (scanning QR code), so we need to actively
@@ -1346,7 +1289,8 @@ pub async fn iroh_add_friend_by_public_key(
     // Clone endpoint to avoid holding lock during await
     let endpoint_clone = network.endpoint.lock().await.clone();
     if let Some(endpoint) = endpoint_clone.as_ref() {
-        if let Ok(our_node_addr) = endpoint.node_addr().await {
+        {
+            let our_node_addr = endpoint.addr();
             // Get our encryption public key for sealed envelope encryption (comments, reactions)
             let our_encryption_public_key = db
                 .get_user_encryption_public_key(network.user_id)
@@ -1359,9 +1303,10 @@ pub async fn iroh_add_friend_by_public_key(
                 from_encryption_public_key: our_encryption_public_key,
                 from_user_id: network.user_id,
                 from_display_name: network.display_name.clone(),
-                from_node_id: our_node_addr.node_id.to_string(),
+                from_node_id: our_node_addr.id.to_string(),
                 from_relay_url: our_node_addr
-                    .relay_url()
+                    .relay_urls()
+                    .next()
                     .map(|url| url.to_string())
                     .unwrap_or_else(|| "https://euw1-1.relay.iroh.network.".to_string()),
                 to_public_key: friend_public_key.clone(),
@@ -1425,93 +1370,39 @@ pub async fn iroh_read_blob(
 
     // Parse sender's NodeId for downloading
     let sender_node_id = node_id
-        .parse::<iroh::NodeId>()
+        .parse::<iroh::EndpointId>()
         .map_err(|e| format!("Invalid node_id: {}", e))?;
 
-    // First, try to download the blob from the remote peer
-    {
-        let blobs_guard = network.blobs.lock().await;
-        if let Some(blobs) = blobs_guard.as_ref() {
-            let downloader = blobs.downloader().clone();
-            drop(blobs_guard); // Release lock before async operation
-
-            println!("[BLOB-READ] Attempting to download blob from peer...");
-            let request = iroh_blobs::downloader::DownloadRequest::new(
-                iroh_blobs::HashAndFormat::raw(hash),
-                vec![sender_node_id],
-            );
-            let handle = downloader.queue(request).await;
-
-            // Wait for download with timeout (30 seconds for larger files)
-            match tokio::time::timeout(std::time::Duration::from_secs(30), handle).await {
-                Ok(Ok(stats)) => {
-                    println!(
-                        "[BLOB-READ] Blob downloaded successfully ({} bytes)",
-                        stats.bytes_read
-                    );
-                }
-                Ok(Err(e)) => {
-                    println!("[BLOB-READ] Download failed: {} - will try local store", e);
-                }
-                Err(_) => {
-                    println!("[BLOB-READ] Download timed out - will try local store");
-                }
-            }
+    // First, try to download the blob from the remote peer (ignore errors - it may
+    // already be cached locally). The downloader resolves the peer via address lookups.
+    if let Some(downloader) = network.downloader.lock().await.clone() {
+        println!("[BLOB-READ] Attempting to download blob from peer...");
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            downloader.download(hash, vec![sender_node_id]),
+        )
+        .await
+        {
+            Ok(Ok(_)) => println!("[BLOB-READ] Blob downloaded successfully"),
+            Ok(Err(e)) => println!("[BLOB-READ] Download failed: {} - will try local store", e),
+            Err(_) => println!("[BLOB-READ] Download timed out - will try local store"),
         }
     }
 
-    // Use a oneshot channel to communicate with a LocalSet task
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let blobs_arc = network.blobs.clone();
-
-    // Spawn a new runtime in a blocking task to run the non-Send future
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to build runtime");
-
-        let local = tokio::task::LocalSet::new();
-        let result = local.block_on(&rt, async move {
-            use iroh_blobs::store::bao_tree::io::fsm::AsyncSliceReader;
-            use iroh_blobs::store::{Map, MapEntry};
-
-            let blobs_guard = blobs_arc.lock().await;
-            let blobs = blobs_guard
-                .as_ref()
-                .ok_or_else(|| "Blob store not initialized".to_string())?;
-
-            // Read from store
-            let store = blobs.store();
-            let entry = store
-                .get(&hash)
-                .await
-                .map_err(|e| format!("Failed to get blob entry: {}", e))?
-                .ok_or_else(|| format!("Blob not found in store after download attempt"))?;
-
-            let size = entry.size().value() as usize;
-            println!("[BLOB-READ] Reading {} bytes from local store", size);
-
-            let mut reader = entry
-                .data_reader()
-                .await
-                .map_err(|e| format!("Failed to get data reader: {}", e))?;
-
-            let data = reader
-                .read_at(0, size)
-                .await
-                .map_err(|e| format!("Failed to read blob: {}", e))?;
-
-            println!("[BLOB-READ] Read {} bytes from store", data.len());
-            Ok::<Vec<u8>, String>(data.to_vec())
-        });
-
-        let _ = tx.send(result);
-    });
-
-    let encrypted_data = rx
-        .await
-        .map_err(|_| "Blob read task failed".to_string())??;
+    // Read the blob from the local store. The new iroh-blobs read path is Send-safe,
+    // so the previous spawn_blocking/LocalSet workaround is no longer needed.
+    let encrypted_data = {
+        let store_guard = network.store.lock().await;
+        let store = store_guard
+            .as_ref()
+            .ok_or_else(|| "Blob store not initialized".to_string())?;
+        store
+            .blobs()
+            .get_bytes(hash)
+            .await
+            .map_err(|e| format!("Failed to read blob: {}", e))?
+            .to_vec()
+    };
 
     // Decrypt if encryption key provided
     let final_data = if let Some(key_b64) = encryption_key {

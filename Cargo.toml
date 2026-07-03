@@ -1,6 +1,6 @@
 [package]
 name = "cipher-social"
-version = "0.1.11"
+version = "0.1.12"
 description = "Cipher - End-to-End Encrypted P2P Social Network"
 authors = ["Cipher Team"]
 license = "AGPL-3.0"
@@ -48,10 +48,14 @@ urlencoding = "2.1"
 # Use only required tokio features instead of "full"
 tokio = { version = "1.0", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
 # Iroh for simpler, more reliable P2P networking with DHT discovery
-# Enable discovery-pkarr-dht for BitTorrent Mainline DHT (decentralized peer discovery)
-iroh = { version = "0.35", features = ["discovery-pkarr-dht"] }
-iroh-gossip = "0.35"
-iroh-blobs = "0.35"
+# DHT/mDNS discovery moved to separate "address lookup" crates in iroh 1.0
+iroh = "1.0"
+iroh-gossip = "0.101"
+iroh-blobs = "0.103"
+# BitTorrent Mainline DHT address lookup (censorship-resistant, decentralized peer discovery)
+iroh-mainline-address-lookup = "0.4"
+# mDNS local-network address lookup (optional, behind the `mdns` feature)
+iroh-mdns-address-lookup = { version = "0.4", optional = true }
 futures = "0.3"
 uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
 url = "2.4"
@@ -80,7 +84,7 @@ blake3 = "1.5"
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 # Enable mDNS local network discovery (experimental)
-mdns = ["iroh/discovery-local-network"]
+mdns = ["dep:iroh-mdns-address-lookup"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.24"

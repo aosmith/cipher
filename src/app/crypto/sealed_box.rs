@@ -61,6 +61,12 @@ pub struct SealedBox {
 }
 
 /// The actual content inside a sealed box
+///
+/// Variants carry a `sent_at` timestamp INSIDE the ciphertext: the envelope's
+/// outer `timestamp` is coarsened to the hour (it only exists for purging), so
+/// precise send times are not visible to mesh observers. `sent_at` defaults to
+/// 0 when decoding messages from older clients - fall back to the envelope
+/// timestamp in that case.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentPayload {
     Post {
@@ -68,6 +74,8 @@ pub enum ContentPayload {
         content: String,
         node_id: String,               // Sender's NodeId for blob fetching
         blob_refs: Vec<BlobReference>, // Attachments stored as blobs
+        #[serde(default)]
+        sent_at: i64,
     },
     DirectMessage {
         content: String,
@@ -93,6 +101,8 @@ pub enum ContentPayload {
         content: String,
         attachments: Option<Vec<MediaAttachmentWithData>>,
         show_in_main_feed: bool,
+        #[serde(default)]
+        sent_at: i64,
     },
     /// Notification that a new member joined a community
     CommunityMemberAdded {
@@ -107,13 +117,39 @@ pub enum ContentPayload {
         post_id: String,
         content: String,
         parent_comment_id: Option<String>,
+        #[serde(default)]
+        sent_at: i64,
     },
     /// A reaction on a post
     PostReaction {
         post_id: String,
         emoji: String,
         action: String, // "add" or "remove"
+        #[serde(default)]
+        sent_at: i64,
     },
+}
+
+/// Envelope timestamps are only used for purging old content, so round them
+/// down to the hour: a precise plaintext timestamp hands long-term observers
+/// exact per-user activity times. Precise time travels encrypted in `sent_at`.
+fn coarse_timestamp(now: i64) -> i64 {
+    const GRANULARITY: i64 = 3600;
+    now - now.rem_euclid(GRANULARITY)
+}
+
+/// Bucket size for plaintext padding: ciphertext length would otherwise reveal
+/// content length (a reaction vs. a long post) to every mesh observer.
+/// Small payloads land in one 256-byte bucket, mid-size round up to the next
+/// power of two, large (attachment-bearing) payloads to a 4 KiB multiple.
+fn padded_len(len: usize) -> usize {
+    if len <= 256 {
+        256
+    } else if len <= 4096 {
+        len.next_power_of_two()
+    } else {
+        len.div_ceil(4096) * 4096
+    }
 }
 
 impl GossipEnvelope {
@@ -128,13 +164,15 @@ impl GossipEnvelope {
         sender_encryption_private_key: &str,
     ) -> Result<Self, String> {
         let message_id = generate_message_id();
-        let timestamp = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp();
+        let timestamp = coarse_timestamp(now);
 
         let payload = ContentPayload::Post {
             post_id: post_id.to_string(),
             content: content.to_string(),
             node_id: node_id.to_string(),
             blob_refs: blob_refs.to_vec(),
+            sent_at: now,
         };
 
         let sealed_boxes = create_sealed_boxes_for_recipients(
@@ -164,7 +202,8 @@ impl GossipEnvelope {
         sender_encryption_private_key: &str,
     ) -> Result<Self, String> {
         let message_id = generate_message_id();
-        let timestamp = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp();
+        let timestamp = coarse_timestamp(now);
 
         let payload = ContentPayload::CommunityPost {
             community_id: community_id.to_string(),
@@ -172,6 +211,7 @@ impl GossipEnvelope {
             content: content.to_string(),
             attachments,
             show_in_main_feed,
+            sent_at: now,
         };
 
         let sealed_boxes = create_sealed_boxes_for_recipients(
@@ -200,7 +240,7 @@ impl GossipEnvelope {
         sender_encryption_private_key: &str,
     ) -> Result<Self, String> {
         let message_id = generate_message_id();
-        let timestamp = chrono::Utc::now().timestamp();
+        let timestamp = coarse_timestamp(chrono::Utc::now().timestamp());
 
         let payload = ContentPayload::CommunityMemberAdded {
             community_id: community_id.to_string(),
@@ -235,13 +275,15 @@ impl GossipEnvelope {
         sender_encryption_private_key: &str,
     ) -> Result<Self, String> {
         let message_id = generate_message_id();
-        let timestamp = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp();
+        let timestamp = coarse_timestamp(now);
 
         let payload = ContentPayload::PostComment {
             comment_id: comment_id.to_string(),
             post_id: post_id.to_string(),
             content: content.to_string(),
             parent_comment_id: parent_comment_id.map(|s| s.to_string()),
+            sent_at: now,
         };
 
         let sealed_boxes = create_sealed_boxes_for_recipients(
@@ -269,12 +311,14 @@ impl GossipEnvelope {
         sender_encryption_private_key: &str,
     ) -> Result<Self, String> {
         let message_id = generate_message_id();
-        let timestamp = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp();
+        let timestamp = coarse_timestamp(now);
 
         let payload = ContentPayload::PostReaction {
             post_id: post_id.to_string(),
             emoji: emoji.to_string(),
             action: action.to_string(),
+            sent_at: now,
         };
 
         let sealed_boxes = create_sealed_boxes_for_recipients(
@@ -333,9 +377,14 @@ impl SealedBox {
         recipient_public_key: &str,
         _sender_private_key: &str,
     ) -> Result<Self, String> {
-        // Serialize the payload
+        // Serialize the payload, then pad with trailing spaces to a size bucket
+        // so ciphertext length doesn't reveal content length. JSON parsers skip
+        // trailing whitespace, so decryption needs no changes and stays
+        // compatible with envelopes from older clients.
         let payload_json = serde_json::to_string(payload)
             .map_err(|e| format!("Failed to serialize payload: {}", e))?;
+        let mut plaintext = payload_json.into_bytes();
+        plaintext.resize(padded_len(plaintext.len()), b' ');
 
         // Decode recipient's public key
         let recipient_pub_bytes = general_purpose::STANDARD
@@ -368,7 +417,7 @@ impl SealedBox {
         let nonce = XNonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
-            .encrypt(nonce, payload_json.as_bytes())
+            .encrypt(nonce, plaintext.as_slice())
             .map_err(|_| "Encryption failed")?;
 
         // Calculate recipient hint (first 8 bytes of public key, hex encoded)
@@ -498,6 +547,7 @@ mod tests {
             content: "Hello, encrypted world!".to_string(),
             node_id: "test-node-id".to_string(),
             blob_refs: vec![],
+            sent_at: 1_700_000_123,
         };
 
         // Create sealed box
@@ -577,5 +627,106 @@ mod tests {
 
         let decrypted = envelope.try_decrypt(&outsider_pub_b64, &outsider_priv_b64);
         assert!(decrypted.is_none());
+    }
+
+    fn test_keypair() -> (String, String) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let mut secret = [0u8; 32];
+        rng.fill(&mut secret);
+        let private = StaticSecret::from(secret);
+        let public = X25519PublicKey::from(&private);
+        (
+            general_purpose::STANDARD.encode(public.as_bytes()),
+            general_purpose::STANDARD.encode(secret),
+        )
+    }
+
+    #[test]
+    fn test_padded_len_buckets() {
+        assert_eq!(padded_len(0), 256);
+        assert_eq!(padded_len(1), 256);
+        assert_eq!(padded_len(256), 256);
+        assert_eq!(padded_len(257), 512);
+        assert_eq!(padded_len(1000), 1024);
+        assert_eq!(padded_len(4096), 4096);
+        assert_eq!(padded_len(4097), 8192);
+        assert_eq!(padded_len(10000), 12288);
+    }
+
+    #[test]
+    fn test_ciphertext_length_hides_content_length() {
+        let (pub_key, priv_key) = test_keypair();
+
+        // Two payloads with very different content lengths that land in the
+        // same bucket must produce identically sized ciphertexts.
+        let short = ContentPayload::PostReaction {
+            post_id: "p".to_string(),
+            emoji: "x".to_string(),
+            action: "add".to_string(),
+            sent_at: 1,
+        };
+        let long = ContentPayload::PostReaction {
+            post_id: "p".repeat(60),
+            emoji: "x".repeat(30),
+            action: "remove".to_string(),
+            sent_at: 1_700_000_000,
+        };
+
+        let short_box = SealedBox::new(&short, &pub_key, &priv_key).unwrap();
+        let long_box = SealedBox::new(&long, &pub_key, &priv_key).unwrap();
+        assert_eq!(
+            short_box.ciphertext.len(),
+            long_box.ciphertext.len(),
+            "same-bucket payloads must be indistinguishable by size"
+        );
+
+        // Padded payloads must still decrypt cleanly (trailing whitespace is
+        // ignored by the JSON parser).
+        match short_box.decrypt(&priv_key).unwrap() {
+            ContentPayload::PostReaction { action, .. } => assert_eq!(action, "add"),
+            _ => panic!("Wrong payload type"),
+        }
+    }
+
+    #[test]
+    fn test_envelope_timestamp_is_coarse_and_sent_at_precise() {
+        let (pub_key, priv_key) = test_keypair();
+        let (sender_pub, sender_priv) = test_keypair();
+
+        let before = chrono::Utc::now().timestamp();
+        let envelope = GossipEnvelope::new_post(
+            &sender_pub,
+            "post-1",
+            "content",
+            "node-1",
+            &[],
+            &[pub_key.clone()],
+            &sender_priv,
+        )
+        .unwrap();
+        let after = chrono::Utc::now().timestamp();
+
+        // Outer timestamp is rounded down to the hour...
+        assert_eq!(envelope.timestamp % 3600, 0);
+        assert!(envelope.timestamp <= after && envelope.timestamp > before - 3600);
+
+        // ...while the precise time is inside the ciphertext.
+        match envelope.try_decrypt(&pub_key, &priv_key).unwrap() {
+            ContentPayload::Post { sent_at, .. } => {
+                assert!((before..=after).contains(&sent_at));
+            }
+            _ => panic!("Wrong payload type"),
+        }
+    }
+
+    #[test]
+    fn test_decode_payload_without_sent_at_defaults_to_zero() {
+        // Envelopes from older clients have no sent_at field.
+        let legacy_json = r#"{"Post":{"post_id":"p","content":"c","node_id":"n","blob_refs":[]}}"#;
+        match serde_json::from_str::<ContentPayload>(legacy_json).unwrap() {
+            ContentPayload::Post { sent_at, .. } => assert_eq!(sent_at, 0),
+            _ => panic!("Wrong payload type"),
+        }
     }
 }

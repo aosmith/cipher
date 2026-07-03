@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     /// Test exponential backoff calculation
     /// Verifies that backoff delays follow: 1s → 2s → 4s → 8s → 16s → 32s → 60s (max)
@@ -77,8 +77,6 @@ mod tests {
     /// Test message queue serialization/deserialization
     #[test]
     fn test_message_queue_serialization() {
-        use serde_json::json;
-
         #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
         enum TestMessage {
             Post { content: String, timestamp: i64 },

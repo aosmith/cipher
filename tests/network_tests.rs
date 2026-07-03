@@ -30,7 +30,7 @@ async fn test_node_address_retrieval() {
     let addr = node.node_addr().await.expect("Should get address");
 
     // Address should include the node ID
-    assert_eq!(addr.node_id, node.node_id);
+    assert_eq!(addr.id, node.node_id);
 
     node.shutdown().await.expect("Should shutdown");
 }
