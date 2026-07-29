@@ -4,14 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Cipher - Encrypted Social Network</title>
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-WJJ3ZPMPGK"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-WJJ3ZPMPGK');
-    </script>
+    <!-- No third-party or remote scripts: this WebView holds window.__TAURI__,
+         so any remote script would run with full local database access, and
+         phoning home contradicts the app's no-servers/E2E model. -->
     <!-- CSS Modules -->
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/layout.css">
@@ -695,8 +690,10 @@
         </div>
     </div>
 
-    <!-- jsQR library for QR code scanning -->
-    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <!-- jsQR library for QR code scanning - vendored locally (jsqr@1.4.0).
+         Loading it from a CDN executed remote code inside a WebView that holds
+         window.__TAURI__, and broke QR scanning whenever the device was offline. -->
+    <script src="js/vendor/jsQR.js"></script>
     <!-- Navbar component -->
     <script src="js/navbar.js"></script>
     <!-- P2P networking -->

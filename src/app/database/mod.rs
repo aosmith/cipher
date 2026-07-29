@@ -17,13 +17,21 @@ impl Database {
         // Enable WAL mode for better concurrency
         // WAL allows readers to not block writers and vice versa
         // This prevents deadlocks between frontend queries and network handler writes
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        // foreign_keys is OFF by default per-connection in SQLite, which silently
+        // turns every ON DELETE CASCADE in the schema into a no-op (deleting a post
+        // would leave its comments, reactions and media BLOBs on disk forever).
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+        )?;
 
         // Create all tables
         schema::create_tables(&conn)?;
 
         // Run migrations
         schema::run_migrations(&conn)?;
+
+        // Clean up rows stranded while FK enforcement was off
+        schema::cleanup_orphans(&conn)?;
 
         // Initialize notification server
         let notification_server = Arc::new(NotificationServer::new());

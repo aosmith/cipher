@@ -9,6 +9,9 @@ const P2P = {
     presenceRetryTimer: null,
     maxPresenceRetries: 10,
     baseRetryDelay: 1000, // 1 second base delay
+    presenceFailureStreak: 0, // Consecutive presence failures (drives poll backoff)
+    presenceBackoffUntil: 0, // Timestamp the presence poll should skip until
+    pendingPublishes: [], // Publishes composed while P2P was down; flushed on recovery
     connectionStartTime: null, // Track when we started connecting
     connectionGracePeriod: 15000, // Show "Connecting" for 15s before showing "Offline"
 
@@ -74,10 +77,10 @@ const P2P = {
 
                 for (const friend of friends) {
                     try {
-                        await this.subscribeFriend(friend.public_key);
+                        await this.subscribeFriend(friend.publicKey);
                         this.peers.set(friend.id, {
                             peerId: friend.id,
-                            publicKey: friend.public_key,
+                            publicKey: friend.publicKey,
                             displayName: friend.displayName,
                             state: 'subscribed'
                         });
@@ -118,6 +121,9 @@ const P2P = {
                 this.initializationResolve();
             }
 
+            // Flush anything composed while we were offline
+            this.onConnectivityRestored();
+
             return true;
         } catch (error) {
             console.error('Failed to initialize P2P:', error);
@@ -126,7 +132,74 @@ const P2P = {
             if (this.initializationResolve) {
                 this.initializationResolve();
             }
+            // Start the health monitor even though init failed: its
+            // not-initialized-with-credentials branch retries initialization,
+            // so a failed launch-time init no longer leaves the app offline
+            // forever. startHealthMonitoring() clears any existing interval,
+            // so repeated failures can't stack monitors.
+            this.startHealthMonitoring();
             throw error;
+        }
+    },
+
+    // Called whenever connectivity is (re)established: after init succeeds,
+    // on peer-connected, and when a health check reports healthy. All hooks
+    // are cheap no-ops when there is nothing queued.
+    onConnectivityRestored() {
+        this.flushPendingPublishes();
+        // Retry blob downloads for posts saved without their media (main.js)
+        if (typeof window.retryMissingBlobs === 'function') {
+            window.retryMissingBlobs();
+        }
+    },
+
+    // Queue a publish closure for retry once P2P recovers (same-session window;
+    // cross-peer catch-up is covered by the backend backfill). Dedup by content
+    // id: re-queueing the same id replaces the old entry so a flush never
+    // double-publishes.
+    queuePublish(id, fn, description = '') {
+        const existingIndex = this.pendingPublishes.findIndex(p => p.id === id);
+        if (existingIndex >= 0) {
+            this.pendingPublishes.splice(existingIndex, 1);
+        }
+        this.pendingPublishes.push({ id, fn, description, attempts: 0 });
+        console.log(`[P2P] Queued publish for retry: ${description || id} (${this.pendingPublishes.length} pending)`);
+    },
+
+    // Flush the pending publish queue. Single-flight; items that fail again
+    // are re-queued (unless the backend outbox took ownership) with a cap so
+    // a permanently broken item can't retry forever.
+    async flushPendingPublishes() {
+        if (!this.initialized || this.pendingPublishes.length === 0) {
+            return;
+        }
+        if (this.flushPublishesInFlight) {
+            return;
+        }
+        this.flushPublishesInFlight = true;
+        try {
+            const pending = this.pendingPublishes.splice(0);
+            console.log(`[P2P] Flushing ${pending.length} queued publish(es)`);
+            for (const item of pending) {
+                try {
+                    await item.fn();
+                    console.log(`[P2P] Flushed queued publish: ${item.description || item.id}`);
+                } catch (error) {
+                    if (String(error).includes('queued for retry')) {
+                        // Backend persistent outbox owns it now - drop our copy
+                        console.log(`[P2P] Queued publish handed to backend outbox: ${item.description || item.id}`);
+                        continue;
+                    }
+                    item.attempts++;
+                    if (item.attempts >= 20) {
+                        console.warn(`[P2P] Dropping queued publish after ${item.attempts} attempts: ${item.description || item.id}`);
+                    } else if (!this.pendingPublishes.some(p => p.id === item.id)) {
+                        this.pendingPublishes.push(item);
+                    }
+                }
+            }
+        } finally {
+            this.flushPublishesInFlight = false;
         }
     },
 
@@ -151,6 +224,8 @@ const P2P = {
             if (previousCount === 0 && this.connectedPeers > 0) {
                 console.log('Peers connected, resetting presence retry counter and announcing');
                 this.presenceRetryCount = 0;
+                this.presenceFailureStreak = 0;
+                this.presenceBackoffUntil = 0;
                 this.connectionStartTime = null; // Clear grace period since we're connected
                 if (this.presenceRetryTimer) {
                     clearTimeout(this.presenceRetryTimer);
@@ -256,6 +331,12 @@ const P2P = {
                 return;
             }
 
+            // Respect failure backoff - consecutive failures lengthen the
+            // effective spacing instead of hammering every tick
+            if (Date.now() < this.presenceBackoffUntil) {
+                return;
+            }
+
             // Broadcast presence regularly to ensure device discovery
             await this.announcePresence();
         }, this.currentPresenceInterval);
@@ -279,6 +360,10 @@ const P2P = {
             this.presencePollInterval = setInterval(async () => {
                 if (!this.initialized) {
                     clearInterval(this.presencePollInterval);
+                    return;
+                }
+                // Respect failure backoff (see startPresencePolling)
+                if (Date.now() < this.presenceBackoffUntil) {
                     return;
                 }
                 await this.announcePresence();
@@ -306,6 +391,9 @@ const P2P = {
             await listen('peer-connected', async (event) => {
                 console.log('Peer connected:', event.payload);
                 await this.updatePeerCount();
+
+                // Flush publishes/blob downloads that were waiting for connectivity
+                this.onConnectivityRestored();
 
                 // Note: Device sync is handled automatically by Iroh
             });
@@ -345,10 +433,25 @@ const P2P = {
     },
 
     // Handle incoming direct message
+    // The Rust side has already decrypted and persisted the message before
+    // emitting p2p-message-received - this just updates the UI.
     async handleIncomingMessage(msg) {
-        console.log('Handling incoming message:', msg);
-        // Decrypt and display the message
-        // This will be integrated with existing message handling
+        try {
+            console.log('Handling incoming message:', msg);
+
+            const messagesTab = document.getElementById('messagesTab');
+            const messagesViewOpen = messagesTab && !messagesTab.classList.contains('hidden');
+
+            if (messagesViewOpen && typeof loadMessages === 'function') {
+                // Conversation view is open - reload it so the message appears live
+                await loadMessages();
+            } else if (typeof UI !== 'undefined' && UI.showToast) {
+                // Same convention as other incoming-content events in main.js
+                UI.showToast('New message received', 'info', 4000);
+            }
+        } catch (error) {
+            console.error('Failed to handle incoming message:', error);
+        }
     },
 
     // Legacy post handlers removed - all posts use SealedEnvelope (encrypted)
@@ -393,6 +496,9 @@ const P2P = {
         this.initialized = false;
         this.connectedPeers = 0;
         this.presenceRetryCount = 0;
+        this.presenceFailureStreak = 0;
+        this.presenceBackoffUntil = 0;
+        this.pendingPublishes = []; // Queued publishes belong to the logged-out session
         this.connectionStartTime = null;
         this.initializationPromise = null;
         this.initializationResolve = null;
@@ -419,7 +525,12 @@ const P2P = {
         }
 
         this.healthMonitorInterval = setInterval(async () => {
-            if (!this.initialized) {
+            // Keep monitoring while we have credentials even if not initialized:
+            // healthCheckAndRecover()'s not-initialized-with-credentials branch
+            // retries initialization, which is how a failed launch-time init
+            // eventually comes back online. Only stop when there is nothing to
+            // retry with (logged out - shutdown() also clears this interval).
+            if (!this.initialized && !(this.userId && this.publicKey)) {
                 clearInterval(this.healthMonitorInterval);
                 this.healthMonitorInterval = null;
                 return;
@@ -512,8 +623,10 @@ const P2P = {
         try {
             await TauriAPI.invoke('iroh_announce_presence');
             console.log('Presence announced successfully');
-            // Reset retry count on success
+            // Reset retry/backoff state on success
             this.presenceRetryCount = 0;
+            this.presenceFailureStreak = 0;
+            this.presenceBackoffUntil = 0;
             if (this.presenceRetryTimer) {
                 clearTimeout(this.presenceRetryTimer);
                 this.presenceRetryTimer = null;
@@ -525,18 +638,40 @@ const P2P = {
             // Handle "no peers subscribed" error gracefully - this is expected when alone
             if (errorStr.includes('NoPeersSubscribedToTopic') || errorStr.includes('No peers subscribed')) {
                 console.log('No peers subscribed to topic yet, will retry with backoff');
-                this.schedulePresenceRetry();
+                this.applyPresenceBackoff();
                 return false; // Don't throw, just return false
             }
 
             // For other errors, log but don't throw - P2P presence is not critical
             console.warn('Failed to announce presence (non-critical):', error);
-            this.schedulePresenceRetry();
+            this.applyPresenceBackoff();
             return false;
         }
     },
 
+    // Fold failure backoff into the presence poll. The poll interval is the
+    // single authoritative scheduler: consecutive failures push out a
+    // "skip until" deadline that the poll respects (reset on success), instead
+    // of stacking a separate one-shot retry timer on top of the fixed poll
+    // (which made the retry cap meaningless). The one-shot timer is only used
+    // as a fallback when the poll isn't running.
+    applyPresenceBackoff() {
+        this.presenceFailureStreak++;
+        const exponentialDelay = this.baseRetryDelay * Math.pow(2, Math.min(this.presenceFailureStreak, 6));
+        const jitter = Math.random() * 1000; // 0-1000ms jitter
+        const delay = Math.min(exponentialDelay + jitter, 60000); // Cap at 60 seconds
+        this.presenceBackoffUntil = Date.now() + delay;
+        console.log(`Presence failure #${this.presenceFailureStreak}, backing off ${Math.round(delay)}ms`);
+
+        if (!this.presencePollInterval) {
+            // Poll not running (e.g. called outside the polling lifecycle) -
+            // fall back to the one-shot retry timer
+            this.schedulePresenceRetry();
+        }
+    },
+
     // Schedule presence retry with exponential backoff
+    // (fallback only - the presence poll interval is the primary scheduler)
     schedulePresenceRetry() {
         // Clear any existing retry timer
         if (this.presenceRetryTimer) {
@@ -593,8 +728,12 @@ const P2P = {
             if (status.listening && !this.initialized) {
                 console.log('P2P state mismatch - Rust initialized but JS not, syncing state...');
                 this.initialized = true;
+                // Restart grace period so the status shows "Connecting" instead
+                // of "Offline" while peers are rediscovered
+                this.connectionStartTime = Date.now();
                 this.startPeerPolling();
                 this.startPresencePolling();
+                this.startHealthMonitoring();
                 return;
             }
 
@@ -680,6 +819,8 @@ const P2P = {
             if (health.healthy) {
                 console.log('[P2P-HEALTH] Network is healthy');
                 this.consecutiveUnhealthy = 0;
+                // No-op when nothing is queued; retries anything that piled up
+                this.onConnectivityRestored();
                 return true;
             }
 

@@ -22,12 +22,12 @@
       "<rootDir>/src"
     ],
     "testMatch": [
-      "**/__tests__/**/*.js",
-      "**/*.test.js"
+      "<rootDir>/src/js/__tests__/**/*.test.js"
     ],
     "collectCoverageFrom": [
       "src/js/**/*.js",
-      "!src/js/**/*.test.js"
+      "!src/js/__tests__/**",
+      "!src/js/vendor/**"
     ],
     "setupFilesAfterEnv": [
       "<rootDir>/src/js/__tests__/setup.js"

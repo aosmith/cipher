@@ -176,7 +176,7 @@ fn test_apply_sync_reactions_idempotent() {
 
 #[test]
 fn test_apply_sync_friends() {
-    let (db, alice, device_id) = db_with_user("alice");
+    let (db, alice, _device_id) = db_with_user("alice");
     let bob = db
         .create_user_first_launch("bob".to_string(), Database::generate_device_id())
         .unwrap()
@@ -198,37 +198,43 @@ fn test_apply_sync_friends() {
     db.apply_sync_data(&sync).unwrap();
 
     // A fresh device's sync view should surface the applied friend connection.
-    let (_, _, friends, _, _) = db.get_sync_status(&device_id, alice.id).unwrap();
+    let (_, _, friends, _, _) = db
+        .get_sync_status(alice.id, "1970-01-01T00:00:00+00:00")
+        .unwrap();
     assert_eq!(friends, 1);
 }
 
 #[test]
 fn test_get_sync_status_counts() {
-    let (db, alice, device_id) = db_with_user("alice");
+    let (db, alice, _device_id) = db_with_user("alice");
     db.create_post(alice.id, "p1", false).unwrap();
     db.create_post(alice.id, "p2", false).unwrap();
 
-    let (posts, messages, _friends, _comments, _reactions) =
-        db.get_sync_status(&device_id, alice.id).unwrap();
+    let (posts, messages, _friends, _comments, _reactions) = db
+        .get_sync_status(alice.id, "1970-01-01T00:00:00+00:00")
+        .unwrap();
     assert_eq!(posts, 2);
     assert_eq!(messages, 0);
 }
 
 #[test]
-fn test_update_sync_timestamp_excludes_already_synced() {
-    let (db, alice, device_id) = db_with_user("alice");
-    db.create_post(alice.id, "before sync", false).unwrap();
+fn test_sync_watermark_excludes_older_rows() {
+    let (db, alice, _device_id) = db_with_user("alice");
+    db.create_post(alice.id, "before watermark", false).unwrap();
 
-    // Before marking synced, the post shows as pending.
-    let (before, _, _, _, _) = db.get_sync_status(&device_id, alice.id).unwrap();
+    // With an epoch watermark, the post shows as pending.
+    let (before, _, _, _, _) = db
+        .get_sync_status(alice.id, "1970-01-01T00:00:00+00:00")
+        .unwrap();
     assert_eq!(before, 1);
 
-    // After marking all tables synced, nothing created earlier is pending.
-    db.update_all_sync_timestamps(&device_id).unwrap();
-    let (after, _, _, _, _) = db.get_sync_status(&device_id, alice.id).unwrap();
+    // With a far-future watermark, nothing created earlier is pending.
+    let (after, _, _, _, _) = db
+        .get_sync_status(alice.id, "9999-01-01T00:00:00+00:00")
+        .unwrap();
     assert_eq!(
         after, 0,
-        "posts created before the sync timestamp must not re-sync"
+        "rows older than the requester's watermark must not re-sync"
     );
 }
 

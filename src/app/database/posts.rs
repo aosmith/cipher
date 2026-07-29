@@ -42,6 +42,63 @@ impl Database {
         rows.collect()
     }
 
+    /// Comments authored by `author_id` with created_at strictly after
+    /// `since_rfc3339`, newest first, capped at `limit`. Used to answer a
+    /// friend's backfill request alongside the author's posts.
+    /// Returns (comment_id, post_id, content, parent_comment_id, created_at).
+    #[allow(clippy::type_complexity)]
+    pub fn get_authored_comments_since(
+        &self,
+        author_id: SqliteUuid,
+        since_rfc3339: &str,
+        limit: i64,
+    ) -> SqliteResult<Vec<(SqliteUuid, SqliteUuid, String, Option<SqliteUuid>, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, post_id, content, parent_comment_id, created_at FROM post_comments
+             WHERE user_id = ?1 AND created_at > ?2
+             ORDER BY created_at DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![author_id, since_rfc3339, limit], |row| {
+            Ok((
+                row.get::<_, SqliteUuid>(0)?,
+                row.get::<_, SqliteUuid>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<SqliteUuid>>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Reactions authored by `author_id` with created_at strictly after
+    /// `since_rfc3339`, newest first, capped at `limit`. Used to answer a
+    /// friend's backfill request alongside the author's posts.
+    /// Returns (post_id, emoji, created_at).
+    pub fn get_authored_reactions_since(
+        &self,
+        author_id: SqliteUuid,
+        since_rfc3339: &str,
+        limit: i64,
+    ) -> SqliteResult<Vec<(SqliteUuid, String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT post_id, emoji, created_at FROM post_reactions
+             WHERE user_id = ?1 AND created_at > ?2
+             ORDER BY created_at DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![author_id, since_rfc3339, limit], |row| {
+            Ok((
+                row.get::<_, SqliteUuid>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
     pub fn get_posts(&self, current_user_id: SqliteUuid) -> SqliteResult<Vec<Post>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

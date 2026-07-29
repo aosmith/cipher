@@ -1,75 +1,52 @@
 /**
  * Jest Test Setup
- * Configure Jest environment for testing Cipher frontend
+ *
+ * Runs in the jsdom environment configured in package.json. It deliberately
+ * does NOT replace document/window/setTimeout with hand-rolled stubs - the old
+ * version did, which fought jsdom and made every DOM assertion meaningless.
+ * It only stubs what jsdom genuinely does not provide (the Tauri bridge) and
+ * quiets the application's very chatty console logging.
  */
 
-// Add jest-dom matchers for better assertions
 require('@testing-library/jest-dom');
 
-// Mock Tauri API globally
-global.__TAURI__ = {
-    invoke: jest.fn(),
-    convertFileSrc: jest.fn(src => src),
-    path: {
-        appDataDir: jest.fn(() => Promise.resolve('/mock/app/data')),
-        appConfigDir: jest.fn(() => Promise.resolve('/mock/app/config'))
-    },
-    fs: {
-        readTextFile: jest.fn(),
-        writeTextFile: jest.fn(),
-        readBinaryFile: jest.fn(),
-        writeBinaryFile: jest.fn()
-    }
-};
+// Tauri bridge. main.js reads window.__TAURI__.core.invoke and, at load time,
+// registers window.__TAURI__.event.listen handlers.
+function installTauriMock() {
+    const invoke = jest.fn(() => Promise.resolve(null));
+    window.__TAURI__ = {
+        core: { invoke },
+        event: { listen: jest.fn(() => Promise.resolve(() => {})), emit: jest.fn() },
+        convertFileSrc: jest.fn(src => src),
+    };
+    return invoke;
+}
 
-// Mock window.TauriAPI
-global.TauriAPI = {
-    invoke: jest.fn(),
-    convertFileSrc: jest.fn(src => src)
-};
+global.installTauriMock = installTauriMock;
+installTauriMock();
 
-// Mock localStorage
-const localStorageMock = {
-    getItem: jest.fn(),
-    setItem: jest.fn(),
-    removeItem: jest.fn(),
-    clear: jest.fn()
-};
-global.localStorage = localStorageMock;
+// Keep the real console reachable for debugging a failing test.
+global.realConsole = console;
 
-// Mock sessionStorage
-const sessionStorageMock = {
-    getItem: jest.fn(),
-    setItem: jest.fn(),
-    removeItem: jest.fn(),
-    clear: jest.fn()
-};
-global.sessionStorage = sessionStorageMock;
+function silenceConsole() {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+}
 
-// Mock console methods to reduce test output noise
-global.console = {
-    ...console,
-    log: jest.fn(),
-    error: jest.fn(),
-    warn: jest.fn(),
-    info: jest.fn(),
-    debug: jest.fn()
-};
+// Also covers suites that load main.js in beforeAll.
+beforeAll(silenceConsole);
 
-// Reset mocks between tests
 beforeEach(() => {
-    jest.clearAllMocks();
-    localStorageMock.getItem.mockReset();
-    localStorageMock.setItem.mockReset();
-    localStorageMock.removeItem.mockReset();
-    localStorageMock.clear.mockReset();
-
-    // Reset DOM
-    document.body.innerHTML = '';
-    document.head.innerHTML = '';
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
 });
 
-// Cleanup after each test
 afterEach(() => {
-    jest.clearAllTimers();
+    jest.restoreAllMocks();
 });

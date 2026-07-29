@@ -355,8 +355,10 @@ fn test_sync_data_operations() {
     // Create some data
     db.create_post(user.id, "Test post", false).unwrap();
 
-    // Get sync data
-    let sync_data = db.get_sync_data(&device_id, user.id).unwrap();
+    // Get sync data (stateless pull: caller supplies its own watermark)
+    let sync_data = db
+        .get_sync_data(user.id, "1970-01-01T00:00:00+00:00")
+        .unwrap();
 
     assert_eq!(sync_data.posts.len(), 1);
     assert_eq!(sync_data.posts[0].content, "Test post");

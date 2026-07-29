@@ -12,14 +12,14 @@ use bytes::Bytes;
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::protocol::Router;
 use iroh_blobs::api::downloader::Downloader;
-use iroh_blobs::store::mem::MemStore;
+use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::BlobsProtocol;
 use iroh_gossip::api::{Event as GossipEvent, GossipReceiver, GossipSender};
 use iroh_gossip::ALPN;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 use super::types::SqliteUuid;
@@ -27,6 +27,17 @@ use super::Database;
 
 /// Global topic for all encrypted content
 pub const CONTENT_TOPIC: &str = "cipher/content/v1";
+
+/// Maximum gossip message size. iroh-gossip 0.101 defaults to 4096 bytes,
+/// which real sealed envelopes easily exceed - we raise it explicitly and
+/// enforce the same limit on the publish path so oversize messages get a
+/// distinct, diagnosable error instead of a generic broadcast failure.
+pub const GOSSIP_MAX_MESSAGE_SIZE: usize = 256 * 1024;
+
+/// Pre-sealing size budget for one device-sync chunk. Sealing adds base64
+/// (~1.33x), padding and per-recipient key boxes, so 96KB of serialized
+/// SyncData stays safely under the 256KB gossip cap.
+const SYNC_CHUNK_BUDGET_BYTES: usize = 96 * 1024;
 
 /// P2P message types for the social network.
 /// ALL application content (posts, comments, reactions, DMs, presence, friend
@@ -81,6 +92,94 @@ struct TopicSubscription {
 struct OutgoingMessage {
     data: Bytes,
     neighbors_only: bool,
+    /// Optional ack channel: the stream handler sends the REAL broadcast
+    /// result back through this so publishers can distinguish "queued into a
+    /// channel" from "actually handed to the gossip mesh".
+    ack: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+}
+
+/// Insertion-ordered dedup cache for recently seen gossip message hashes.
+/// The VecDeque preserves insertion order so eviction always removes the
+/// OLDEST entries - the previous HashSet-only version evicted arbitrary
+/// entries, sometimes throwing away fresh hashes and re-processing duplicates.
+struct RecentMessageCache {
+    order: std::collections::VecDeque<u64>,
+    seen: std::collections::HashSet<u64>,
+}
+
+impl RecentMessageCache {
+    const MAX_ENTRIES: usize = 1000;
+
+    fn new() -> Self {
+        RecentMessageCache {
+            order: std::collections::VecDeque::new(),
+            seen: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Record a hash. Returns false if it was already present (duplicate).
+    fn insert(&mut self, hash: u64) -> bool {
+        if !self.seen.insert(hash) {
+            return false;
+        }
+        self.order.push_back(hash);
+        while self.order.len() > Self::MAX_ENTRIES {
+            if let Some(oldest) = self.order.pop_front() {
+                self.seen.remove(&oldest);
+            }
+        }
+        true
+    }
+
+    /// Forget a hash so a redelivered copy of the message is processed again.
+    /// Used when a sealed envelope's handler fails transiently: leaving the
+    /// hash in place would dedup the gossip redelivery before it ever reached
+    /// the handler, permanently discarding the envelope.
+    fn remove(&mut self, hash: u64) {
+        if self.seen.remove(&hash) {
+            self.order.retain(|h| *h != hash);
+        }
+    }
+}
+
+/// Removes a topic's subscription entry from the shared map when its stream
+/// handler task exits for ANY reason - graceful stream end, error, or a panic
+/// while handling an event. Without this, a panicked handler left a zombie
+/// entry: publish_message kept queuing into a channel nobody drained, and
+/// recover() skipped re-subscribing because the topic looked present.
+struct TopicCleanupGuard {
+    topics: Arc<Mutex<HashMap<String, TopicSubscription>>>,
+    topic: String,
+    /// Identity of the subscription this handler serves - only remove the map
+    /// entry if it is still OURS (an atomic-swap replacement may have already
+    /// installed a new subscription under the same topic name).
+    broadcast_tx: tokio::sync::mpsc::UnboundedSender<OutgoingMessage>,
+}
+
+impl Drop for TopicCleanupGuard {
+    fn drop(&mut self) {
+        let topics = self.topics.clone();
+        let topic = std::mem::take(&mut self.topic);
+        let our_tx = self.broadcast_tx.clone();
+        // Drop can't await the async mutex - spawn the removal (we are always
+        // dropped on a runtime thread, including during panic unwind)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let mut topics_guard = topics.lock().await;
+                let is_ours = topics_guard
+                    .get(&topic)
+                    .map(|sub| sub.broadcast_tx.same_channel(&our_tx))
+                    .unwrap_or(false);
+                if is_ours {
+                    topics_guard.remove(&topic);
+                    println!(
+                        "[IROH-STREAM] Cleanup guard removed topic '{}' from map (handler exited)",
+                        topic
+                    );
+                }
+            });
+        }
+    }
 }
 
 /// Track retry state for peer reconnection attempts
@@ -139,6 +238,74 @@ fn sync_request_context(
     )
 }
 
+/// The reaction emojis the app actually offers (mirrors
+/// `PostInteractions.EMOJIS` in src/js/main.js). Peer-supplied reaction strings
+/// are rendered into post markup by the frontend, so anything outside this set
+/// is rejected at the receive boundary rather than trusted to be escaped later.
+/// Both the emoji-presentation form (with U+FE0F) and the bare code point are
+/// accepted, since senders on different platforms normalise differently.
+const SUPPORTED_REACTION_EMOJIS: &[&str] = &[
+    "\u{1F44D}",         // 👍
+    "\u{2764}\u{FE0F}",  // ❤️
+    "\u{2764}",          // ❤ (no variation selector)
+    "\u{1F602}",         // 😂
+    "\u{1F62E}",         // 😮
+    "\u{1F622}",         // 😢
+    "\u{1F621}",         // 😡
+    "\u{1F44D}\u{FE0F}", // 👍️
+];
+
+/// True if `emoji` is one of the reactions this app supports.
+fn is_supported_reaction_emoji(emoji: &str) -> bool {
+    SUPPORTED_REACTION_EMOJIS.contains(&emoji)
+}
+
+/// MIME types we accept for peer-supplied attachments. The frontend renders
+/// `fileType` into markup and uses it to decide whether to build an <img>/
+/// <video> element, so an unconstrained string from a peer is both a rendering
+/// and an injection hazard. SVG is deliberately absent: it is an active
+/// document and would execute script when rendered as an image.
+const SUPPORTED_MEDIA_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/heic",
+    "image/heif",
+    "image/avif",
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+    "video/mpeg",
+    "video/x-matroska",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/aac",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/ogg",
+    "audio/webm",
+    "application/pdf",
+    "text/plain",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+];
+
+/// True if a peer-supplied attachment MIME type is on the allowlist. Any
+/// parameters (e.g. `; codecs=...`) are stripped and matching is
+/// case-insensitive, per RFC 2045.
+fn is_supported_media_type(file_type: &str) -> bool {
+    let base = file_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    SUPPORTED_MEDIA_TYPES.contains(&base.as_str())
+}
+
 /// Main Iroh network coordinator
 pub struct IrohNetwork {
     pub user_id: SqliteUuid,
@@ -149,8 +316,9 @@ pub struct IrohNetwork {
     pub gossip: Arc<Mutex<Option<iroh_gossip::net::Gossip>>>,
     pub router: Arc<Mutex<Option<Router>>>,
     /// Blob store for large file transfers (images, attachments)
-    /// Uses iroh-blobs for efficient P2P transfer over existing NAT-traversed connections
-    pub store: Arc<Mutex<Option<MemStore>>>,
+    /// Uses iroh-blobs for efficient P2P transfer over existing NAT-traversed connections.
+    /// Filesystem-backed (app data dir) so attachments survive restarts.
+    pub store: Arc<Mutex<Option<FsStore>>>,
     /// Downloader for fetching blobs from peers (created once the endpoint is bound)
     pub downloader: Arc<Mutex<Option<Downloader>>>,
     /// Runtime registry of known peer addresses (replaces iroh 0.35 `add_node_addr`).
@@ -163,7 +331,7 @@ pub struct IrohNetwork {
     peer_heartbeats: Arc<Mutex<HashMap<iroh::EndpointId, std::time::Instant>>>, // Last heartbeat time from each peer
     pending_subscriptions: Arc<Mutex<Vec<String>>>, // Topics queued for subscription (processed in background)
     /// Recent message hashes for deduplication (gossip protocols may deliver same message via multiple paths)
-    recent_message_hashes: Arc<Mutex<std::collections::HashSet<u64>>>,
+    recent_message_hashes: Arc<Mutex<RecentMessageCache>>,
     device_seed: [u8; 32], // Device keypair seed for DHT publishing
     app_handle: tauri::AppHandle,
     db: Database,
@@ -191,6 +359,9 @@ pub struct IrohNetwork {
     /// burst of presence messages doesn't trigger a request storm. Keyed by
     /// friend user_id.
     friend_sync_sent: Arc<Mutex<HashMap<SqliteUuid, std::time::Instant>>>,
+    /// Guards against overlapping retry_pending_messages() runs - friends are
+    /// now dialed concurrently, and each successful dial triggers a retry pass
+    retrying_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl IrohNetwork {
@@ -226,7 +397,7 @@ impl IrohNetwork {
             peer_retry_counts: Arc::new(Mutex::new(HashMap::new())),
             peer_heartbeats: Arc::new(Mutex::new(HashMap::new())),
             pending_subscriptions: Arc::new(Mutex::new(Vec::new())),
-            recent_message_hashes: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            recent_message_hashes: Arc::new(Mutex::new(RecentMessageCache::new())),
             device_seed,
             app_handle,
             db,
@@ -237,6 +408,7 @@ impl IrohNetwork {
             background_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
             recovering: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             friend_sync_sent: Arc::new(Mutex::new(HashMap::new())),
+            retrying_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -342,16 +514,35 @@ impl IrohNetwork {
         }
 
         // Create gossip protocol (spawn is synchronous in iroh-gossip 0.101)
-        let gossip = iroh_gossip::net::Gossip::builder().spawn(endpoint.clone());
+        // EXPLICIT max message size: the library default is 4096 bytes, which
+        // real sealed envelopes exceed - oversize messages were silently
+        // failing to broadcast.
+        let gossip = iroh_gossip::net::Gossip::builder()
+            .max_message_size(GOSSIP_MAX_MESSAGE_SIZE)
+            .spawn(endpoint.clone());
 
         println!("[IROH] Gossip protocol initialized");
 
-        // Create blob store for large file transfers (images, attachments)
-        // Uses in-memory store - blobs are ephemeral and fetched on-demand from peers
-        let store = MemStore::new();
+        // Create PERSISTENT blob store for large file transfers (images, attachments).
+        // Lives next to the sqlite DB in the app data dir - the old in-memory store
+        // lost every attachment on restart (sender AND receiver side).
+        let blobs_dir = self
+            .app_handle
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {}", e))?
+            .join("blobs");
+        std::fs::create_dir_all(&blobs_dir)
+            .map_err(|e| format!("Failed to create blobs directory: {}", e))?;
+        let store = FsStore::load(&blobs_dir)
+            .await
+            .map_err(|e| format!("Failed to load blob store: {}", e))?;
         let downloader = store.downloader(&endpoint);
         let blobs = BlobsProtocol::new(&store, None);
-        println!("[IROH] Blob store initialized (in-memory)");
+        println!(
+            "[IROH] Blob store initialized (persistent: {:?})",
+            blobs_dir
+        );
 
         // Create Router to accept incoming gossip AND blob connections
         // Both protocols share the same NAT-traversed QUIC connection
@@ -409,24 +600,17 @@ impl IrohNetwork {
                 "[IROH] Found {} friend peer addresses in database",
                 peer_addrs.len()
             );
+            // Build one dial future per stored peer, then run them CONCURRENTLY.
+            // Serial dialing made startup latency scale linearly with the number
+            // of offline friends (5s timeout each).
+            let mut dial_futures = Vec::new();
             for (node_id_str, relay_url_str) in &peer_addrs {
-                let relay_url_opt = Some(relay_url_str.as_str());
                 println!(
-                    "[IROH] Processing peer address: node_id={}, relay={:?}",
-                    node_id_str, relay_url_opt
+                    "[IROH] Processing peer address: node_id={}, relay={}",
+                    node_id_str, relay_url_str
                 );
-                match node_id_str.parse::<iroh::EndpointId>() {
-                    Ok(peer_id) => {
-                        println!("[IROH] Parsed peer NodeId: {}", peer_id);
-                        println!("[IROH] Our NodeId: {}", node_id);
-                        println!("[IROH] peer_id == node_id? {}", peer_id == node_id);
-
-                        if peer_id == node_id {
-                            println!("[IROH] Skipping self (peer_id matches our node_id)");
-                            continue;
-                        }
-                        println!("[IROH] Peer is not self, attempting connection...");
-                    }
+                let peer_id = match node_id_str.parse::<iroh::EndpointId>() {
+                    Ok(peer_id) => peer_id,
                     Err(e) => {
                         println!(
                             "[IROH] Failed to parse peer NodeId '{}': {}",
@@ -434,58 +618,65 @@ impl IrohNetwork {
                         );
                         continue;
                     }
+                };
+                if peer_id == node_id {
+                    println!("[IROH] Skipping self (peer_id matches our node_id)");
+                    continue;
                 }
 
-                if let Ok(peer_id) = node_id_str.parse::<iroh::EndpointId>() {
-                    if peer_id != node_id {
-                        // Construct full EndpointAddr with relay URL for reliable connection
-                        let mut peer_node_addr = iroh::EndpointAddr::new(peer_id);
-                        if let Some(relay_url) = relay_url_opt {
-                            if let Ok(url) = relay_url.parse() {
-                                peer_node_addr = peer_node_addr.with_relay_url(url);
-                                println!(
-                                    "[IROH] Connecting to peer {} with relay: {}",
-                                    peer_id, relay_url
-                                );
-                            } else {
-                                println!("[IROH] Warning: Invalid relay URL for peer {}", peer_id);
-                                continue;
-                            }
-                        } else {
-                            println!("[IROH] Note: No relay URL for peer {}, trying direct connection only", peer_id);
+                // Construct full EndpointAddr with relay URL for reliable connection
+                let mut peer_node_addr = iroh::EndpointAddr::new(peer_id);
+                if let Ok(url) = relay_url_str.parse() {
+                    peer_node_addr = peer_node_addr.with_relay_url(url);
+                    println!(
+                        "[IROH] Connecting to peer {} with relay: {}",
+                        peer_id, relay_url_str
+                    );
+                } else {
+                    println!("[IROH] Warning: Invalid relay URL for peer {}", peer_id);
+                    continue;
+                }
+
+                // Register the peer's address in the address book so gossip (which
+                // dials by EndpointId) can resolve it. Replaces 0.35 add_node_addr.
+                self.address_book.add_endpoint_info(peer_node_addr.clone());
+
+                // Bound the attempt - an unreachable peer otherwise stalls app
+                // startup for the full QUIC handshake timeout.
+                let endpoint = endpoint.clone();
+                let node_id_str = node_id_str.clone();
+                dial_futures.push(async move {
+                    println!("[IROH] Attempting to connect to peer: {}", peer_id);
+                    match tokio::time::timeout(
+                        tokio::time::Duration::from_secs(5),
+                        endpoint.connect(peer_node_addr, iroh_gossip::ALPN),
+                    )
+                    .await
+                    {
+                        Ok(Ok(_conn)) => {
+                            println!("[IROH] [OK] CONNECTED to peer {}!", peer_id);
+                            Some((peer_id, node_id_str))
                         }
-
-                        // Register the peer's address in the address book so gossip (which
-                        // dials by EndpointId) can resolve it. Replaces 0.35 add_node_addr.
-                        self.address_book.add_endpoint_info(peer_node_addr.clone());
-
-                        // Now try to connect with full addressing info.
-                        // Bound the attempt - an unreachable peer otherwise stalls app
-                        // startup for the full QUIC handshake timeout per peer.
-                        println!("[IROH] Attempting to connect to peer: {}", peer_id);
-                        match tokio::time::timeout(
-                            tokio::time::Duration::from_secs(5),
-                            endpoint.connect(peer_node_addr.clone(), iroh_gossip::ALPN),
-                        )
-                        .await
-                        {
-                            Ok(Ok(_conn)) => {
-                                println!("[IROH] [OK] CONNECTED to peer {}!", peer_id);
-                                // Track this connection
-                                self.add_connected_peer(peer_id).await;
-                                // Keep this peer for gossip bootstrap
-                                peer_node_ids.push(node_id_str.clone());
-                                break; // One connection is enough to start
-                            }
-                            Ok(Err(e)) => {
-                                println!("[IROH] Failed to connect to {}: {}", peer_id, e);
-                            }
-                            Err(_) => {
-                                println!("[IROH] Connect to {} timed out after 5s", peer_id);
-                            }
+                        Ok(Err(e)) => {
+                            println!("[IROH] Failed to connect to {}: {}", peer_id, e);
+                            None
+                        }
+                        Err(_) => {
+                            println!("[IROH] Connect to {} timed out after 5s", peer_id);
+                            None
                         }
                     }
-                }
+                });
+            }
+
+            for (peer_id, node_id_str) in futures::future::join_all(dial_futures)
+                .await
+                .into_iter()
+                .flatten()
+            {
+                // Track this connection and keep the peer for gossip bootstrap
+                self.add_connected_peer(peer_id).await;
+                peer_node_ids.push(node_id_str);
             }
         }
 
@@ -590,8 +781,16 @@ impl IrohNetwork {
             return Ok(());
         }
 
-        let gossip_guard = self.gossip.lock().await;
-        let gossip = gossip_guard.as_ref().ok_or("Gossip not initialized")?;
+        // Clone the Gossip handle out of the guard - holding the mutex across
+        // the 500ms settle sleep and subscribe().await below stalled every
+        // other gossip user (discovery loop, publish path) for the duration.
+        let gossip = {
+            let gossip_guard = self.gossip.lock().await;
+            gossip_guard
+                .as_ref()
+                .ok_or("Gossip not initialized")?
+                .clone()
+        };
 
         // Convert topic string to TopicId
         let topic_id = iroh_gossip::proto::TopicId::from(Self::topic_to_id(topic));
@@ -671,6 +870,7 @@ impl IrohNetwork {
         let gossip_sender_arc = Arc::new(gossip_sender);
 
         // Store the channel sender AND gossip sender for publishing messages and managing peers
+        let broadcast_tx_for_handler = broadcast_tx.clone();
         self.topics.lock().await.insert(
             topic.to_string(),
             TopicSubscription {
@@ -692,6 +892,7 @@ impl IrohNetwork {
                     gossip_receiver,
                     broadcast_rx,
                     bootstrap_peers_for_handler,
+                    broadcast_tx_for_handler,
                 )
                 .await;
         });
@@ -708,8 +909,18 @@ impl IrohNetwork {
         mut gossip_receiver: GossipReceiver,
         mut broadcast_rx: tokio::sync::mpsc::UnboundedReceiver<OutgoingMessage>,
         bootstrap_peers: Vec<iroh::EndpointId>,
+        broadcast_tx: tokio::sync::mpsc::UnboundedSender<OutgoingMessage>,
     ) {
         use futures::StreamExt;
+
+        // Remove our topic entry from the map on ANY exit of this task -
+        // including panics - so publish_message fails fast and recover()
+        // re-subscribes instead of seeing a zombie entry forever.
+        let _cleanup_guard = TopicCleanupGuard {
+            topics: self.topics.clone(),
+            topic: topic.clone(),
+            broadcast_tx,
+        };
 
         println!(
             "[IROH-STREAM] Starting message handler for topic: {}",
@@ -719,16 +930,28 @@ impl IrohNetwork {
 
         // CRITICAL: Join bootstrap peers INSIDE the handler, right before the loop
         // This ensures we're actively listening when join_peers() triggers events
+        // Bounded: join_peers can hang on unreachable bootstrap peers; the
+        // discovery loop retries joins later, so just proceed to the loop.
         if !bootstrap_peers.is_empty() {
             println!(
                 "[IROH-STREAM] Joining {} bootstrap peers for bidirectional mesh...",
                 bootstrap_peers.len()
             );
-            match gossip_sender.join_peers(bootstrap_peers).await {
-                Ok(_) => println!("[IROH-STREAM] [OK] Joined bootstrap peers - ready to receive"),
-                Err(e) => println!(
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(10),
+                gossip_sender.join_peers(bootstrap_peers),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    println!("[IROH-STREAM] [OK] Joined bootstrap peers - ready to receive")
+                }
+                Ok(Err(e)) => println!(
                     "[IROH-STREAM] Warning: Failed to join bootstrap peers: {}",
                     e
+                ),
+                Err(_) => println!(
+                    "[IROH-STREAM] Warning: join_peers timed out after 10s - discovery loop will retry"
                 ),
             }
         }
@@ -751,19 +974,12 @@ impl IrohNetwork {
                                     let msg_hash = hasher.finish();
 
                                     {
+                                        // Insertion-ordered cache: evicts the OLDEST hashes when
+                                        // over capacity (keeps last 1000 messages)
                                         let mut seen = self.recent_message_hashes.lock().await;
-                                        if seen.contains(&msg_hash) {
+                                        if !seen.insert(msg_hash) {
                                             // Already processed this message - skip
                                             continue;
-                                        }
-                                        seen.insert(msg_hash);
-                                        // Limit cache size to prevent memory growth (keep last 1000 messages)
-                                        if seen.len() > 1000 {
-                                            // Clear oldest entries (simple approach - just clear half)
-                                            let to_remove: Vec<_> = seen.iter().take(500).cloned().collect();
-                                            for hash in to_remove {
-                                                seen.remove(&hash);
-                                            }
                                         }
                                     }
 
@@ -781,7 +997,16 @@ impl IrohNetwork {
                                                     P2PMessage::Heartbeat { .. } => "Heartbeat",
                                                 }
                                             );
-                                            self.handle_message(p2p_msg).await;
+                                            // Handle the message OFF the select loop: handlers do
+                                            // blocking DB work (and can panic on a poisoned mutex),
+                                            // which stalled gossip receive AND outgoing broadcast
+                                            // drain, causing Lagged drops. A panic in the spawned
+                                            // task cannot kill this stream loop.
+                                            let network = Arc::new(self.clone_for_background());
+                                            let delivered_from = msg.delivered_from;
+                                            tokio::spawn(async move {
+                                                network.handle_message(p2p_msg, delivered_from, msg_hash).await;
+                                            });
                                         }
                                         Err(e) => {
                                             println!("[IROH-STREAM] ✗ Failed to deserialize message: {}", e);
@@ -818,18 +1043,28 @@ impl IrohNetwork {
                                     drop(retry_states);
                                 }
                         Some(Ok(GossipEvent::Lagged)) => {
-                            println!("[IROH-STREAM] ⚠️  Stream lagged on topic: {}", topic);
+                            println!("[IROH-STREAM] ⚠️  Stream lagged on topic: {} - messages were dropped", topic);
+                            // We provably missed gossip messages: trigger the existing
+                            // catch-up paths without blocking this loop. Clearing the
+                            // friend_sync_sent rate-limits lets the next presence from
+                            // each friend trigger a backfill request immediately.
+                            let network = Arc::new(self.clone_for_background());
+                            tokio::spawn(async move {
+                                network.friend_sync_sent.lock().await.clear();
+                                println!("[IROH-STREAM] Lagged recovery: cleared friend backfill rate-limits");
+                                if network.has_other_own_devices() {
+                                    network.request_device_sync().await;
+                                }
+                            });
                         }
                         Some(Err(e)) => {
                             println!("[IROH-STREAM] ✗ Error on topic {} stream: {}", topic, e);
-                            println!("[IROH-STREAM]   Removing topic from map so recover() will re-subscribe");
-                            self.topics.lock().await.remove(&topic);
+                            println!("[IROH-STREAM]   Cleanup guard removes topic from map so recover() will re-subscribe");
                             break;
                         }
                         None => {
                             println!("[IROH-STREAM] Stream ended for topic: {}", topic);
-                            println!("[IROH-STREAM]   Removing topic from map so recover() will re-subscribe");
-                            self.topics.lock().await.remove(&topic);
+                            println!("[IROH-STREAM]   Cleanup guard removes topic from map so recover() will re-subscribe");
                             break;
                         }
                     }
@@ -837,32 +1072,52 @@ impl IrohNetwork {
 
                 // Outgoing broadcast messages via the sender
                 Some(outgoing) = broadcast_rx.recv() => {
-                    let OutgoingMessage { data, neighbors_only } = outgoing;
+                    let OutgoingMessage { data, neighbors_only, ack } = outgoing;
                     println!("[IROH-STREAM] 📤 Broadcasting message to topic '{}' ({} bytes{})", topic, data.len(), if neighbors_only { ", neighbors only" } else { "" });
                     let result = if neighbors_only {
                         gossip_sender.broadcast_neighbors(data).await
                     } else {
                         gossip_sender.broadcast(data).await
                     };
-                    match result {
+                    let result = match result {
                         Ok(_) => {
                             println!("[IROH-STREAM] [OK] Successfully broadcast message to topic '{}'", topic);
                             // Record REAL broadcast success for health_check()
                             *self.last_broadcast_success.lock().await = Some(std::time::Instant::now());
+                            Ok(())
                         }
                         Err(e) => {
                             println!("[IROH-STREAM] ✗ Failed to broadcast message to topic '{}': {}", topic, e);
+                            Err(format!("Gossip broadcast failed: {}", e))
                         }
+                    };
+                    // Report the REAL broadcast result to the publisher (if it asked)
+                    if let Some(ack) = ack {
+                        let _ = ack.send(result);
                     }
                 }
             }
         }
     }
 
-    /// Check if a topic is subscribed
+    /// Check if a topic is subscribed with a LIVE stream handler.
+    /// A closed broadcast channel means the handler task exited (or panicked);
+    /// such a zombie entry is removed and reported as not-subscribed so
+    /// recover()/subscribe paths re-subscribe instead of skipping forever.
     pub async fn is_topic_subscribed(&self, topic: &str) -> bool {
-        let topics_guard = self.topics.lock().await;
-        topics_guard.contains_key(topic)
+        let mut topics_guard = self.topics.lock().await;
+        match topics_guard.get(topic) {
+            Some(sub) if !sub.broadcast_tx.is_closed() => true,
+            Some(_) => {
+                println!(
+                    "[IROH] Topic '{}' has a dead stream handler - removing zombie entry",
+                    topic
+                );
+                topics_guard.remove(topic);
+                false
+            }
+            None => false,
+        }
     }
 
     /// Unsubscribe from a gossip topic
@@ -883,109 +1138,43 @@ impl IrohNetwork {
         }
     }
 
-    /// Join gossip mesh with a specific bootstrap peer (ATOMIC - no message loss)
-    ///
-    /// This creates a NEW subscription with the peer as bootstrap, then atomically
-    /// replaces the old subscription. Messages can still be published during the transition.
-    ///
-    /// NOTE: This function is currently unused. The gossip protocol naturally forms
-    /// neighbor relationships through handle_connection(). Only use this if you need
-    /// to force a specific peer as bootstrap (e.g., for initial network setup).
-    /// Calling this repeatedly causes duplicate stream handlers and NeighborDown loops.
-    #[allow(dead_code)]
-    pub async fn join_gossip_mesh_with_peer(
-        &self,
-        bootstrap_peer: iroh::EndpointId,
-    ) -> Result<(), String> {
+    /// Join a peer into the EXISTING content-topic mesh by calling join_peers()
+    /// on the current subscription's gossip sender - the same mechanism the
+    /// stream handler startup and dial_and_join_friend() use. Unlike the old
+    /// join_gossip_mesh_with_peer(), this does NOT drop and replace the
+    /// CONTENT_TOPIC subscription, which left the old stream handler racing
+    /// the new one (duplicate handlers, NeighborDown loops).
+    pub async fn add_peer_to_content_topic(&self, peer_id: iroh::EndpointId) -> Result<(), String> {
         println!(
-            "[IROH-JOIN] Joining gossip mesh with peer: {} (atomic)",
-            bootstrap_peer
+            "[IROH-JOIN] Joining peer {} into the content-topic mesh...",
+            peer_id
         );
 
-        let gossip_guard = self.gossip.lock().await;
-        let gossip = gossip_guard.as_ref().ok_or("Gossip not initialized")?;
+        // Clone the sender out of the topics mutex, then drop the guard BEFORE
+        // awaiting - publish_message needs this mutex, so holding it across
+        // join_peers would stall all publishing.
+        let sender = {
+            let topics_guard = self.topics.lock().await;
+            topics_guard
+                .get(CONTENT_TOPIC)
+                .map(|subscription| subscription.gossip_sender.clone())
+        };
+        let sender = sender.ok_or_else(|| format!("Not subscribed to topic: {}", CONTENT_TOPIC))?;
 
-        // Convert topic string to TopicId
-        let topic_id = iroh_gossip::proto::TopicId::from(Self::topic_to_id(CONTENT_TOPIC));
-
-        // Step 1: Create NEW subscription with bootstrap peer FIRST (before removing old one)
-        // This ensures we always have an active subscription
-        println!(
-            "[IROH-JOIN] Creating new subscription with peer {} as bootstrap...",
-            bootstrap_peer
-        );
-
-        // Give gossip protocol time to use the QUIC connection we already have
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-        let gossip_topic = match tokio::time::timeout(
+        match tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
-            gossip.subscribe_and_join(topic_id, vec![bootstrap_peer]),
+            sender.join_peers(vec![peer_id]),
         )
         .await
         {
-            Ok(Ok(result)) => {
-                println!("[IROH-JOIN] [OK] New subscription created successfully!");
-                result
+            Ok(Ok(_)) => {
+                self.add_connected_peer(peer_id).await;
+                println!("[IROH-JOIN] [OK] Joined gossip mesh with peer {}", peer_id);
+                Ok(())
             }
-            Ok(Err(e)) => {
-                println!("[IROH-JOIN] Warning: subscribe_and_join failed: {}", e);
-                // Keep old subscription, just return error
-                return Err(format!("Failed to join with peer: {}", e));
-            }
-            Err(_) => {
-                println!("[IROH-JOIN] Warning: subscribe_and_join timed out after 10s");
-                // Keep old subscription, just return error
-                return Err("Timeout joining gossip mesh".to_string());
-            }
-        };
-
-        drop(gossip_guard);
-
-        // Step 2: Split the new subscription
-        let (gossip_sender, gossip_receiver) = gossip_topic.split();
-        let (broadcast_tx, broadcast_rx) = tokio::sync::mpsc::unbounded_channel();
-        let gossip_sender_arc = Arc::new(gossip_sender);
-
-        // Step 3: ATOMIC swap - replace old subscription with new one
-        println!("[IROH-JOIN] Atomically replacing old subscription...");
-        {
-            let mut topics_guard = self.topics.lock().await;
-            // Remove old subscription (if any) - the old stream handler will terminate
-            topics_guard.remove(CONTENT_TOPIC);
-            // Insert new subscription
-            topics_guard.insert(
-                CONTENT_TOPIC.to_string(),
-                TopicSubscription {
-                    broadcast_tx,
-                    gossip_sender: gossip_sender_arc.clone(),
-                },
-            );
+            Ok(Err(e)) => Err(format!("Failed to join gossip mesh with peer: {}", e)),
+            Err(_) => Err("Timed out joining gossip mesh after 10s".to_string()),
         }
-
-        // Step 4: Start new message handler for the new subscription
-        let network = Arc::new(self.clone_for_background());
-        let topic_str = CONTENT_TOPIC.to_string();
-        let gossip_sender_for_handler = gossip_sender_arc.clone();
-        let bootstrap_peers_for_handler = vec![bootstrap_peer];
-        tokio::spawn(async move {
-            network
-                .handle_topic_stream(
-                    topic_str,
-                    gossip_sender_for_handler,
-                    gossip_receiver,
-                    broadcast_rx,
-                    bootstrap_peers_for_handler,
-                )
-                .await;
-        });
-
-        self.add_connected_peer(bootstrap_peer).await;
-        println!(
-            "[IROH-JOIN] [OK] Successfully joined gossip mesh with peer {}!",
-            bootstrap_peer
-        );
-        Ok(())
     }
 
     /// Ensure global content topic is subscribed
@@ -1008,20 +1197,27 @@ impl IrohNetwork {
         Ok(())
     }
 
-    /// Publish a message to a gossip topic
+    /// Publish a message to a gossip topic.
+    /// Waits for the REAL broadcast result from the stream handler; on failure
+    /// or timeout the message is persisted to the pending_messages outbox so
+    /// retry_pending_messages() can re-send it once connectivity returns.
     pub async fn publish_message(&self, topic: &str, message: P2PMessage) -> Result<(), String> {
-        self.publish_message_inner(topic, message, false).await
+        self.publish_message_inner(topic, message, false, true)
+            .await
     }
 
     /// Publish a message to direct gossip neighbors only (not relayed mesh-wide).
     /// Use for connection-liveness traffic like heartbeats that has no business
     /// being flooded to - and recorded by - every node in the mesh.
+    /// Never queued for retry: this traffic is periodic and replaying stale
+    /// copies later is pointless.
     pub async fn publish_message_to_neighbors(
         &self,
         topic: &str,
         message: P2PMessage,
     ) -> Result<(), String> {
-        self.publish_message_inner(topic, message, true).await
+        self.publish_message_inner(topic, message, true, false)
+            .await
     }
 
     async fn publish_message_inner(
@@ -1029,38 +1225,120 @@ impl IrohNetwork {
         topic: &str,
         message: P2PMessage,
         neighbors_only: bool,
+        queue_on_failure: bool,
     ) -> Result<(), String> {
         println!("[IROH] publish_message() called for topic: {}", topic);
 
         // Serialize message
         println!("[IROH] Serializing message...");
-        let data = serde_json::to_vec(&message)
+        let content_json = serde_json::to_string(&message)
             .map_err(|e| format!("Failed to serialize message: {}", e))?;
-        let data_size = data.len() as i64;
+        let data_size = content_json.len();
         println!("[IROH] Message serialized, size: {} bytes", data_size);
 
-        // Get the broadcast channel for this topic
-        println!("[IROH] Acquiring topics lock...");
-        let topics_guard = self.topics.lock().await;
-        println!("[IROH] Topics lock acquired, looking up topic: {}", topic);
+        // DISTINCT oversize error: an oversize message can never broadcast, so
+        // fail it here (and never queue it) instead of reporting a generic
+        // broadcast failure.
+        if data_size > GOSSIP_MAX_MESSAGE_SIZE {
+            let err = format!(
+                "message exceeds gossip max size ({} > {})",
+                data_size, GOSSIP_MAX_MESSAGE_SIZE
+            );
+            eprintln!("[IROH] ✗ {}", err);
+            return Err(err);
+        }
 
-        let subscription = topics_guard
-            .get(topic)
-            .ok_or_else(|| format!("Not subscribed to topic: {}", topic))?;
-        println!("[IROH] Found subscription for topic: {}", topic);
-
-        // Send message to the broadcast channel (non-blocking)
-        println!("[IROH] Sending message to broadcast channel...");
-        subscription
-            .broadcast_tx
-            .send(OutgoingMessage {
-                data: Bytes::from(data),
+        match self
+            .send_and_confirm_broadcast(
+                topic,
+                Bytes::from(content_json.clone().into_bytes()),
                 neighbors_only,
-            })
-            .map_err(|e| format!("Failed to send to broadcast channel: {}", e))?;
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(e) if !queue_on_failure => Err(e),
+            Err(e) => {
+                // Persist to the outbox so retry_pending_messages() can re-send.
+                // Only SealedEnvelope carries real content; DeviceSyncRequest and
+                // Heartbeat are periodic and freshness-checked by receivers, so
+                // replaying stale copies would just be rejected.
+                let queued = match &message {
+                    P2PMessage::SealedEnvelope { .. } => {
+                        // Cap the outbox so a long outage (e.g. periodic sealed
+                        // presence failing every cycle) can't grow it unboundedly
+                        const MAX_QUEUED_MESSAGES: i64 = 500;
+                        let pending = self.db.get_pending_message_count(self.user_id).unwrap_or(0);
+                        if pending >= MAX_QUEUED_MESSAGES {
+                            println!(
+                                "[QUEUE] Outbox full ({} pending) - not queueing failed message",
+                                pending
+                            );
+                            false
+                        } else {
+                            match self.db.queue_pending_message(
+                                self.user_id,
+                                "sealed_envelope",
+                                &content_json,
+                                10,
+                            ) {
+                                Ok(_) => true,
+                                Err(qe) => {
+                                    eprintln!("[QUEUE] Failed to queue message for retry: {}", qe);
+                                    false
+                                }
+                            }
+                        }
+                    }
+                    _ => false,
+                };
+                if queued {
+                    Err(format!("broadcast failed; message queued for retry: {}", e))
+                } else {
+                    Err(format!("broadcast failed: {}", e))
+                }
+            }
+        }
+    }
 
-        println!("[IROH] Message queued for broadcast to topic: {}", topic);
-        Ok(())
+    /// Send a serialized message to the topic's stream handler and wait for
+    /// the REAL broadcast result. Returns Err on broadcast failure, on a dead
+    /// handler, or after a 10s confirmation timeout.
+    async fn send_and_confirm_broadcast(
+        &self,
+        topic: &str,
+        data: Bytes,
+        neighbors_only: bool,
+    ) -> Result<(), String> {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+
+        // Hold the topics lock only long enough to enqueue - never across the await
+        {
+            let topics_guard = self.topics.lock().await;
+            let subscription = topics_guard
+                .get(topic)
+                .ok_or_else(|| format!("Not subscribed to topic: {}", topic))?;
+            subscription
+                .broadcast_tx
+                .send(OutgoingMessage {
+                    data,
+                    neighbors_only,
+                    ack: Some(ack_tx),
+                })
+                .map_err(|e| format!("Failed to send to broadcast channel: {}", e))?;
+        }
+        println!(
+            "[IROH] Message queued for broadcast to topic: {} - awaiting confirmation",
+            topic
+        );
+
+        match tokio::time::timeout(tokio::time::Duration::from_secs(10), ack_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(
+                "broadcast not confirmed: stream handler exited before broadcasting".to_string(),
+            ),
+            Err(_) => Err("broadcast confirmation timed out after 10s".to_string()),
+        }
     }
 
     // ============================================================================
@@ -1095,7 +1373,6 @@ impl IrohNetwork {
 
     /// Fetch a blob from a peer by hash
     /// Uses the existing NAT-traversed connection for efficient transfer
-    #[allow(dead_code)]
     pub async fn fetch_blob(
         &self,
         hash: iroh_blobs::Hash,
@@ -1134,6 +1411,147 @@ impl IrohNetwork {
 
         println!("[IROH-BLOBS] [OK] Fetched blob, size: {} bytes", data.len());
         Ok(data.to_vec())
+    }
+
+    /// Decrypt a blob stored in the standard attachment wire format:
+    /// [24-byte XChaCha20Poly1305 nonce][ciphertext], key base64-encoded.
+    /// Inverse of the encryption in build_blob_refs_for_post().
+    pub(crate) fn decrypt_blob_data(
+        encrypted_data: &[u8],
+        key_b64: &str,
+    ) -> Result<Vec<u8>, String> {
+        use base64::Engine as _;
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+
+        let key_bytes = base64::engine::general_purpose::STANDARD
+            .decode(key_b64)
+            .map_err(|e| format!("Invalid encryption key: {}", e))?;
+        if key_bytes.len() != 32 {
+            return Err("Encryption key must be 32 bytes".to_string());
+        }
+        if encrypted_data.len() < 24 {
+            return Err("Encrypted blob too short (missing nonce)".to_string());
+        }
+        let (nonce_bytes, ciphertext) = encrypted_data.split_at(24);
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+        cipher
+            .decrypt(XNonce::from_slice(nonce_bytes), ciphertext)
+            .map_err(|_| "Blob decryption failed - invalid key or corrupted data".to_string())
+    }
+
+    /// Download a received post's encrypted attachment blobs from the sender,
+    /// decrypt them, and persist them as media_attachments so the feed can
+    /// render them. Best-effort per attachment: a failed blob drops that
+    /// attachment (with a log), never the post.
+    async fn fetch_and_store_post_attachments(
+        &self,
+        post_id: super::types::SqliteUuid,
+        owner_id: super::types::SqliteUuid,
+        node_id: &str,
+        blob_refs: &[super::types::BlobReference],
+    ) {
+        let sender_node_id = match node_id.parse::<iroh::EndpointId>() {
+            Ok(id) => id,
+            Err(e) => {
+                println!(
+                    "[IROH-BLOBS] Cannot fetch {} attachment(s) for post {}: invalid sender node_id: {}",
+                    blob_refs.len(),
+                    post_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        for blob_ref in blob_refs {
+            // VALIDATION: file_type is a peer-supplied string that ends up in
+            // the media row the UI renders from. Only fetch/store types we
+            // actually support.
+            if !is_supported_media_type(&blob_ref.file_type) {
+                println!(
+                    "[IROH-BLOBS] Skipping attachment {}: unsupported file type '{}'",
+                    blob_ref.id, blob_ref.file_type
+                );
+                continue;
+            }
+            let hash_bytes = match hex::decode(&blob_ref.blob_hash) {
+                Ok(b) if b.len() == 32 => b,
+                Ok(_) => {
+                    println!(
+                        "[IROH-BLOBS] Skipping attachment {}: blob hash must be 32 bytes",
+                        blob_ref.id
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    println!(
+                        "[IROH-BLOBS] Skipping attachment {}: invalid blob hash: {}",
+                        blob_ref.id, e
+                    );
+                    continue;
+                }
+            };
+            let mut hash_arr = [0u8; 32];
+            hash_arr.copy_from_slice(&hash_bytes);
+            let hash = iroh_blobs::Hash::from_bytes(hash_arr);
+
+            let encrypted_data = match tokio::time::timeout(
+                tokio::time::Duration::from_secs(30),
+                self.fetch_blob(hash, sender_node_id),
+            )
+            .await
+            {
+                Ok(Ok(data)) => data,
+                Ok(Err(e)) => {
+                    println!(
+                        "[IROH-BLOBS] Failed to fetch attachment {} for post {}: {}",
+                        blob_ref.id, post_id, e
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    println!(
+                        "[IROH-BLOBS] Timed out fetching attachment {} for post {}",
+                        blob_ref.id, post_id
+                    );
+                    continue;
+                }
+            };
+
+            let data = match &blob_ref.encryption_key {
+                Some(key_b64) => match Self::decrypt_blob_data(&encrypted_data, key_b64) {
+                    Ok(plaintext) => plaintext,
+                    Err(e) => {
+                        println!(
+                            "[IROH-BLOBS] Failed to decrypt attachment {} for post {}: {}",
+                            blob_ref.id, post_id, e
+                        );
+                        continue;
+                    }
+                },
+                // Legacy or unencrypted blob
+                None => encrypted_data,
+            };
+
+            match self.db.upload_media(
+                owner_id,
+                post_id,
+                "synced_file",
+                &blob_ref.file_type,
+                &data,
+                blob_ref.file_size,
+            ) {
+                Ok(_) => println!(
+                    "[IROH-BLOBS] [OK] Saved attachment {} for post {}",
+                    blob_ref.id, post_id
+                ),
+                Err(e) => println!(
+                    "[IROH-BLOBS] Failed to save attachment {} for post {}: {}",
+                    blob_ref.id, post_id, e
+                ),
+            }
+        }
     }
 
     /// Check if we have a blob locally
@@ -1223,10 +1641,11 @@ impl IrohNetwork {
         // Rotate the pre-key if it's due, then piggyback our current pre-key so
         // friends stay current even if a KeyRotation envelope was lost
         self.ensure_prekey_and_maybe_rotate(&signing_key).await;
-        let (prekey_public, prekey_signature) = match self.db.get_current_prekey(self.user_id) {
-            Some(pk) => (Some(pk.public_key), Some(pk.signature)),
-            None => (None, None),
-        };
+        let (prekey_public, prekey_signature, prekey_created_at) =
+            match self.db.get_current_prekey(self.user_id) {
+                Some(pk) => (Some(pk.public_key), Some(pk.signature), pk.created_at),
+                None => (None, None, 0),
+            };
 
         let payload = super::crypto::ContentPayload::Presence {
             device_id: self
@@ -1241,6 +1660,7 @@ impl IrohNetwork {
             profile_signature,
             prekey_public,
             prekey_signature,
+            prekey_created_at,
             sent_at: chrono::Utc::now().timestamp(),
         };
 
@@ -1334,8 +1754,16 @@ impl IrohNetwork {
                     break;
                 }
 
-                // Request sync from other same-user devices
-                network.request_device_sync().await;
+                // Request sync from other same-user devices - but only when we
+                // actually know of another own device. Single-device users were
+                // broadcasting a DeviceSyncRequest mesh-wide every 30s for nothing.
+                if network.has_other_own_devices() {
+                    network.request_device_sync().await;
+                } else {
+                    println!(
+                        "[IROH-SYNC] No other devices known for this account - skipping periodic sync request"
+                    );
+                }
             }
         });
         self.track_background_task(handle);
@@ -1408,27 +1836,49 @@ impl IrohNetwork {
 
                 // Check all friend peer addresses (NodeId + relay URL) in database and try to connect
                 if let Ok(peer_addrs) = network.db.get_all_friend_peer_addresses(network.user_id) {
+                    // Prune retry bookkeeping for peers no longer in the friends
+                    // list so removed friends don't accumulate stale entries
+                    {
+                        let current_peers: std::collections::HashSet<iroh::EndpointId> = peer_addrs
+                            .iter()
+                            .filter_map(|(id_str, _)| id_str.parse::<iroh::EndpointId>().ok())
+                            .collect();
+                        let mut retry_states = network.peer_retry_counts.lock().await;
+                        let before = retry_states.len();
+                        retry_states.retain(|peer_id, _| current_peers.contains(peer_id));
+                        let pruned = before - retry_states.len();
+                        if pruned > 0 {
+                            println!(
+                                "[IROH-DISCOVERY] Pruned {} retry entries for peers no longer in friends list",
+                                pruned
+                            );
+                        }
+                    }
+
                     if !peer_addrs.is_empty() {
                         println!("[IROH-DISCOVERY] Found {} peer addresses in database, checking for reconnection candidates...", peer_addrs.len());
 
-                        for (node_id_str, relay_url) in peer_addrs {
-                            match node_id_str.parse::<iroh::EndpointId>() {
-                                Ok(peer_id) => {
-                                    // CRITICAL: Skip already-connected peers!
-                                    // Reconnecting to already-connected peers causes gossip state
-                                    // to be reset, breaking message delivery.
-                                    if network.is_peer_connected(peer_id).await {
-                                        // Peer is already connected and in gossip mesh - skip
-                                        continue;
-                                    }
+                        // Clone the endpoint and release the lock immediately.
+                        // Holding it across the connect() await stalled presence,
+                        // heartbeats and the gossip stream handler for the entire
+                        // attempt (tens of seconds for unreachable peers).
+                        let endpoint_clone = network.endpoint.lock().await.clone();
+                        if let Some(endpoint) = endpoint_clone {
+                            let our_node_id = endpoint.id();
 
-                                    // Clone the endpoint and release the lock immediately.
-                                    // Holding it across the connect() await stalled presence,
-                                    // heartbeats and the gossip stream handler for the entire
-                                    // attempt (tens of seconds for unreachable peers).
-                                    let endpoint_clone = network.endpoint.lock().await.clone();
-                                    if let Some(endpoint) = endpoint_clone.as_ref() {
-                                        let our_node_id = endpoint.id();
+                            // First pass: gather dial candidates, respecting the
+                            // per-peer exponential backoff bookkeeping
+                            let mut candidates: Vec<(iroh::EndpointId, String)> = Vec::new();
+                            for (node_id_str, relay_url) in peer_addrs {
+                                match node_id_str.parse::<iroh::EndpointId>() {
+                                    Ok(peer_id) => {
+                                        // CRITICAL: Skip already-connected peers!
+                                        // Reconnecting to already-connected peers causes gossip state
+                                        // to be reset, breaking message delivery.
+                                        if network.is_peer_connected(peer_id).await {
+                                            // Peer is already connected and in gossip mesh - skip
+                                            continue;
+                                        }
 
                                         // Skip if it's our own NodeId
                                         if peer_id == our_node_id {
@@ -1460,137 +1910,31 @@ impl IrohNetwork {
                                         );
                                         drop(retry_states);
 
-                                        // Construct full EndpointAddr with relay URL for reliable connection
-                                        let mut peer_node_addr = iroh::EndpointAddr::new(peer_id);
-                                        if let Ok(url) = relay_url.parse() {
-                                            peer_node_addr = peer_node_addr.with_relay_url(url);
-                                            println!("[IROH-DISCOVERY] Connecting to peer {} with relay: {}", peer_id, &relay_url);
-                                        } else {
-                                            println!("[IROH-DISCOVERY] Warning: Invalid relay URL for peer {}", peer_id);
-                                            continue;
-                                        }
-
-                                        // Register the peer's address so gossip can resolve
-                                        // it by EndpointId. Replaces 0.35 add_node_addr.
-                                        network
-                                            .address_book
-                                            .add_endpoint_info(peer_node_addr.clone());
-
-                                        // Try to connect with full addressing info.
-                                        // Bound the attempt so one unreachable peer can't
-                                        // monopolize the cycle for the full QUIC timeout.
-                                        println!("[IROH-DISCOVERY] Discovering peer {} via DHT/DNS/Relay...", peer_id);
-                                        match tokio::time::timeout(
-                                            tokio::time::Duration::from_secs(15),
-                                            endpoint
-                                                .connect(peer_node_addr.clone(), iroh_gossip::ALPN),
-                                        )
-                                        .await
-                                        {
-                                            Ok(Ok(conn)) => {
-                                                println!(
-                                                    "[IROH-DISCOVERY] [OK] Connected to peer {}!",
-                                                    peer_id
-                                                );
-
-                                                // Check if already connected - skip if so
-                                                let was_connected =
-                                                    network.is_peer_connected(peer_id).await;
-                                                network.add_connected_peer(peer_id).await;
-
-                                                // RESET backoff counter on successful connection
-                                                let mut retry_states =
-                                                    network.peer_retry_counts.lock().await;
-                                                if let Some(retry_state) =
-                                                    retry_states.get_mut(&peer_id)
-                                                {
-                                                    println!("[IROH-DISCOVERY] [OK] Backoff reset for peer {} after successful connection", peer_id);
-                                                    retry_state.reset();
-                                                }
-                                                drop(retry_states);
-
-                                                // Hand off the QUIC connection to gossip protocol.
-                                                // This allows the gossip layer to use this connection
-                                                // for neighbor communication.
-                                                //
-                                                // Two-step process for OUTGOING connections:
-                                                // 1. handle_connection() - tells gossip about the connection
-                                                // 2. join_peers() - actively joins the peer to our topic mesh
-                                                //
-                                                // handle_connection() alone only works for INCOMING connections.
-                                                // For OUTGOING connections, we also need join_peers() to form
-                                                // the gossip neighbor relationship.
-                                                let gossip_guard = network.gossip.lock().await;
-                                                if let Some(gossip) = gossip_guard.as_ref() {
-                                                    match gossip.handle_connection(conn).await {
-                                                        Ok(_) => println!("[IROH-DISCOVERY] [OK] Handed connection to gossip layer for peer {}", peer_id),
-                                                        Err(e) => println!("[IROH-DISCOVERY] Warning: Failed to hand connection to gossip: {}", e),
-                                                    }
-                                                }
-                                                drop(gossip_guard);
-
-                                                // CRITICAL: Call join_peers() on the gossip sender to form mesh
-                                                // This is required for OUTGOING connections to establish
-                                                // a gossip neighbor relationship. Without this, messages
-                                                // won't be exchanged even though QUIC is connected.
-                                                let topics_guard = network.topics.lock().await;
-                                                if let Some(subscription) =
-                                                    topics_guard.get(CONTENT_TOPIC)
-                                                {
-                                                    match subscription.gossip_sender.join_peers(vec![peer_id]).await {
-                                                        Ok(_) => println!("[IROH-DISCOVERY] [OK] Joined gossip mesh with peer {}", peer_id),
-                                                        Err(e) => println!("[IROH-DISCOVERY] Warning: Failed to join gossip mesh with peer: {}", e),
-                                                    }
-                                                }
-                                                drop(topics_guard);
-
-                                                if !was_connected {
-                                                    println!(
-                                                        "[IROH-DISCOVERY] NEW peer {} connected!",
-                                                        peer_id
-                                                    );
-
-                                                    // RETRY pending messages when connection restored
-                                                    println!("[IROH-DISCOVERY] Connection restored - attempting to resend pending messages...");
-                                                    network.retry_pending_messages().await;
-
-                                                    // CRITICAL FIX: Check if this peer initiated a friendship we've accepted
-                                                    // If so, resend FriendAccepted to ensure they know we accepted
-                                                    network
-                                                        .resend_friend_accepted_if_needed()
-                                                        .await;
-                                                } else {
-                                                    println!("[IROH-DISCOVERY] Peer {} already tracked - refreshed gossip connection", peer_id);
-                                                }
-
-                                                // NOTE: no break here - keep reconnecting to ALL
-                                                // disconnected friends this cycle, not just one per 10s
-                                            }
-                                            Ok(Err(e)) => {
-                                                println!(
-                                                    "[IROH-DISCOVERY] Failed to connect to {} (attempt {}): {}",
-                                                    peer_id, {
-                                                        let retry_states = network.peer_retry_counts.lock().await;
-                                                        retry_states.get(&peer_id).map(|s| s.attempt_count).unwrap_or(0)
-                                                    }, e
-                                                );
-                                            }
-                                            Err(_) => {
-                                                println!(
-                                                    "[IROH-DISCOVERY] Connect to {} timed out after 15s",
-                                                    peer_id
-                                                );
-                                            }
-                                        }
+                                        candidates.push((peer_id, relay_url));
+                                    }
+                                    Err(e) => {
+                                        println!(
+                                            "[IROH-DISCOVERY] Failed to parse NodeId '{}': {}",
+                                            node_id_str, e
+                                        );
                                     }
                                 }
-                                Err(e) => {
-                                    println!(
-                                        "[IROH-DISCOVERY] Failed to parse NodeId '{}': {}",
-                                        node_id_str, e
-                                    );
-                                }
                             }
+
+                            // Second pass: dial all candidates CONCURRENTLY.
+                            // Serial dialing (15s timeout each) made reconnect
+                            // latency scale linearly with offline-friend count.
+                            let mut dials = tokio::task::JoinSet::new();
+                            for (peer_id, relay_url) in candidates {
+                                let network = network.clone();
+                                let endpoint = endpoint.clone();
+                                dials.spawn(async move {
+                                    network
+                                        .dial_and_join_friend(&endpoint, peer_id, &relay_url)
+                                        .await;
+                                });
+                            }
+                            while dials.join_next().await.is_some() {}
                         }
                     }
                 }
@@ -1603,8 +1947,171 @@ impl IrohNetwork {
         println!("[IROH] Started Pkarr rendezvous + database peer discovery");
     }
 
-    /// Handle received P2P message
-    async fn handle_message(&self, message: P2PMessage) {
+    /// Dial a disconnected friend, hand the QUIC connection to the gossip
+    /// layer, and join the content-topic mesh. Called concurrently per peer by
+    /// the discovery loop.
+    async fn dial_and_join_friend(
+        &self,
+        endpoint: &iroh::Endpoint,
+        peer_id: iroh::EndpointId,
+        relay_url: &str,
+    ) {
+        // Construct full EndpointAddr with relay URL for reliable connection
+        let mut peer_node_addr = iroh::EndpointAddr::new(peer_id);
+        if let Ok(url) = relay_url.parse() {
+            peer_node_addr = peer_node_addr.with_relay_url(url);
+            println!(
+                "[IROH-DISCOVERY] Connecting to peer {} with relay: {}",
+                peer_id, relay_url
+            );
+        } else {
+            println!(
+                "[IROH-DISCOVERY] Warning: Invalid relay URL for peer {}",
+                peer_id
+            );
+            return;
+        }
+
+        // Register the peer's address so gossip can resolve
+        // it by EndpointId. Replaces 0.35 add_node_addr.
+        self.address_book.add_endpoint_info(peer_node_addr.clone());
+
+        // Try to connect with full addressing info.
+        // Bound the attempt so one unreachable peer can't hang forever.
+        println!(
+            "[IROH-DISCOVERY] Discovering peer {} via DHT/DNS/Relay...",
+            peer_id
+        );
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(15),
+            endpoint.connect(peer_node_addr.clone(), iroh_gossip::ALPN),
+        )
+        .await
+        {
+            Ok(Ok(conn)) => {
+                println!("[IROH-DISCOVERY] [OK] Connected to peer {}!", peer_id);
+
+                // Check if already connected - skip if so
+                let was_connected = self.is_peer_connected(peer_id).await;
+                self.add_connected_peer(peer_id).await;
+
+                // RESET backoff counter on successful connection
+                let mut retry_states = self.peer_retry_counts.lock().await;
+                if let Some(retry_state) = retry_states.get_mut(&peer_id) {
+                    println!("[IROH-DISCOVERY] [OK] Backoff reset for peer {} after successful connection", peer_id);
+                    retry_state.reset();
+                }
+                drop(retry_states);
+
+                // Hand off the QUIC connection to gossip protocol.
+                // This allows the gossip layer to use this connection
+                // for neighbor communication.
+                //
+                // Two-step process for OUTGOING connections:
+                // 1. handle_connection() - tells gossip about the connection
+                // 2. join_peers() - actively joins the peer to our topic mesh
+                //
+                // handle_connection() alone only works for INCOMING connections.
+                // For OUTGOING connections, we also need join_peers() to form
+                // the gossip neighbor relationship.
+                //
+                // Clone the Gossip handle OUT of the mutex before awaiting -
+                // holding the guard across the await blocked every other
+                // gossip user (including subscribe/publish) for its duration.
+                let gossip_clone = self.gossip.lock().await.clone();
+                if let Some(gossip) = gossip_clone {
+                    match gossip.handle_connection(conn).await {
+                        Ok(_) => println!(
+                            "[IROH-DISCOVERY] [OK] Handed connection to gossip layer for peer {}",
+                            peer_id
+                        ),
+                        Err(e) => println!(
+                            "[IROH-DISCOVERY] Warning: Failed to hand connection to gossip: {}",
+                            e
+                        ),
+                    }
+                }
+
+                // CRITICAL: Call join_peers() on the gossip sender to form mesh
+                // This is required for OUTGOING connections to establish
+                // a gossip neighbor relationship. Without this, messages
+                // won't be exchanged even though QUIC is connected.
+                //
+                // Clone the sender out of the topics mutex, then drop the guard
+                // BEFORE awaiting - publish_message needs this mutex, so holding
+                // it across join_peers stalled all publishing.
+                let sender = {
+                    let topics_guard = self.topics.lock().await;
+                    topics_guard
+                        .get(CONTENT_TOPIC)
+                        .map(|subscription| subscription.gossip_sender.clone())
+                };
+                if let Some(sender) = sender {
+                    match sender.join_peers(vec![peer_id]).await {
+                        Ok(_) => println!(
+                            "[IROH-DISCOVERY] [OK] Joined gossip mesh with peer {}",
+                            peer_id
+                        ),
+                        Err(e) => println!(
+                            "[IROH-DISCOVERY] Warning: Failed to join gossip mesh with peer: {}",
+                            e
+                        ),
+                    }
+                }
+
+                if !was_connected {
+                    println!("[IROH-DISCOVERY] NEW peer {} connected!", peer_id);
+
+                    // RETRY pending messages when connection restored
+                    println!("[IROH-DISCOVERY] Connection restored - attempting to resend pending messages...");
+                    self.retry_pending_messages().await;
+
+                    // CRITICAL FIX: Check if this peer initiated a friendship we've accepted
+                    // If so, resend FriendAccepted to ensure they know we accepted
+                    self.resend_friend_accepted_if_needed().await;
+                } else {
+                    println!(
+                        "[IROH-DISCOVERY] Peer {} already tracked - refreshed gossip connection",
+                        peer_id
+                    );
+                }
+            }
+            Ok(Err(e)) => {
+                println!(
+                    "[IROH-DISCOVERY] Failed to connect to {} (attempt {}): {}",
+                    peer_id,
+                    {
+                        let retry_states = self.peer_retry_counts.lock().await;
+                        retry_states
+                            .get(&peer_id)
+                            .map(|s| s.attempt_count)
+                            .unwrap_or(0)
+                    },
+                    e
+                );
+            }
+            Err(_) => {
+                println!(
+                    "[IROH-DISCOVERY] Connect to {} timed out after 15s",
+                    peer_id
+                );
+            }
+        }
+    }
+
+    /// Handle received P2P message.
+    /// `delivered_from` is the AUTHENTICATED gossip neighbor the message
+    /// arrived from (from the QUIC connection) - unlike any node id embedded
+    /// in the payload, it cannot be spoofed.
+    /// `msg_hash` is the raw-message dedup hash the stream loop recorded for
+    /// this delivery; a failed envelope handler removes it so a redelivered
+    /// copy gets reprocessed instead of being deduped.
+    async fn handle_message(
+        &self,
+        message: P2PMessage,
+        delivered_from: iroh::EndpointId,
+        msg_hash: u64,
+    ) {
         match message {
             P2PMessage::DeviceSyncRequest {
                 public_key,
@@ -1648,19 +2155,36 @@ impl IrohNetwork {
                         device_id
                     );
 
-                    // Get sync data from database
+                    // STATELESS RESPONDER: send everything newer than the
+                    // REQUESTER's watermark. The old code ignored the request
+                    // timestamp and gated on our own per-device sync_state
+                    // cursors, which applying an incoming sync advanced - so
+                    // pre-existing rows were never sent back.
                     let our_device_id = self
                         .device_id
                         .clone()
                         .unwrap_or_else(|| "unknown".to_string());
-                    match self.db.get_sync_data(&our_device_id, self.user_id) {
+                    let since_rfc3339 =
+                        chrono::DateTime::from_timestamp(last_sync_timestamp.max(0), 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_string());
+                    match self.db.get_sync_data(self.user_id, &since_rfc3339) {
                         Ok(sync_data) => {
                             println!(
-                                "[IROH] Got sync data: {} posts, {} messages, {} friends",
+                                "[IROH] Got sync data since {}: {} posts, {} messages, {} friends, {} comments, {} reactions",
+                                since_rfc3339,
                                 sync_data.posts.len(),
                                 sync_data.messages.len(),
-                                sync_data.friends.len()
+                                sync_data.friends.len(),
+                                sync_data.comments.len(),
+                                sync_data.reactions.len()
                             );
+                            if sync_data.is_empty() {
+                                println!(
+                                    "[IROH] Nothing newer than requester's watermark - no sync response needed"
+                                );
+                                return;
+                            }
 
                             // Seal the sync data to our OWN encryption key: all
                             // devices of this user share the keypair, so only
@@ -1678,44 +2202,59 @@ impl IrohNetwork {
                                 return;
                             };
 
-                            let data_json = match serde_json::to_string(&sync_data) {
-                                Ok(j) => j,
-                                Err(e) => {
-                                    println!("[IROH] Failed to serialize sync data: {}", e);
-                                    return;
-                                }
-                            };
-
-                            match super::crypto::GossipEnvelope::new_device_sync(
-                                &self.public_key,
-                                &our_device_id,
-                                &data_json,
-                                &our_encryption_public_key,
-                                &our_signing_private_key,
-                            ) {
-                                Ok(envelope) => match serde_json::to_string(&envelope) {
-                                    Ok(envelope_json) => {
-                                        let response = P2PMessage::SealedEnvelope { envelope_json };
-                                        if let Err(e) =
-                                            self.publish_message(CONTENT_TOPIC, response).await
-                                        {
-                                            println!(
-                                                "[IROH] Failed to send device sync response: {}",
-                                                e
-                                            );
-                                        } else {
-                                            println!(
-                                                "[IROH] Sent encrypted device sync response to device {}",
-                                                device_id
-                                            );
-                                        }
-                                    }
+                            // CHUNKED RESPONSE: one envelope with the whole
+                            // delta silently exceeded the gossip message cap
+                            // and was undeliverable. Each chunk stays under a
+                            // pre-sealing budget (sealing adds base64, padding
+                            // and key boxes) and is a self-contained SyncData
+                            // that can be applied independently.
+                            let chunks = sync_data.into_chunks(SYNC_CHUNK_BUDGET_BYTES);
+                            let chunk_count = chunks.len();
+                            for (i, chunk) in chunks.into_iter().enumerate() {
+                                let data_json = match serde_json::to_string(&chunk) {
+                                    Ok(j) => j,
                                     Err(e) => {
-                                        println!("[IROH] Failed to serialize envelope: {}", e)
+                                        println!("[IROH] Failed to serialize sync chunk: {}", e);
+                                        continue;
                                     }
-                                },
-                                Err(e) => {
-                                    println!("[IROH] Failed to create sync envelope: {}", e)
+                                };
+
+                                match super::crypto::GossipEnvelope::new_device_sync(
+                                    &self.public_key,
+                                    &our_device_id,
+                                    &data_json,
+                                    &our_encryption_public_key,
+                                    &our_signing_private_key,
+                                ) {
+                                    Ok(envelope) => match serde_json::to_string(&envelope) {
+                                        Ok(envelope_json) => {
+                                            let response =
+                                                P2PMessage::SealedEnvelope { envelope_json };
+                                            if let Err(e) =
+                                                self.publish_message(CONTENT_TOPIC, response).await
+                                            {
+                                                println!(
+                                                    "[IROH] Failed to send device sync chunk {}/{}: {}",
+                                                    i + 1,
+                                                    chunk_count,
+                                                    e
+                                                );
+                                            } else {
+                                                println!(
+                                                    "[IROH] Sent encrypted device sync chunk {}/{} to device {}",
+                                                    i + 1,
+                                                    chunk_count,
+                                                    device_id
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            println!("[IROH] Failed to serialize envelope: {}", e)
+                                        }
+                                    },
+                                    Err(e) => {
+                                        println!("[IROH] Failed to create sync envelope: {}", e)
+                                    }
                                 }
                             }
                         }
@@ -1764,10 +2303,14 @@ impl IrohNetwork {
                 // REPLAY PROTECTION: persistently track processed message_ids -
                 // the in-memory gossip dedup doesn't survive restarts, so an
                 // attacker could otherwise replay recorded envelopes (e.g. undo
-                // a reaction removal) after we restart
-                match self.db.mark_envelope_seen(&envelope.message_id) {
-                    Ok(true) => {} // first time we see this envelope
-                    Ok(false) => {
+                // a reaction removal) after we restart.
+                // READ-ONLY check: the id is recorded as seen only after the
+                // payload handler SUCCEEDS (or the envelope isn't for us) -
+                // marking it before processing meant a transient handler
+                // failure permanently discarded the envelope.
+                match self.db.is_envelope_seen(&envelope.message_id) {
+                    Ok(false) => {} // first time we see this envelope
+                    Ok(true) => {
                         println!(
                             "[IROH] Ignoring already-processed envelope {}",
                             &envelope.message_id[..8.min(envelope.message_id.len())]
@@ -1791,657 +2334,50 @@ impl IrohNetwork {
                             sender_public_key
                         );
 
-                        // Process the decrypted content
-                        match decrypted.payload {
-                            super::crypto::ContentPayload::Post {
-                                post_id,
-                                content,
-                                node_id,
-                                blob_refs,
-                                sent_at,
-                                is_backfill,
-                            } => {
-                                // Precise time is inside the ciphertext; envelope
-                                // timestamp (hour-coarse) is the legacy fallback
-                                let timestamp = if sent_at > 0 {
-                                    sent_at
-                                } else {
-                                    envelope.timestamp
-                                };
-                                // Get sender's user_id from their public key
-                                let sender_user_id =
-                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
-
-                                // Ensure sender exists in database
-                                // NOTE: Using lock() instead of try_lock() for data integrity
-                                {
-                                    let conn = self.db.conn.lock().unwrap();
-                                    if let Err(e) = conn.execute(
-                                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                                        rusqlite::params![
-                                            sender_user_id,
-                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
-                                            &sender_public_key,
-                                            chrono::Utc::now().to_rfc3339(),
-                                            chrono::Utc::now().to_rfc3339()
-                                        ],
-                                    ) {
-                                        println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
-                                    }
-                                }
-
-                                // Emit decrypted post to UI via sealed-post-received event
-                                #[derive(serde::Serialize, Clone)]
-                                struct DecryptedPostEvent {
-                                    post_id: String,
-                                    user_id: super::types::SqliteUuid,
-                                    public_key: String,
-                                    node_id: String,
-                                    content: String,
-                                    timestamp: i64,
-                                    blob_refs: Vec<super::types::BlobReference>,
-                                    is_backfill: bool,
-                                }
-
-                                let _ = self.app_handle.emit(
-                                    "sealed-post-received",
-                                    DecryptedPostEvent {
-                                        post_id,
-                                        user_id: sender_user_id,
-                                        public_key: sender_public_key.clone(),
-                                        node_id,
-                                        content,
-                                        timestamp,
-                                        blob_refs,
-                                        is_backfill,
-                                    },
-                                );
-                                println!(
-                                    "[IROH] [OK] Emitted decrypted post to UI (backfill={})",
-                                    is_backfill
-                                );
-                            }
-                            super::crypto::ContentPayload::DirectMessage {
-                                message_id,
-                                content,
-                                thread_id,
-                                sent_at,
-                            } => {
-                                let timestamp = if sent_at > 0 {
-                                    sent_at
-                                } else {
-                                    envelope.timestamp
-                                };
-                                let sender_user_id =
-                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
-                                println!(
-                                    "[IROH] Received encrypted DM from {}: {} chars",
-                                    sender_public_key,
-                                    content.len()
-                                );
-                                let _ = thread_id; // threads handled app-side
-
-                                // Same event shape the frontend has always
-                                // consumed for incoming DMs
-                                let _ = self.app_handle.emit(
-                                    "p2p-message-received",
-                                    serde_json::json!({
-                                        "message": {
-                                            "DirectMessage": {
-                                                "message_id": message_id,
-                                                "from_user_id": sender_user_id,
-                                                "from_public_key": sender_public_key,
-                                                "to_user_id": self.user_id,
-                                                "encrypted_content": content,
-                                                "timestamp": timestamp,
-                                                "device_id": null,
-                                            }
-                                        }
-                                    }),
-                                );
-                            }
-                            super::crypto::ContentPayload::CommunityPost {
-                                community_id,
-                                community_name,
-                                content,
-                                attachments,
-                                show_in_main_feed,
-                                sent_at,
-                            } => {
-                                let timestamp = if sent_at > 0 {
-                                    sent_at
-                                } else {
-                                    envelope.timestamp
-                                };
-                                let sender_user_id =
-                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
-                                println!(
-                                    "[IROH] Received community post in '{}' from {}: {} chars",
-                                    community_name,
-                                    sender_public_key,
-                                    content.len()
-                                );
-
-                                // Parse community_id from string
-                                let community_uuid =
-                                    match super::types::SqliteUuid::parse_str(&community_id) {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            println!("[IROH] Failed to parse community_id: {}", e);
-                                            return;
-                                        }
-                                    };
-
-                                // Ensure sender exists in database
-                                // NOTE: Using lock() instead of try_lock() for data integrity
-                                {
-                                    let conn = self.db.conn.lock().unwrap();
-                                    if let Err(e) = conn.execute(
-                                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                                        rusqlite::params![
-                                            sender_user_id,
-                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
-                                            &sender_public_key,
-                                            chrono::Utc::now().to_rfc3339(),
-                                            chrono::Utc::now().to_rfc3339()
-                                        ],
-                                    ) {
-                                        println!("[IROH] Warning: Failed to ensure community post sender exists: {}", e);
-                                    }
-                                }
-
-                                // Create the post in database
-                                match self.db.create_post(sender_user_id, &content, false) {
-                                    Ok(post) => {
-                                        // Link it to the community
-                                        if let Err(e) = self.db.create_community_post(
-                                            community_uuid,
-                                            post.id,
-                                            show_in_main_feed,
-                                        ) {
-                                            println!("[IROH] Warning: Failed to link post to community: {}", e);
-                                        }
-
-                                        // Emit to UI
-                                        #[derive(serde::Serialize, Clone)]
-                                        struct CommunityPostEvent {
-                                            community_id: String,
-                                            community_name: String,
-                                            post_id: super::types::SqliteUuid,
-                                            user_id: super::types::SqliteUuid,
-                                            public_key: String,
-                                            content: String,
-                                            show_in_main_feed: bool,
-                                            timestamp: i64,
-                                            attachments:
-                                                Option<Vec<super::types::MediaAttachmentWithData>>,
-                                        }
-
-                                        let _ = self.app_handle.emit(
-                                            "community-post-received",
-                                            CommunityPostEvent {
-                                                community_id: community_id.clone(),
-                                                community_name: community_name.clone(),
-                                                post_id: post.id,
-                                                user_id: sender_user_id,
-                                                public_key: sender_public_key.clone(),
-                                                content,
-                                                show_in_main_feed,
-                                                timestamp,
-                                                attachments,
-                                            },
-                                        );
-                                        println!("[IROH] [OK] Stored and emitted community post");
-                                    }
-                                    Err(e) => {
-                                        println!("[IROH] Failed to create community post: {}", e);
-                                    }
-                                }
-                            }
-                            super::crypto::ContentPayload::CommunityMemberAdded {
-                                community_id,
-                                community_name,
-                                new_member_public_key,
-                                new_member_display_name,
-                            } => {
-                                println!(
-                                    "[IROH] Received community member added: {} joined '{}'",
-                                    new_member_display_name, community_name
-                                );
-
-                                // Parse community_id from string
-                                let community_uuid =
-                                    match super::types::SqliteUuid::parse_str(&community_id) {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            println!("[IROH] Failed to parse community_id: {}", e);
-                                            return;
-                                        }
-                                    };
-
-                                // Get or create user_id for the new member
-                                let new_member_user_id = super::types::SqliteUuid::from_public_key(
-                                    &new_member_public_key,
-                                );
-
-                                // Ensure the new member user exists in database
-                                // NOTE: Using lock() instead of try_lock() for data integrity
-                                {
-                                    let conn = self.db.conn.lock().unwrap();
-                                    if let Err(e) = conn.execute(
-                                        "INSERT OR IGNORE INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
-                                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                                        rusqlite::params![
-                                            new_member_user_id,
-                                            &new_member_display_name,
-                                            &new_member_public_key,
-                                            &new_member_public_key,
-                                            chrono::Utc::now().to_rfc3339(),
-                                            chrono::Utc::now().to_rfc3339()
-                                        ],
-                                    ) {
-                                        println!("[IROH] Warning: Failed to ensure new member exists: {}", e);
-                                    }
-                                }
-
-                                // Add member to community (ignore if already exists)
-                                if let Err(e) = self.db.add_community_member(
-                                    community_uuid,
-                                    new_member_user_id,
-                                    &new_member_public_key,
-                                    Some(&new_member_display_name),
-                                    None, // invited_by not available in this message
-                                ) {
-                                    // Ignore duplicate errors
-                                    if !e.to_string().contains("UNIQUE constraint failed") {
-                                        println!(
-                                            "[IROH] Warning: Failed to add community member: {}",
-                                            e
-                                        );
-                                    }
-                                }
-
-                                // Emit to UI
-                                #[derive(serde::Serialize, Clone)]
-                                struct CommunityMemberAddedEvent {
-                                    community_id: String,
-                                    community_name: String,
-                                    new_member_user_id: super::types::SqliteUuid,
-                                    new_member_public_key: String,
-                                    new_member_display_name: String,
-                                }
-
-                                let _ = self.app_handle.emit(
-                                    "community-member-added",
-                                    CommunityMemberAddedEvent {
-                                        community_id,
-                                        community_name,
-                                        new_member_user_id,
-                                        new_member_public_key,
-                                        new_member_display_name,
-                                    },
-                                );
-                                println!("[IROH] [OK] Community member added and emitted");
-                            }
-                            super::crypto::ContentPayload::PostComment {
-                                comment_id,
-                                post_id,
-                                content,
-                                parent_comment_id,
-                                sent_at,
-                            } => {
-                                let timestamp = if sent_at > 0 {
-                                    sent_at
-                                } else {
-                                    envelope.timestamp
-                                };
-                                let sender_user_id =
-                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
-                                println!(
-                                    "[IROH] Received post comment from {} on post {}",
-                                    sender_public_key, post_id
-                                );
-
-                                // Parse IDs
-                                let comment_uuid =
-                                    match super::types::SqliteUuid::parse_str(&comment_id) {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            println!("[IROH] Failed to parse comment_id: {}", e);
-                                            return;
-                                        }
-                                    };
-                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id)
-                                {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        println!("[IROH] Failed to parse post_id: {}", e);
-                                        return;
-                                    }
-                                };
-                                let parent_uuid = parent_comment_id
-                                    .as_ref()
-                                    .and_then(|id| super::types::SqliteUuid::parse_str(id).ok());
-
-                                // Ensure sender exists and save comment
-                                // NOTE: Using lock() instead of try_lock() - CRITICAL for comment persistence
-                                {
-                                    let conn = self.db.conn.lock().unwrap();
-                                    let now = chrono::Utc::now().to_rfc3339();
-
-                                    // Ensure sender exists
-                                    let _ = conn.execute(
-                                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                                        rusqlite::params![
-                                            sender_user_id,
-                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
-                                            &sender_public_key,
-                                            &now,
-                                            &now
-                                        ],
-                                    );
-
-                                    // Save comment (OR IGNORE for duplicates)
-                                    if let Err(e) = conn.execute(
-                                        "INSERT OR IGNORE INTO post_comments (id, post_id, user_id, content, parent_comment_id, created_at, updated_at)
-                                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                                        rusqlite::params![
-                                            comment_uuid,
-                                            post_uuid,
-                                            sender_user_id,
-                                            &content,
-                                            parent_uuid,
-                                            &now,
-                                            &now
-                                        ],
-                                    ) {
-                                        println!("[IROH] Warning: Failed to save comment: {}", e);
-                                    } else {
-                                        println!("[IROH] ✓ Saved comment to database");
-                                    }
-                                }
-
-                                // Emit to UI
-                                let _ = self.app_handle.emit(
-                                    "p2p-post-comment",
-                                    serde_json::json!({
-                                        "commentId": comment_id,
-                                        "postId": post_id,
-                                        "userId": sender_user_id.to_string(),
-                                        "publicKey": sender_public_key,
-                                        "content": content,
-                                        "parentCommentId": parent_comment_id,
-                                        "timestamp": timestamp
-                                    }),
-                                );
-                                println!("[IROH] ✓ Emitted p2p-post-comment event");
-                            }
-                            super::crypto::ContentPayload::PostReaction {
-                                post_id,
-                                emoji,
-                                action,
-                                sent_at,
-                            } => {
-                                let timestamp = if sent_at > 0 {
-                                    sent_at
-                                } else {
-                                    envelope.timestamp
-                                };
-                                let sender_user_id =
-                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
-                                println!(
-                                    "[IROH] Received post reaction from {}: {} {} on post {}",
-                                    sender_public_key, action, emoji, post_id
-                                );
-
-                                // Parse post ID
-                                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id)
-                                {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        println!("[IROH] Failed to parse post_id: {}", e);
-                                        return;
-                                    }
-                                };
-
-                                // Save or remove reaction
-                                // NOTE: Using lock() instead of try_lock() - CRITICAL for reaction persistence
-                                {
-                                    let conn = self.db.conn.lock().unwrap();
-                                    let now = chrono::Utc::now().to_rfc3339();
-
-                                    // Ensure sender exists
-                                    let _ = conn.execute(
-                                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
-                                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                                        rusqlite::params![
-                                            sender_user_id,
-                                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
-                                            &sender_public_key,
-                                            &now,
-                                            &now
-                                        ],
-                                    );
-
-                                    if action == "add" {
-                                        // Use REPLACE to handle existing reactions
-                                        if let Err(e) = conn.execute(
-                                            "INSERT OR REPLACE INTO post_reactions (id, post_id, user_id, emoji, created_at)
-                                             VALUES (?1, ?2, ?3, ?4, ?5)",
-                                            rusqlite::params![
-                                                super::types::SqliteUuid::new(),
-                                                post_uuid,
-                                                sender_user_id,
-                                                &emoji,
-                                                &now
-                                            ],
-                                        ) {
-                                            println!("[IROH] Warning: Failed to save reaction: {}", e);
-                                        } else {
-                                            println!("[IROH] ✓ Saved reaction to database");
-                                        }
-                                    } else if action == "remove" {
-                                        if let Err(e) = conn.execute(
-                                            "DELETE FROM post_reactions WHERE post_id = ?1 AND user_id = ?2",
-                                            rusqlite::params![post_uuid, sender_user_id],
-                                        ) {
-                                            println!("[IROH] Warning: Failed to remove reaction: {}", e);
-                                        } else {
-                                            println!("[IROH] ✓ Removed reaction from database");
-                                        }
-                                    }
-                                }
-
-                                // Emit to UI
-                                let _ = self.app_handle.emit(
-                                    "p2p-post-reaction",
-                                    serde_json::json!({
-                                        "postId": post_id,
-                                        "userId": sender_user_id.to_string(),
-                                        "publicKey": sender_public_key,
-                                        "emoji": emoji,
-                                        "action": action,
-                                        "timestamp": timestamp
-                                    }),
-                                );
-                                println!("[IROH] ✓ Emitted p2p-post-reaction event");
-                            }
-                            super::crypto::ContentPayload::DeviceSync {
-                                device_id,
-                                data_json,
-                                ..
-                            } => {
-                                // try_decrypt already verified the payload is
-                                // signed by sender_public_key; only our
-                                // own devices (same recovery phrase) can both
-                                // sign as us and encrypt to our key. Guard
-                                // anyway: sync must come from our own identity.
-                                if sender_public_key != self.public_key {
+                        // Process the decrypted content. The envelope is only
+                        // marked replay-seen AFTER the handler succeeds:
+                        // marking it up front meant any transient handler
+                        // failure (lock contention, DB error, mid-processing
+                        // crash) permanently discarded the envelope, because
+                        // gossip redelivery was deduped from then on.
+                        match self
+                            .handle_content_payload(
+                                sender_public_key,
+                                envelope.timestamp,
+                                decrypted.payload,
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                if let Err(e) = self.db.mark_envelope_seen(&envelope.message_id) {
                                     println!(
-                                        "[IROH-SYNC] Rejecting DeviceSync from foreign sender"
-                                    );
-                                    return;
-                                }
-                                if device_id == self.device_id.clone().unwrap_or_default() {
-                                    // Our own broadcast echoed back
-                                    return;
-                                }
-
-                                println!(
-                                    "[IROH-SYNC] Received encrypted device sync from device {}",
-                                    device_id
-                                );
-                                match serde_json::from_str::<crate::app::database::sync::SyncData>(
-                                    &data_json,
-                                ) {
-                                    Ok(sync_data) => {
-                                        println!(
-                                            "[IROH-SYNC] Applying sync data: {} posts, {} messages, {} friends",
-                                            sync_data.posts.len(),
-                                            sync_data.messages.len(),
-                                            sync_data.friends.len()
-                                        );
-                                        match self.db.apply_sync_data(&sync_data) {
-                                            Ok(()) => {
-                                                if let Some(our_device_id) = &self.device_id {
-                                                    let _ = self
-                                                        .db
-                                                        .update_all_sync_timestamps(our_device_id);
-                                                }
-                                                let _ = self
-                                                    .app_handle
-                                                    .emit("device-sync-completed", device_id);
-                                                println!(
-                                                    "[IROH-SYNC] Applied encrypted device sync"
-                                                );
-                                            }
-                                            Err(e) => println!(
-                                                "[IROH-SYNC] Failed to apply sync data: {}",
-                                                e
-                                            ),
-                                        }
-                                    }
-                                    Err(e) => println!(
-                                        "[IROH-SYNC] Failed to deserialize sync data: {}",
+                                        "[IROH] Warning: failed to record envelope as seen: {}",
                                         e
-                                    ),
+                                    );
                                 }
                             }
-                            super::crypto::ContentPayload::FriendRequest {
-                                display_name,
-                                encryption_public_key,
-                                node_id,
-                                relay_url,
-                                ..
-                            } => {
-                                self.handle_friend_request(
-                                    sender_public_key.clone(),
-                                    encryption_public_key,
-                                    display_name,
-                                    node_id,
-                                    relay_url,
-                                )
-                                .await;
-                            }
-                            super::crypto::ContentPayload::FriendAccepted {
-                                display_name,
-                                encryption_public_key,
-                                node_id,
-                                relay_url,
-                                ..
-                            } => {
-                                self.handle_friend_accepted(
-                                    sender_public_key.clone(),
-                                    encryption_public_key,
-                                    display_name,
-                                    node_id,
-                                    relay_url,
-                                )
-                                .await;
-                            }
-                            super::crypto::ContentPayload::Presence {
-                                device_id,
-                                node_addr_json,
-                                encryption_public_key,
-                                display_name,
-                                bio,
-                                profile_picture,
-                                profile_signature,
-                                prekey_public,
-                                prekey_signature,
-                                sent_at,
-                            } => {
-                                // Replayed presence could poison our address
-                                // book with stale endpoints - only accept
-                                // reasonably fresh announcements
-                                let now = chrono::Utc::now().timestamp();
-                                if sent_at > 0 && now - sent_at > 3600 {
-                                    println!("[IROH] Ignoring stale presence (>1h old)");
-                                    return;
-                                }
-                                let node_addr: iroh::EndpointAddr =
-                                    match serde_json::from_str(&node_addr_json) {
-                                        Ok(a) => a,
-                                        Err(e) => {
-                                            println!(
-                                                "[IROH] Invalid node address in presence: {}",
-                                                e
-                                            );
-                                            return;
-                                        }
-                                    };
-                                // Piggybacked pre-key: store it (catch-up path if
-                                // a KeyRotation envelope was lost)
-                                self.store_friend_prekey(
-                                    &sender_public_key,
-                                    prekey_public.as_deref(),
-                                    prekey_signature.as_deref(),
+                            Err(e) => {
+                                eprintln!(
+                                    "[IROH] Handler failed for envelope {}: {} - leaving it unmarked so a redelivered copy is reprocessed",
+                                    &envelope.message_id[..8.min(envelope.message_id.len())],
+                                    e
                                 );
-                                // Derive the peer's user_id from the AUTHENTICATED
-                                // sender key rather than trusting a claimed id
-                                let peer_user_id =
-                                    super::types::SqliteUuid::from_public_key(&sender_public_key);
-                                self.handle_presence(
-                                    peer_user_id,
-                                    sender_public_key.clone(),
-                                    encryption_public_key,
-                                    device_id,
-                                    node_addr,
-                                    display_name,
-                                    bio,
-                                    profile_picture,
-                                    profile_signature,
-                                )
-                                .await;
-                            }
-                            super::crypto::ContentPayload::KeyRotation {
-                                prekey_public,
-                                signature,
-                                ..
-                            } => {
-                                // Explicit pre-key rotation announcement
-                                self.store_friend_prekey(
-                                    &sender_public_key,
-                                    Some(&prekey_public),
-                                    Some(&signature),
-                                );
-                            }
-                            super::crypto::ContentPayload::FriendSyncRequest { since, .. } => {
-                                // A friend came back online and wants the posts
-                                // they missed. sender_public_key is authenticated;
-                                // resend_posts_to_friend re-checks the friendship
-                                // is accepted before sending anything.
-                                self.resend_posts_to_friend(&sender_public_key, since).await;
+                                // Also forget the raw-message dedup hash, or the
+                                // in-memory cache would drop the redelivered copy
+                                // before it ever reached this handler again
+                                self.recent_message_hashes.lock().await.remove(msg_hash);
                             }
                         }
                     }
                     None => {
                         // No key box decrypted with our key - envelope is for
-                        // other recipients; we just relayed it
+                        // other recipients; we just relayed it. Safe to mark
+                        // seen NOW: we can never process it, and marking skips
+                        // the trial-decryption cost on a redelivery.
                         println!("[IROH] Envelope not for us - ignored");
+                        if let Err(e) = self.db.mark_envelope_seen(&envelope.message_id) {
+                            println!("[IROH] Warning: failed to record envelope as seen: {}", e);
+                        }
                     }
                 }
             }
@@ -2450,29 +2386,867 @@ impl IrohNetwork {
                 node_id,
                 timestamp: _,
             } => {
-                // Parse the node_id from string
+                // SECURITY: key liveness bookkeeping on the AUTHENTICATED
+                // gossip sender (delivered_from), NOT the embedded node_id.
+                // Heartbeats are neighbors-only (never relayed), so the
+                // delivering neighbor IS the originator. Trusting the payload
+                // let any neighbor refresh liveness for an arbitrary peer and
+                // suppress reconnection to it.
                 match node_id.parse::<iroh::EndpointId>() {
-                    Ok(peer_node_id) => {
-                        println!("[HEARTBEAT] Received heartbeat from peer: {}", peer_node_id);
-
-                        // Update last heartbeat time for this peer
-                        let mut heartbeats = self.peer_heartbeats.lock().await;
-                        heartbeats.insert(peer_node_id, std::time::Instant::now());
-                        drop(heartbeats);
-
-                        // Ensure peer is in connected set (heartbeat confirms they're alive)
-                        self.add_connected_peer(peer_node_id).await;
+                    Ok(claimed) if claimed != delivered_from => {
+                        println!(
+                            "[HEARTBEAT] Heartbeat claims node_id {} but was delivered by {} - using the authenticated sender",
+                            claimed, delivered_from
+                        );
                     }
+                    Ok(_) => {}
                     Err(e) => {
                         println!("[HEARTBEAT] Failed to parse node_id from heartbeat: {}", e);
                     }
                 }
+                println!(
+                    "[HEARTBEAT] Received heartbeat from peer: {}",
+                    delivered_from
+                );
+
+                // Update last heartbeat time for this peer
+                let mut heartbeats = self.peer_heartbeats.lock().await;
+                heartbeats.insert(delivered_from, std::time::Instant::now());
+                drop(heartbeats);
+
+                // Ensure peer is in connected set (heartbeat confirms they're alive)
+                self.add_connected_peer(delivered_from).await;
             }
         }
     }
 
+    /// Process a decrypted sealed-envelope payload.
+    ///
+    /// Returns Err ONLY for TRANSIENT failures (DB errors, failed sync
+    /// applies) - the caller then leaves the envelope unmarked so a gossip
+    /// redelivery gets reprocessed. Permanent rejects (unparseable ids,
+    /// foreign DeviceSync senders, stale presence) return Ok(()) so the
+    /// envelope is marked seen and never retried.
+    async fn handle_content_payload(
+        &self,
+        sender_public_key: String,
+        envelope_timestamp: i64,
+        payload: super::crypto::ContentPayload,
+    ) -> Result<(), String> {
+        match payload {
+            super::crypto::ContentPayload::Post {
+                post_id,
+                content,
+                node_id,
+                blob_refs,
+                sent_at,
+                is_backfill,
+            } => {
+                // AUTHORIZATION: a decryptable envelope is not consent - only
+                // accepted, non-blocked friends may put content in our feed.
+                // Ok(()) so the envelope is marked seen and never retried.
+                if !self
+                    .is_authorized_content_sender(&sender_public_key, "post")
+                    .await
+                {
+                    return Ok(());
+                }
+                // Precise time is inside the ciphertext; envelope
+                // timestamp (hour-coarse) is the legacy fallback
+                let timestamp = if sent_at > 0 {
+                    sent_at
+                } else {
+                    envelope_timestamp
+                };
+                // Get sender's user_id from their public key
+                let sender_user_id = super::types::SqliteUuid::from_public_key(&sender_public_key);
+
+                // Ensure sender exists in database
+                // NOTE: Using lock() instead of try_lock() for data integrity
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    if let Err(e) = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            sender_user_id,
+                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                            &sender_public_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to ensure post sender exists: {}", e);
+                    }
+                }
+
+                // Emit decrypted post to UI via sealed-post-received event
+                #[derive(serde::Serialize, Clone)]
+                struct DecryptedPostEvent {
+                    post_id: String,
+                    user_id: super::types::SqliteUuid,
+                    public_key: String,
+                    node_id: String,
+                    content: String,
+                    timestamp: i64,
+                    blob_refs: Vec<super::types::BlobReference>,
+                    is_backfill: bool,
+                }
+
+                let _ = self.app_handle.emit(
+                    "sealed-post-received",
+                    DecryptedPostEvent {
+                        post_id,
+                        user_id: sender_user_id,
+                        public_key: sender_public_key.clone(),
+                        node_id,
+                        content,
+                        timestamp,
+                        blob_refs,
+                        is_backfill,
+                    },
+                );
+                println!(
+                    "[IROH] [OK] Emitted decrypted post to UI (backfill={})",
+                    is_backfill
+                );
+            }
+            super::crypto::ContentPayload::DirectMessage {
+                message_id,
+                content,
+                thread_id,
+                sent_at,
+            } => {
+                // AUTHORIZATION: only accepted, non-blocked friends may drop a
+                // DM into our conversation list
+                if !self
+                    .is_authorized_content_sender(&sender_public_key, "direct message")
+                    .await
+                {
+                    return Ok(());
+                }
+                let timestamp = if sent_at > 0 {
+                    sent_at
+                } else {
+                    envelope_timestamp
+                };
+                let sender_user_id = super::types::SqliteUuid::from_public_key(&sender_public_key);
+                println!(
+                    "[IROH] Received encrypted DM from {}: {} chars",
+                    sender_public_key,
+                    content.len()
+                );
+
+                // Ensure sender exists in database
+                // NOTE: Using lock() instead of try_lock() for data integrity
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    if let Err(e) = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            sender_user_id,
+                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                            &sender_public_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to ensure DM sender exists: {}", e);
+                    }
+                }
+
+                // PERSIST the message BEFORE emitting: the event only
+                // refreshes the UI - the DB row is what the conversation
+                // view actually renders. The old handler only emitted the
+                // event, so the message was lost the moment it fired.
+                // Dedup by message id (gossip can redeliver).
+                let db_message_id = super::types::SqliteUuid::parse_str(&message_id)
+                    .unwrap_or_else(|_| super::types::SqliteUuid::new());
+                let created_at = chrono::DateTime::from_timestamp(timestamp, 0)
+                    .unwrap_or_else(chrono::Utc::now)
+                    .to_rfc3339();
+                match self.db.store_received_message(
+                    db_message_id,
+                    sender_user_id,
+                    self.user_id,
+                    &content,
+                    thread_id,
+                    &created_at,
+                ) {
+                    Ok(true) => {
+                        println!("[IROH] [OK] Stored incoming DM {}", db_message_id)
+                    }
+                    Ok(false) => {
+                        // Redelivered duplicate: nothing new to show the UI
+                        println!(
+                            "[IROH] Incoming DM {} already stored - skipping insert",
+                            db_message_id
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("[IROH] Failed to store incoming DM: {}", e);
+                        // Transient (DB) failure: propagate so the envelope
+                        // stays unmarked and a redelivery retries the save
+                        return Err(format!("failed to store incoming DM: {}", e));
+                    }
+                }
+
+                // Same event shape the frontend has always
+                // consumed for incoming DMs
+                let _ = self.app_handle.emit(
+                    "p2p-message-received",
+                    serde_json::json!({
+                        "message": {
+                            "DirectMessage": {
+                                "message_id": message_id,
+                                "from_user_id": sender_user_id,
+                                "from_public_key": sender_public_key,
+                                "to_user_id": self.user_id,
+                                "encrypted_content": content,
+                                "timestamp": timestamp,
+                                "device_id": null,
+                            }
+                        }
+                    }),
+                );
+            }
+            super::crypto::ContentPayload::CommunityPost {
+                community_id,
+                community_name,
+                content,
+                attachments,
+                node_id,
+                blob_refs,
+                show_in_main_feed,
+                sent_at,
+            } => {
+                let timestamp = if sent_at > 0 {
+                    sent_at
+                } else {
+                    envelope_timestamp
+                };
+                let sender_user_id = super::types::SqliteUuid::from_public_key(&sender_public_key);
+                println!(
+                    "[IROH] Received community post in '{}' from {}: {} chars",
+                    community_name,
+                    sender_public_key,
+                    content.len()
+                );
+
+                // Parse community_id from string
+                let community_uuid = match super::types::SqliteUuid::parse_str(&community_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[IROH] Failed to parse community_id: {}", e);
+                        return Ok(());
+                    }
+                };
+
+                // AUTHORIZATION: the community_id is a sender-supplied claim.
+                // Require that the authenticated sender really is a member of
+                // that community before storing anything under it.
+                if !self.is_authorized_community_sender(&sender_public_key, community_uuid) {
+                    return Ok(());
+                }
+
+                // Ensure sender exists in database
+                // NOTE: Using lock() instead of try_lock() for data integrity
+                {
+                    let conn = self.lock_db_conn_blocking();
+                    if let Err(e) = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            sender_user_id,
+                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                            &sender_public_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to ensure community post sender exists: {}", e);
+                    }
+                }
+
+                // Create the post in database
+                match self.db.create_post(sender_user_id, &content, false) {
+                    Ok(post) => {
+                        // Link it to the community
+                        if let Err(e) = self.db.create_community_post(
+                            community_uuid,
+                            post.id,
+                            show_in_main_feed,
+                        ) {
+                            println!("[IROH] Warning: Failed to link post to community: {}", e);
+                        }
+
+                        // Attachments: prefer blob refs (fetched from the
+                        // sender's blob store, same as sealed posts); fall
+                        // back to the legacy embedded bytes from old senders
+                        if !blob_refs.is_empty() {
+                            self.fetch_and_store_post_attachments(
+                                post.id,
+                                sender_user_id,
+                                &node_id,
+                                &blob_refs,
+                            )
+                            .await;
+                        } else if let Some(ref atts) = attachments {
+                            use base64::Engine as _;
+                            for att in atts {
+                                if !is_supported_media_type(&att.file_type) {
+                                    println!(
+                                        "[IROH] Skipping embedded community attachment {}: unsupported file type '{}'",
+                                        att.id, att.file_type
+                                    );
+                                    continue;
+                                }
+                                match base64::engine::general_purpose::STANDARD.decode(&att.data)
+                                {
+                                    Ok(bytes) => {
+                                        if let Err(e) = self.db.upload_media(
+                                            sender_user_id,
+                                            post.id,
+                                            "synced_file",
+                                            &att.file_type,
+                                            &bytes,
+                                            att.file_size,
+                                        ) {
+                                            println!(
+                                                "[IROH] Warning: Failed to save embedded community attachment {}: {}",
+                                                att.id, e
+                                            );
+                                        }
+                                    }
+                                    Err(e) => println!(
+                                        "[IROH] Warning: Failed to decode embedded community attachment {}: {}",
+                                        att.id, e
+                                    ),
+                                }
+                            }
+                        }
+
+                        // Emit to UI
+                        #[derive(serde::Serialize, Clone)]
+                        struct CommunityPostEvent {
+                            community_id: String,
+                            community_name: String,
+                            post_id: super::types::SqliteUuid,
+                            user_id: super::types::SqliteUuid,
+                            public_key: String,
+                            content: String,
+                            show_in_main_feed: bool,
+                            timestamp: i64,
+                            attachments: Option<Vec<super::types::MediaAttachmentWithData>>,
+                        }
+
+                        let _ = self.app_handle.emit(
+                            "community-post-received",
+                            CommunityPostEvent {
+                                community_id: community_id.clone(),
+                                community_name: community_name.clone(),
+                                post_id: post.id,
+                                user_id: sender_user_id,
+                                public_key: sender_public_key.clone(),
+                                content,
+                                show_in_main_feed,
+                                timestamp,
+                                attachments,
+                            },
+                        );
+                        println!("[IROH] [OK] Stored and emitted community post");
+                    }
+                    Err(e) => {
+                        println!("[IROH] Failed to create community post: {}", e);
+                        // Transient DB failure (the insert didn't happen):
+                        // leave the envelope unmarked so a redelivery retries
+                        return Err(format!("failed to create community post: {}", e));
+                    }
+                }
+            }
+            super::crypto::ContentPayload::CommunityMemberAdded {
+                community_id,
+                community_name,
+                new_member_public_key,
+                new_member_display_name,
+            } => {
+                println!(
+                    "[IROH] Received community member added: {} joined '{}'",
+                    new_member_display_name, community_name
+                );
+
+                // Parse community_id from string
+                let community_uuid = match super::types::SqliteUuid::parse_str(&community_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[IROH] Failed to parse community_id: {}", e);
+                        return Ok(());
+                    }
+                };
+
+                // Get or create user_id for the new member
+                let new_member_user_id =
+                    super::types::SqliteUuid::from_public_key(&new_member_public_key);
+
+                // Ensure the new member user exists in database
+                // NOTE: Using lock() instead of try_lock() for data integrity
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    if let Err(e) = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![
+                            new_member_user_id,
+                            &new_member_display_name,
+                            &new_member_public_key,
+                            &new_member_public_key,
+                            chrono::Utc::now().to_rfc3339(),
+                            chrono::Utc::now().to_rfc3339()
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to ensure new member exists: {}", e);
+                    }
+                }
+
+                // Add member to community (ignore if already exists)
+                if let Err(e) = self.db.add_community_member(
+                    community_uuid,
+                    new_member_user_id,
+                    &new_member_public_key,
+                    Some(&new_member_display_name),
+                    None, // invited_by not available in this message
+                ) {
+                    // Ignore duplicate errors
+                    if !e.to_string().contains("UNIQUE constraint failed") {
+                        println!("[IROH] Warning: Failed to add community member: {}", e);
+                    }
+                }
+
+                // Emit to UI
+                #[derive(serde::Serialize, Clone)]
+                struct CommunityMemberAddedEvent {
+                    community_id: String,
+                    community_name: String,
+                    new_member_user_id: super::types::SqliteUuid,
+                    new_member_public_key: String,
+                    new_member_display_name: String,
+                }
+
+                let _ = self.app_handle.emit(
+                    "community-member-added",
+                    CommunityMemberAddedEvent {
+                        community_id,
+                        community_name,
+                        new_member_user_id,
+                        new_member_public_key,
+                        new_member_display_name,
+                    },
+                );
+                println!("[IROH] [OK] Community member added and emitted");
+            }
+            super::crypto::ContentPayload::PostComment {
+                comment_id,
+                post_id,
+                content,
+                parent_comment_id,
+                sent_at,
+            } => {
+                // AUTHORIZATION: comments are friend-scoped content
+                if !self
+                    .is_authorized_content_sender(&sender_public_key, "post comment")
+                    .await
+                {
+                    return Ok(());
+                }
+                let timestamp = if sent_at > 0 {
+                    sent_at
+                } else {
+                    envelope_timestamp
+                };
+                let sender_user_id = super::types::SqliteUuid::from_public_key(&sender_public_key);
+                println!(
+                    "[IROH] Received post comment from {} on post {}",
+                    sender_public_key, post_id
+                );
+
+                // Parse IDs
+                let comment_uuid = match super::types::SqliteUuid::parse_str(&comment_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[IROH] Failed to parse comment_id: {}", e);
+                        return Ok(());
+                    }
+                };
+                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[IROH] Failed to parse post_id: {}", e);
+                        return Ok(());
+                    }
+                };
+                let parent_uuid = parent_comment_id
+                    .as_ref()
+                    .and_then(|id| super::types::SqliteUuid::parse_str(id).ok());
+
+                // Ensure sender exists and save comment
+                // NOTE: Using lock() instead of try_lock() - CRITICAL for comment persistence
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    let now = chrono::Utc::now().to_rfc3339();
+
+                    // Ensure sender exists
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            sender_user_id,
+                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                            &sender_public_key,
+                            &now,
+                            &now
+                        ],
+                    );
+
+                    // Save comment (OR IGNORE for duplicates)
+                    if let Err(e) = conn.execute(
+                        "INSERT OR IGNORE INTO post_comments (id, post_id, user_id, content, parent_comment_id, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            comment_uuid,
+                            post_uuid,
+                            sender_user_id,
+                            &content,
+                            parent_uuid,
+                            &now,
+                            &now
+                        ],
+                    ) {
+                        println!("[IROH] Warning: Failed to save comment: {}", e);
+                        // Transient DB failure: leave the envelope unmarked so
+                        // a redelivery retries the save
+                        return Err(format!("failed to save comment: {}", e));
+                    } else {
+                        println!("[IROH] ✓ Saved comment to database");
+                    }
+                }
+
+                // Emit to UI
+                let _ = self.app_handle.emit(
+                    "p2p-post-comment",
+                    serde_json::json!({
+                        "commentId": comment_id,
+                        "postId": post_id,
+                        "userId": sender_user_id.to_string(),
+                        "publicKey": sender_public_key,
+                        "content": content,
+                        "parentCommentId": parent_comment_id,
+                        "timestamp": timestamp
+                    }),
+                );
+                println!("[IROH] ✓ Emitted p2p-post-comment event");
+            }
+            super::crypto::ContentPayload::PostReaction {
+                post_id,
+                emoji,
+                action,
+                sent_at,
+            } => {
+                // AUTHORIZATION: reactions are friend-scoped content
+                if !self
+                    .is_authorized_content_sender(&sender_public_key, "post reaction")
+                    .await
+                {
+                    return Ok(());
+                }
+                // VALIDATION: the app only offers a fixed reaction set, and the
+                // frontend renders this string into post markup. Anything else
+                // is either a bug or an injection attempt - drop it.
+                if !is_supported_reaction_emoji(&emoji) {
+                    println!(
+                        "[SECURITY] Rejecting reaction with unsupported emoji ({} bytes) from {}",
+                        emoji.len(),
+                        &sender_public_key[..8.min(sender_public_key.len())]
+                    );
+                    return Ok(());
+                }
+                if action != "add" && action != "remove" {
+                    println!(
+                        "[SECURITY] Rejecting reaction with unknown action '{}'",
+                        action
+                    );
+                    return Ok(());
+                }
+                let timestamp = if sent_at > 0 {
+                    sent_at
+                } else {
+                    envelope_timestamp
+                };
+                let sender_user_id = super::types::SqliteUuid::from_public_key(&sender_public_key);
+                println!(
+                    "[IROH] Received post reaction from {}: {} {} on post {}",
+                    sender_public_key, action, emoji, post_id
+                );
+
+                // Parse post ID
+                let post_uuid = match super::types::SqliteUuid::parse_str(&post_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        println!("[IROH] Failed to parse post_id: {}", e);
+                        return Ok(());
+                    }
+                };
+
+                // Save or remove reaction
+                // NOTE: Using lock() instead of try_lock() - CRITICAL for reaction persistence
+                {
+                    let conn = self.db.conn.lock().unwrap();
+                    let now = chrono::Utc::now().to_rfc3339();
+
+                    // Ensure sender exists
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO users (id, display_name, public_key, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            sender_user_id,
+                            format!("User_{}", &sender_public_key[..8.min(sender_public_key.len())]),
+                            &sender_public_key,
+                            &now,
+                            &now
+                        ],
+                    );
+
+                    if action == "add" {
+                        // Use REPLACE to handle existing reactions
+                        if let Err(e) = conn.execute(
+                            "INSERT OR REPLACE INTO post_reactions (id, post_id, user_id, emoji, created_at)
+                             VALUES (?1, ?2, ?3, ?4, ?5)",
+                            rusqlite::params![
+                                super::types::SqliteUuid::new(),
+                                post_uuid,
+                                sender_user_id,
+                                &emoji,
+                                &now
+                            ],
+                        ) {
+                            println!("[IROH] Warning: Failed to save reaction: {}", e);
+                            // Transient DB failure: leave the envelope unmarked
+                            // so a redelivery retries the save
+                            return Err(format!("failed to save reaction: {}", e));
+                        } else {
+                            println!("[IROH] ✓ Saved reaction to database");
+                        }
+                    } else if action == "remove" {
+                        if let Err(e) = conn.execute(
+                            "DELETE FROM post_reactions WHERE post_id = ?1 AND user_id = ?2",
+                            rusqlite::params![post_uuid, sender_user_id],
+                        ) {
+                            println!("[IROH] Warning: Failed to remove reaction: {}", e);
+                            return Err(format!("failed to remove reaction: {}", e));
+                        } else {
+                            println!("[IROH] ✓ Removed reaction from database");
+                        }
+                    }
+                }
+
+                // Emit to UI
+                let _ = self.app_handle.emit(
+                    "p2p-post-reaction",
+                    serde_json::json!({
+                        "postId": post_id,
+                        "userId": sender_user_id.to_string(),
+                        "publicKey": sender_public_key,
+                        "emoji": emoji,
+                        "action": action,
+                        "timestamp": timestamp
+                    }),
+                );
+                println!("[IROH] ✓ Emitted p2p-post-reaction event");
+            }
+            super::crypto::ContentPayload::DeviceSync {
+                device_id,
+                data_json,
+                ..
+            } => {
+                // try_decrypt already verified the payload is
+                // signed by sender_public_key; only our
+                // own devices (same recovery phrase) can both
+                // sign as us and encrypt to our key. Guard
+                // anyway: sync must come from our own identity.
+                if sender_public_key != self.public_key {
+                    println!("[IROH-SYNC] Rejecting DeviceSync from foreign sender");
+                    return Ok(());
+                }
+                if device_id == self.device_id.clone().unwrap_or_default() {
+                    // Our own broadcast echoed back
+                    return Ok(());
+                }
+
+                println!(
+                    "[IROH-SYNC] Received encrypted device sync from device {}",
+                    device_id
+                );
+                match serde_json::from_str::<crate::app::database::sync::SyncData>(&data_json) {
+                    Ok(sync_data) => {
+                        println!(
+                            "[IROH-SYNC] Applying sync data: {} posts, {} messages, {} friends",
+                            sync_data.posts.len(),
+                            sync_data.messages.len(),
+                            sync_data.friends.len()
+                        );
+                        match self.db.apply_sync_data(&sync_data) {
+                            Ok(()) => {
+                                // NOTE: applying an incoming sync must NOT
+                                // advance any outgoing cursor. The old
+                                // update_all_sync_timestamps call here moved
+                                // the cursor that gated what we SENT, so after
+                                // applying B's data our pre-existing rows were
+                                // never sent to B. Responses are now gated on
+                                // the REQUESTER's watermark instead.
+                                let _ = self.app_handle.emit("device-sync-completed", device_id);
+                                println!("[IROH-SYNC] Applied encrypted device sync");
+                            }
+                            Err(e) => {
+                                println!("[IROH-SYNC] Failed to apply sync data: {}", e);
+                                // Transient failure (the apply is transactional,
+                                // nothing was committed): leave the envelope
+                                // unmarked so a redelivery - or the next 30s
+                                // request cycle - retries it
+                                return Err(format!("failed to apply device sync: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => println!("[IROH-SYNC] Failed to deserialize sync data: {}", e),
+                }
+            }
+            super::crypto::ContentPayload::FriendRequest {
+                display_name,
+                encryption_public_key,
+                node_id,
+                relay_url,
+                ..
+            } => {
+                self.handle_friend_request(
+                    sender_public_key.clone(),
+                    encryption_public_key,
+                    display_name,
+                    node_id,
+                    relay_url,
+                )
+                .await;
+            }
+            super::crypto::ContentPayload::FriendAccepted {
+                display_name,
+                encryption_public_key,
+                node_id,
+                relay_url,
+                ..
+            } => {
+                self.handle_friend_accepted(
+                    sender_public_key.clone(),
+                    encryption_public_key,
+                    display_name,
+                    node_id,
+                    relay_url,
+                )
+                .await;
+            }
+            super::crypto::ContentPayload::Presence {
+                device_id,
+                node_addr_json,
+                encryption_public_key,
+                display_name,
+                bio,
+                profile_picture,
+                profile_signature,
+                prekey_public,
+                prekey_signature,
+                prekey_created_at,
+                sent_at,
+            } => {
+                // Replayed presence could poison our address
+                // book with stale endpoints - only accept
+                // reasonably fresh announcements
+                let now = chrono::Utc::now().timestamp();
+                if sent_at > 0 && now - sent_at > 3600 {
+                    println!("[IROH] Ignoring stale presence (>1h old)");
+                    return Ok(());
+                }
+                let node_addr: iroh::EndpointAddr = match serde_json::from_str(&node_addr_json) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        println!("[IROH] Invalid node address in presence: {}", e);
+                        return Ok(());
+                    }
+                };
+                // Piggybacked pre-key: store it (catch-up path if
+                // a KeyRotation envelope was lost)
+                self.store_friend_prekey(
+                    &sender_public_key,
+                    prekey_public.as_deref(),
+                    prekey_signature.as_deref(),
+                    prekey_created_at,
+                );
+                // Derive the peer's user_id from the AUTHENTICATED
+                // sender key rather than trusting a claimed id
+                let peer_user_id = super::types::SqliteUuid::from_public_key(&sender_public_key);
+                self.handle_presence(
+                    peer_user_id,
+                    sender_public_key.clone(),
+                    encryption_public_key,
+                    device_id,
+                    node_addr,
+                    display_name,
+                    bio,
+                    profile_picture,
+                    profile_signature,
+                )
+                .await;
+            }
+            super::crypto::ContentPayload::KeyRotation {
+                prekey_public,
+                signature,
+                prekey_created_at,
+                ..
+            } => {
+                // Explicit pre-key rotation announcement
+                self.store_friend_prekey(
+                    &sender_public_key,
+                    Some(&prekey_public),
+                    Some(&signature),
+                    prekey_created_at,
+                );
+            }
+            super::crypto::ContentPayload::FriendSyncRequest { since, .. } => {
+                // A friend came back online and wants the posts
+                // they missed. sender_public_key is authenticated;
+                // resend_posts_to_friend re-checks the friendship
+                // is accepted before sending anything.
+                self.resend_posts_to_friend(&sender_public_key, since).await;
+            }
+        }
+        Ok(())
+    }
+
     /// Retry all pending messages when connection is restored
     pub async fn retry_pending_messages(&self) {
+        // Single-flight: concurrent friend dials each trigger a retry pass;
+        // overlapping passes would re-broadcast the same queued messages
+        if self
+            .retrying_pending
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        struct ClearOnDrop(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for ClearOnDrop {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _retry_guard = ClearOnDrop(self.retrying_pending.clone());
+
         match self.db.get_pending_message_count(self.user_id) {
             Ok(count) if count > 0 => {
                 println!("[QUEUE] Starting retry of {} pending messages...", count);
@@ -2494,10 +3268,18 @@ impl IrohNetwork {
                             }
                             drop(endpoint_guard);
 
-                            // Try to resend via global mesh
+                            // Try to resend via global mesh. Use the no-requeue
+                            // publish path (queue_on_failure = false) so a failed
+                            // retry doesn't insert a DUPLICATE row - the message
+                            // is already queued; we just bump its retry count.
+                            // Success below means the broadcast was CONFIRMED by
+                            // the stream handler, not merely channel-queued.
                             match serde_json::from_str::<P2PMessage>(&pending_msg.content_json) {
                                 Ok(message) => {
-                                    match self.publish_message(CONTENT_TOPIC, message).await {
+                                    match self
+                                        .publish_message_inner(CONTENT_TOPIC, message, false, false)
+                                        .await
+                                    {
                                         Ok(_) => {
                                             println!(
                                                 "[QUEUE] [OK] Successfully resent message (ID: {})",
@@ -2628,10 +3410,11 @@ impl IrohNetwork {
 
             // Seal to the friend's encryption key - without it we can't (and
             // shouldn't) tell them anything
-            let Some(friend_enc_key) = super::types::SqliteUuid::parse_str(&friend_user_id)
-                .ok()
-                .and_then(|id| self.get_encryption_key_for_user(id))
-            else {
+            let friend_enc_key = match super::types::SqliteUuid::parse_str(&friend_user_id) {
+                Ok(id) => self.get_encryption_key_for_user(id).await,
+                Err(_) => None,
+            };
+            let Some(friend_enc_key) = friend_enc_key else {
                 println!(
                     "[FRIEND-RESEND] No encryption key for {} - skipping",
                     friend_public_key
@@ -2679,6 +3462,7 @@ impl IrohNetwork {
             background_tasks: self.background_tasks.clone(),
             recovering: self.recovering.clone(),
             friend_sync_sent: self.friend_sync_sent.clone(),
+            retrying_pending: self.retrying_pending.clone(),
         }
     }
 
@@ -2774,21 +3558,46 @@ impl IrohNetwork {
         }
     }
 
-    /// Get current user's encryption public key from database
-    pub fn get_user_encryption_public_key(&self) -> Option<String> {
-        // Use try_lock to avoid blocking if network handler holds the lock
-        let conn = match self.db.conn.try_lock() {
-            Ok(c) => c,
-            Err(_) => {
-                println!("[DB] get_user_encryption_public_key: lock busy, retrying...");
-                // One retry after short wait
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                match self.db.conn.try_lock() {
-                    Ok(c) => c,
-                    Err(_) => return None,
+    /// Acquire the DB connection lock (blocking variant for sync helpers).
+    /// Handlers now run in their own spawned tasks, so briefly blocking here
+    /// matches every other `db.conn.lock().unwrap()` in this file - but unlike
+    /// unwrap(), a poisoned mutex is recovered (loudly) instead of cascading
+    /// the panic through the network layer.
+    fn lock_db_conn_blocking(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+        self.db.conn.lock().unwrap_or_else(|poisoned| {
+            eprintln!("[DB] DB mutex poisoned - recovering (a previous holder panicked)");
+            poisoned.into_inner()
+        })
+    }
+
+    /// Acquire the DB connection lock from async code with a bounded retry
+    /// loop (25ms steps, ~500ms total) before falling back to a blocking
+    /// lock. Always returns a guard: callers get a DEFINITIVE answer instead
+    /// of the old single-try_lock-then-give-up pattern that misreported mere
+    /// lock contention as "not a friend" / "no key".
+    async fn lock_db_conn(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+        for _ in 0..20 {
+            // NOTE: the try_lock result must be fully dropped before the sleep
+            // below, or the non-Send guard would be held across the await
+            match self.db.conn.try_lock() {
+                Ok(guard) => return guard,
+                Err(std::sync::TryLockError::WouldBlock) => {}
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                    eprintln!("[DB] DB mutex poisoned - recovering (a previous holder panicked)");
+                    return poisoned.into_inner();
                 }
             }
-        };
+            tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
+        }
+        println!(
+            "[DB] DB lock still contended after ~500ms of retries - falling back to blocking lock"
+        );
+        self.lock_db_conn_blocking()
+    }
+
+    /// Get current user's encryption public key from database
+    pub fn get_user_encryption_public_key(&self) -> Option<String> {
+        let conn = self.lock_db_conn_blocking();
         conn.query_row(
             "SELECT encryption_public_key FROM users WHERE id = ?1",
             rusqlite::params![self.user_id],
@@ -2867,16 +3676,51 @@ impl IrohNetwork {
             return;
         }
 
-        // Store peer NodeId in database for future bootstrap (regardless of user match)
-        // This builds a network of known peers for gossip bootstrapping
+        // Store peer NodeId in database for future bootstrap. This builds a
+        // network of known peers for gossip bootstrapping.
+        //
+        // SECURITY: device_id is an UNAUTHENTICATED claim inside the payload -
+        // only the sender's identity key is authenticated. The unconstrained
+        // `update_device_node_id(device_id, ...)` therefore let any peer
+        // repoint ANY device row (including our own, or a friend's) at a node
+        // they control. The update is bound to rows owned by the authenticated
+        // sender's public key instead.
         let node_id_str = peer_node_id.to_string();
-        if let Err(e) = self.db.update_device_node_id(&device_id, &node_id_str) {
-            println!("[IROH] Warning: Failed to store peer NodeId: {}", e);
-        } else {
-            println!(
-                "[IROH] Stored peer NodeId {} for device {}",
-                node_id_str, device_id
-            );
+        {
+            let conn = self.lock_db_conn_blocking();
+            match conn.execute(
+                "UPDATE devices SET iroh_node_id = ?1 WHERE id = ?2 AND user_public_key = ?3",
+                rusqlite::params![&node_id_str, &device_id, &public_key],
+            ) {
+                Ok(0) => {
+                    // Either we have never seen this device, or the row belongs
+                    // to a DIFFERENT user - in which case the sender just tried
+                    // to hijack someone else's device entry.
+                    let owner: Option<String> = conn
+                        .query_row(
+                            "SELECT user_public_key FROM devices WHERE id = ?1",
+                            rusqlite::params![&device_id],
+                            |row| row.get(0),
+                        )
+                        .ok();
+                    match owner {
+                        Some(owner) if owner != public_key => println!(
+                            "[IROH] [SECURITY] Ignoring presence claiming device {} - that device belongs to {}, not the sender",
+                            device_id,
+                            &owner[..8.min(owner.len())]
+                        ),
+                        _ => println!(
+                            "[IROH] No device row for {} owned by sender - NodeId not stored (presence still processed)",
+                            device_id
+                        ),
+                    }
+                }
+                Ok(_) => println!(
+                    "[IROH] Stored peer NodeId {} for device {}",
+                    node_id_str, device_id
+                ),
+                Err(e) => println!("[IROH] Warning: Failed to store peer NodeId: {}", e),
+            }
         }
 
         // CLEANUP: Remove stale device entries for OTHER users (not our own user)
@@ -2950,8 +3794,19 @@ impl IrohNetwork {
             // NOTE: Using lock() because encryption_public_key is ESSENTIAL for comments/reactions to work.
             // Without this data, sealed envelope encryption will fail and messages won't be delivered.
             {
-                let conn = self.db.conn.lock().unwrap();
-                if let Err(e) = conn.execute(
+                let conn = self.lock_db_conn_blocking();
+                // SECURITY: profile fields (display_name / bio / profile_picture)
+                // are only allowed to OVERWRITE what we already hold when the
+                // accompanying profile signature verifies. Previously the
+                // signature result was merely logged, so an unsigned (or
+                // badly-signed) presence could rewrite a friend's displayed
+                // identity - exactly the impersonation the signature exists to
+                // prevent. A first-contact INSERT still takes the claimed
+                // values (there is nothing to overwrite); the network address
+                // and encryption key are accepted either way, since those are
+                // bound to the authenticated sender key.
+                let result = if signature_valid {
+                    conn.execute(
                             "INSERT INTO users (id, display_name, public_key, encryption_public_key, bio, profile_picture, profile_signature, created_at, updated_at)
                              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                              ON CONFLICT(public_key) DO UPDATE SET
@@ -2972,11 +3827,38 @@ impl IrohNetwork {
                                 chrono::Utc::now().to_rfc3339(),
                                 chrono::Utc::now().to_rfc3339()
                             ],
-                        ) {
-                            println!("[IROH] Warning: Failed to update peer user: {}", e);
-                        } else if encryption_public_key.is_some() {
-                            println!("[IROH] [OK] Stored encryption_public_key for peer {}", &public_key[..8]);
-                        }
+                        )
+                } else {
+                    println!(
+                        "[IROH] [SECURITY] Presence from {} has no valid profile signature - keeping stored profile fields",
+                        &public_key[..8]
+                    );
+                    conn.execute(
+                            "INSERT INTO users (id, display_name, public_key, encryption_public_key, bio, profile_picture, created_at, updated_at)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                             ON CONFLICT(public_key) DO UPDATE SET
+                                encryption_public_key = COALESCE(excluded.encryption_public_key, encryption_public_key),
+                                updated_at = excluded.updated_at",
+                            rusqlite::params![
+                                peer_user_id,
+                                &display_name,
+                                &public_key,
+                                &encryption_public_key,
+                                &bio,
+                                &profile_picture,
+                                chrono::Utc::now().to_rfc3339(),
+                                chrono::Utc::now().to_rfc3339()
+                            ],
+                        )
+                };
+                if let Err(e) = result {
+                    println!("[IROH] Warning: Failed to update peer user: {}", e);
+                } else if encryption_public_key.is_some() {
+                    println!(
+                        "[IROH] [OK] Stored encryption_public_key for peer {}",
+                        &public_key[..8]
+                    );
+                }
             }
 
             // SECURITY: Check for display name changes on existing friends
@@ -3127,7 +4009,7 @@ impl IrohNetwork {
                         // Seal the FriendAccepted to the friend's encryption
                         // key (we have it - their presence just delivered it,
                         // and the handshake stored it)
-                        match self.get_encryption_key_for_user(peer_user_id) {
+                        match self.get_encryption_key_for_user(peer_user_id).await {
                             Some(friend_enc_key) => {
                                 if let Err(e) =
                                     self.send_friend_accepted_sealed(&friend_enc_key).await
@@ -3170,7 +4052,7 @@ impl IrohNetwork {
                         // Seal the FriendRequest to the friend's encryption
                         // key (stored when we scanned their invite; their
                         // presence just refreshed it)
-                        match self.get_encryption_key_for_user(peer_user_id) {
+                        match self.get_encryption_key_for_user(peer_user_id).await {
                             Some(friend_enc_key) => {
                                 if let Err(e) =
                                     self.send_friend_request_sealed(&friend_enc_key).await
@@ -3492,21 +4374,46 @@ impl IrohNetwork {
                     }
         }
 
-        // Update our pending request to accepted (check both directions for safety)
-        // Also save their node_id and relay_url for reconnection
-        // NOTE: Using lock() instead of try_lock() because this MUST succeed - data loss is unacceptable
+        // AUTHORIZATION: a FriendAccepted is only meaningful as the second half
+        // of a handshake WE started. Our X25519 key is published in every invite
+        // QR, so anyone who has seen an invite can seal us a well-formed
+        // FriendAccepted; promoting on that alone handed them friend-level
+        // access. We therefore only flip to 'accepted' when a pending row
+        // exists that WE initiated.
+        let we_initiated_pending = match self
+            .db
+            .has_locally_initiated_pending_request(self.user_id, friend_user_id)
         {
-            let conn = self.db.conn.lock().unwrap();
+            Ok(v) => v,
+            Err(e) => {
+                println!(
+                    "[IROH] Warning: could not check pending friend request ({}) - treating as unsolicited",
+                    e
+                );
+                false
+            }
+        };
+
+        // Did we end up with an accepted friendship? Drives which UI event fires.
+        let mut now_accepted = false;
+
+        {
+            let conn = self.lock_db_conn_blocking();
             let now = chrono::Utc::now().to_rfc3339();
             println!(
-                "[IROH] Updating p2p_connections: user_id={}, friend_user_id={}",
-                self.user_id, friend_user_id
+                "[IROH] Updating p2p_connections: user_id={}, friend_user_id={} (we_initiated_pending={})",
+                self.user_id, friend_user_id, we_initiated_pending
             );
 
-            // First try to update existing pending request (check both directions)
-            let rows_affected = match conn.execute(
+            // Promote the pending request we sent - and ONLY that one. The
+            // initiated_by clause keeps an INCOMING pending request (one they
+            // sent us, awaiting the local user's approval) from being
+            // self-accepted by the sender.
+            let rows_affected = if we_initiated_pending {
+                match conn.execute(
                         "UPDATE p2p_connections SET status = 'accepted', updated_at = ?1, iroh_node_id = ?4, friend_relay_url = ?5
-                         WHERE ((user_id = ?2 AND friend_user_id = ?3) OR (user_id = ?3 AND friend_user_id = ?2)) AND status = 'pending'",
+                         WHERE ((user_id = ?2 AND friend_user_id = ?3) OR (user_id = ?3 AND friend_user_id = ?2))
+                           AND status = 'pending' AND initiated_by = ?2",
                         rusqlite::params![
                             &now,
                             self.user_id,
@@ -3520,15 +4427,19 @@ impl IrohNetwork {
                             println!("[IROH] Warning: Failed to update friend request to accepted: {}", e);
                             0
                         }
-                    };
+                    }
+            } else {
+                0
+            };
 
             if rows_affected > 0 {
+                now_accepted = true;
                 println!(
                     "[IROH] [OK] Friend request accepted by {}, {} row(s) updated",
                     from_public_key, rows_affected
                 );
             } else {
-                // No pending request found - check if already accepted or need to create
+                // No request of ours to promote - check what we already have
                 // Check both directions since connection could be stored either way
                 let existing_status: Option<String> = conn.query_row(
                             "SELECT status FROM p2p_connections
@@ -3539,6 +4450,7 @@ impl IrohNetwork {
 
                 match existing_status.as_deref() {
                     Some("accepted") => {
+                        now_accepted = true;
                         println!("[IROH] Friendship already accepted, updating node info");
                         // Update node info even if already accepted
                         let _ = conn.execute(
@@ -3548,17 +4460,27 @@ impl IrohNetwork {
                                 );
                     }
                     Some(status) => {
-                        println!("[IROH] Unexpected status '{}', forcing to accepted", status);
+                        // e.g. an incoming 'pending' request, or a rejected /
+                        // blocked row. NEVER force these to accepted - only the
+                        // local user may do that. Record the reachability info
+                        // so the address survives, and leave status alone.
+                        println!(
+                            "[IROH] FriendAccepted from {} but connection status is '{}' - refusing to promote; updating node info only",
+                            from_public_key, status
+                        );
                         let _ = conn.execute(
-                                    "UPDATE p2p_connections SET status = 'accepted', iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
+                                    "UPDATE p2p_connections SET iroh_node_id = ?1, friend_relay_url = ?2, updated_at = ?3
                                      WHERE (user_id = ?4 AND friend_user_id = ?5) OR (user_id = ?5 AND friend_user_id = ?4)",
                                     rusqlite::params![&from_node_id, &from_relay_url, &now, self.user_id, friend_user_id],
                                 );
                     }
                     None => {
-                        // CRITICAL FIX: No connection exists - create the user and friendship directly
-                        // This handles the case where our data was cleared or we never received the original FriendRequest
-                        println!("[IROH] No existing connection - creating accepted friendship directly from FriendAccepted");
+                        // Unsolicited FriendAccepted with no connection at all
+                        // (their acceptance arrived after our data was wiped, or
+                        // it is simply a stranger). Record it as an INCOMING
+                        // PENDING request so the local user can approve it -
+                        // never as an accepted friendship.
+                        println!("[IROH] Unsolicited FriendAccepted from {} with no existing connection - recording as a pending incoming request", from_public_key);
 
                         // First ensure the user record exists
                         if let Err(e) = conn.execute(
@@ -3575,39 +4497,51 @@ impl IrohNetwork {
                                     println!("[IROH] Warning: Failed to create user record: {}", e);
                                 }
 
-                        // Create the p2p_connection as already accepted
-                        // initiated_by is set to friend_user_id because THEY initiated by accepting (sending FriendAccepted)
+                        // initiated_by = them: this is an incoming request
+                        // awaiting the local user's approval
                         if let Err(e) = conn.execute(
                                     "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, iroh_node_id, friend_relay_url, created_at, updated_at)
-                                     VALUES (?1, ?2, ?3, 'accepted', ?4, ?5, ?6, ?7, ?8)",
+                                     VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8)",
                                     rusqlite::params![
                                         super::types::SqliteUuid::new(),
                                         self.user_id,
                                         friend_user_id,
-                                        friend_user_id, // They initiated (we're receiving their acceptance)
+                                        friend_user_id, // They initiated
                                         &from_node_id,
                                         &from_relay_url,
                                         &now,
                                         &now,
                                     ],
                                 ) {
-                                    println!("[IROH] Warning: Failed to create accepted friendship: {}", e);
+                                    println!("[IROH] Warning: Failed to create pending friendship: {}", e);
                                 } else {
-                                    println!("[IROH] [OK] Created accepted friendship directly from FriendAccepted message");
+                                    println!("[IROH] [OK] Recorded pending incoming request from unsolicited FriendAccepted");
                                 }
                     }
                 }
             }
         }
 
-        // Emit event to UI so it can refresh the friends list
-        let _ = self.app_handle.emit(
-            "friend-accepted",
-            serde_json::json!({
-                "from_user_id": friend_user_id.to_string(),
-                "from_public_key": from_public_key,
-            }),
-        );
+        // Emit event to UI so it can refresh the friends list. An unsolicited
+        // acceptance is surfaced as a REQUEST to approve, not as a new friend.
+        if now_accepted {
+            let _ = self.app_handle.emit(
+                "friend-accepted",
+                serde_json::json!({
+                    "from_user_id": friend_user_id.to_string(),
+                    "from_public_key": from_public_key,
+                }),
+            );
+        } else {
+            let _ = self.app_handle.emit(
+                "friend-request-received",
+                serde_json::json!({
+                    "from_user_id": friend_user_id.to_string(),
+                    "from_public_key": from_public_key,
+                    "from_node_id": from_node_id,
+                }),
+            );
+        }
 
         // Add their node address to the address book for direct connection
         if let Ok(peer_node_id) = from_node_id.parse::<iroh::EndpointId>() {
@@ -3629,10 +4563,17 @@ impl IrohNetwork {
             }
         }
 
-        println!(
-            "[IROH] [OK] Friendship fully established with {}!",
-            from_public_key
-        );
+        if now_accepted {
+            println!(
+                "[IROH] [OK] Friendship fully established with {}!",
+                from_public_key
+            );
+        } else {
+            println!(
+                "[IROH] FriendAccepted from {} processed without granting friendship (awaiting local approval)",
+                from_public_key
+            );
+        }
     }
 
     /// Seal a payload for the given recipients and publish it on the content
@@ -3670,9 +4611,14 @@ impl IrohNetwork {
         Some((addr.id.to_string(), relay))
     }
 
-    /// Look up a user's stored X25519 encryption public key by user id
-    fn get_encryption_key_for_user(&self, user_id: super::types::SqliteUuid) -> Option<String> {
-        let conn = self.db.conn.try_lock().ok()?;
+    /// Look up a user's stored X25519 encryption public key by user id.
+    /// Uses the bounded-retry lock so lock contention can't silently skip
+    /// friend-critical resends: None means the user genuinely has no key.
+    async fn get_encryption_key_for_user(
+        &self,
+        user_id: super::types::SqliteUuid,
+    ) -> Option<String> {
+        let conn = self.lock_db_conn().await;
         conn.query_row(
             "SELECT encryption_public_key FROM users WHERE id = ?1",
             rusqlite::params![user_id],
@@ -3726,18 +4672,7 @@ impl IrohNetwork {
     /// Get our Ed25519 signing private key (used to sign sealed-envelope
     /// payloads and device sync requests)
     fn get_user_signing_private_key(&self) -> Option<String> {
-        // Use try_lock to avoid blocking if network handler holds the lock
-        let conn = match self.db.conn.try_lock() {
-            Ok(c) => c,
-            Err(_) => {
-                println!("[DB] get_user_signing_private_key: lock busy, retrying...");
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                match self.db.conn.try_lock() {
-                    Ok(c) => c,
-                    Err(_) => return None,
-                }
-            }
-        };
+        let conn = self.lock_db_conn_blocking();
         conn.query_row(
             "SELECT private_key FROM users WHERE id = ?1",
             rusqlite::params![self.user_id],
@@ -3755,7 +4690,22 @@ impl IrohNetwork {
             .device_id
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let last_sync_timestamp = 0; // Get all data for now
+        // PULL MODEL: ask for everything newer than the newest row WE hold,
+        // minus a 1-hour overlap window for clock skew between devices.
+        // apply_sync_data is idempotent/newer-wins, so the overlap only costs
+        // bandwidth. The periodic 30s request loop makes this the natural
+        // retry/ack mechanism: a lost response leaves our watermark unchanged
+        // and the next request re-fetches the same delta.
+        let last_sync_timestamp = match self.db.get_local_sync_watermark(self.user_id) {
+            Ok(watermark) => (watermark - 3600).max(0),
+            Err(e) => {
+                println!(
+                    "[IROH-SYNC] Failed to compute local sync watermark: {} - requesting full sync",
+                    e
+                );
+                0
+            }
+        };
         let timestamp = chrono::Utc::now().timestamp();
         let context =
             sync_request_context(&self.public_key, &device_id, last_sync_timestamp, timestamp);
@@ -3812,6 +4762,7 @@ impl IrohNetwork {
         let payload = super::crypto::ContentPayload::KeyRotation {
             prekey_public: published.public_key,
             signature: published.signature,
+            prekey_created_at: published.created_at,
             sent_at: chrono::Utc::now().timestamp(),
         };
         if let Err(e) = self.publish_sealed(&payload, &recipients).await {
@@ -3826,6 +4777,7 @@ impl IrohNetwork {
         sender_public_key: &str,
         prekey_public: Option<&str>,
         prekey_signature: Option<&str>,
+        prekey_created_at: i64,
     ) {
         let (Some(prekey), Some(sig)) = (prekey_public, prekey_signature) else {
             return;
@@ -3833,22 +4785,41 @@ impl IrohNetwork {
         if prekey.is_empty() {
             return;
         }
-        let context = super::crypto::sealed_box::prekey_signing_context(prekey);
-        if !Database::verify_signature(&context, sig, sender_public_key) {
+        // v2 announcements bind the pre-key's creation time into the signature
+        // (monotonic - a replayed old rotation can't roll the key back). Peers
+        // on older builds send no timestamp; we still verify their v1 signature
+        // during the transition (see prekey_signing_context_v1).
+        let valid = if prekey_created_at > 0 {
+            let context =
+                super::crypto::sealed_box::prekey_signing_context(prekey, prekey_created_at);
+            Database::verify_signature(&context, sig, sender_public_key)
+        } else {
+            let legacy = super::crypto::sealed_box::prekey_signing_context_v1(prekey);
+            Database::verify_signature(&legacy, sig, sender_public_key)
+        };
+        if !valid {
             println!("[PREKEY] Rejecting friend pre-key: bad signature");
             return;
         }
-        if let Err(e) = self.db.set_friend_prekey(sender_public_key, prekey) {
-            println!("[PREKEY] Failed to store friend pre-key: {}", e);
+        match self
+            .db
+            .set_friend_prekey(sender_public_key, prekey, prekey_created_at)
+        {
+            Ok(true) => {}
+            Ok(false) => println!(
+                "[PREKEY] Ignoring non-advancing pre-key announcement (replay or stale) from {}",
+                &sender_public_key[..8.min(sender_public_key.len())]
+            ),
+            Err(e) => println!("[PREKEY] Failed to store friend pre-key: {}", e),
         }
     }
 
     /// True if we have an accepted friendship with `friend_user_id` (either
     /// direction). Backfill and other friend-only responses gate on this.
-    fn is_accepted_friend(&self, friend_user_id: super::types::SqliteUuid) -> bool {
-        let Ok(conn) = self.db.conn.try_lock() else {
-            return false;
-        };
+    /// Uses the bounded-retry lock so mere lock contention can never make a
+    /// real friend look like a stranger.
+    async fn is_accepted_friend(&self, friend_user_id: super::types::SqliteUuid) -> bool {
+        let conn = self.lock_db_conn().await;
         conn.query_row(
             "SELECT 1 FROM p2p_connections
              WHERE ((user_id = ?1 AND friend_user_id = ?2)
@@ -3858,6 +4829,104 @@ impl IrohNetwork {
             |_| Ok(()),
         )
         .is_ok()
+    }
+
+    /// AUTHORIZATION GATE for incoming friend-scoped content (posts, comments,
+    /// reactions, DMs).
+    ///
+    /// The sealed envelope only proves WHO signed a payload - it says nothing
+    /// about whether we ever agreed to hear from them. Our X25519 encryption
+    /// key is published in every invite QR, so anyone who has ever seen an
+    /// invite can seal us content. Without this check that content was
+    /// persisted and rendered exactly like a friend's.
+    ///
+    /// Returns true only for our own other devices, or an ACCEPTED friend who
+    /// is not blocked in either direction.
+    async fn is_authorized_content_sender(&self, sender_public_key: &str, kind: &str) -> bool {
+        let sender_id = super::types::SqliteUuid::from_public_key(sender_public_key);
+        let short = &sender_public_key[..8.min(sender_public_key.len())];
+
+        // Our own other devices are always allowed (same identity key)
+        if sender_public_key == self.public_key || sender_id == self.user_id {
+            return true;
+        }
+
+        if !self.is_accepted_friend(sender_id).await {
+            println!(
+                "[SECURITY] Rejecting {} from {}: not an accepted friend",
+                kind, short
+            );
+            return false;
+        }
+
+        match self.db.is_blocked_either_way(self.user_id, sender_id) {
+            Ok(true) => {
+                println!("[SECURITY] Rejecting {} from blocked user {}", kind, short);
+                false
+            }
+            Ok(false) => true,
+            Err(e) => {
+                // The friendship is already established; a broken block table
+                // shouldn't silently drop a real friend's content
+                println!(
+                    "[SECURITY] Warning: block check failed for {} ({}) - allowing accepted friend",
+                    short, e
+                );
+                true
+            }
+        }
+    }
+
+    /// AUTHORIZATION GATE for incoming community content: the sender must be a
+    /// member of the community they claim to be posting in (and not blocked).
+    /// Community membership, not friendship, is the relevant relation here.
+    fn is_authorized_community_sender(
+        &self,
+        sender_public_key: &str,
+        community_id: super::types::SqliteUuid,
+    ) -> bool {
+        let sender_id = super::types::SqliteUuid::from_public_key(sender_public_key);
+        let short = &sender_public_key[..8.min(sender_public_key.len())];
+
+        if sender_public_key == self.public_key || sender_id == self.user_id {
+            return true;
+        }
+
+        match self.db.is_community_member(community_id, sender_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                println!(
+                    "[SECURITY] Rejecting community post from {}: not a member of {}",
+                    short, community_id
+                );
+                return false;
+            }
+            Err(e) => {
+                println!(
+                    "[SECURITY] Rejecting community post from {}: membership check failed: {}",
+                    short, e
+                );
+                return false;
+            }
+        }
+
+        match self.db.is_blocked_either_way(self.user_id, sender_id) {
+            Ok(true) => {
+                println!(
+                    "[SECURITY] Rejecting community post from blocked user {}",
+                    short
+                );
+                false
+            }
+            Ok(false) => true,
+            Err(e) => {
+                println!(
+                    "[SECURITY] Warning: block check failed for {} ({}) - allowing community member",
+                    short, e
+                );
+                true
+            }
+        }
     }
 
     /// When a friend comes back online, ask them (rate-limited) to re-send the
@@ -3870,15 +4939,17 @@ impl IrohNetwork {
     ) {
         // Rate-limit: presence arrives every 30-120s; one request per friend
         // per 5 minutes is plenty to catch up without a request storm.
+        // NOTE: the timestamp is recorded only AFTER a successful publish -
+        // recording it up front locked the friend out for 5 minutes even when
+        // nothing was actually sent.
         const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
         {
-            let mut sent = self.friend_sync_sent.lock().await;
+            let sent = self.friend_sync_sent.lock().await;
             if let Some(last) = sent.get(&friend_user_id) {
                 if last.elapsed() < MIN_INTERVAL {
                     return;
                 }
             }
-            sent.insert(friend_user_id, std::time::Instant::now());
         }
 
         // Watermark: newest post we hold from this friend, else 7 days ago.
@@ -3905,6 +4976,11 @@ impl IrohNetwork {
         {
             println!("[BACKFILL] Failed to send friend sync request: {}", e);
         } else {
+            // Publish confirmed - only now start the 5-minute rate-limit window
+            self.friend_sync_sent
+                .lock()
+                .await
+                .insert(friend_user_id, std::time::Instant::now());
             println!(
                 "[BACKFILL] Requested catch-up from friend {} since {}",
                 friend_user_id, since
@@ -3914,14 +4990,16 @@ impl IrohNetwork {
 
     /// Answer a friend's FriendSyncRequest: re-send our recent posts (authored
     /// after `since`) sealed to them, flagged is_backfill so they render
-    /// silently. Only accepted friends are answered.
+    /// silently, plus the comments and reactions we authored in the same
+    /// window (sent as the same payload types the live path uses, so the
+    /// receiving handlers are shared). Only accepted friends are answered.
     async fn resend_posts_to_friend(&self, requester_public_key: &str, since: i64) {
         let requester_id = super::types::SqliteUuid::from_public_key(requester_public_key);
-        if requester_id == self.user_id || !self.is_accepted_friend(requester_id) {
+        if requester_id == self.user_id || !self.is_accepted_friend(requester_id).await {
             println!("[BACKFILL] Ignoring sync request from non-friend");
             return;
         }
-        let Some(requester_key) = self.get_encryption_key_for_user(requester_id) else {
+        let Some(requester_key) = self.get_encryption_key_for_user(requester_id).await else {
             println!("[BACKFILL] No encryption key for requester - cannot backfill");
             return;
         };
@@ -3929,7 +5007,7 @@ impl IrohNetwork {
         let since_rfc3339 = chrono::DateTime::from_timestamp(since, 0)
             .unwrap_or_else(chrono::Utc::now)
             .to_rfc3339();
-        // Cap the response so a long-absent friend can't pull an unbounded feed
+        // Cap the responses so a long-absent friend can't pull an unbounded feed
         let posts = match self
             .db
             .get_authored_posts_since(self.user_id, &since_rfc3339, 30)
@@ -3940,14 +5018,45 @@ impl IrohNetwork {
                 return;
             }
         };
-        if posts.is_empty() {
+        let comments = match self
+            .db
+            .get_authored_comments_since(self.user_id, &since_rfc3339, 100)
+        {
+            Ok(c) => c,
+            Err(e) => {
+                println!("[BACKFILL] Failed to gather comments: {}", e);
+                vec![]
+            }
+        };
+        let reactions =
+            match self
+                .db
+                .get_authored_reactions_since(self.user_id, &since_rfc3339, 100)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("[BACKFILL] Failed to gather reactions: {}", e);
+                    vec![]
+                }
+            };
+        if posts.is_empty() && comments.is_empty() && reactions.is_empty() {
             return;
         }
         println!(
-            "[BACKFILL] Re-sending {} post(s) to friend {}",
+            "[BACKFILL] Re-sending {} post(s), {} comment(s), {} reaction(s) to friend {}",
             posts.len(),
+            comments.len(),
+            reactions.len(),
             requester_id
         );
+
+        // The original timestamps ride inside the payloads' sent_at so the
+        // receiver orders backfilled content correctly
+        let rfc3339_to_unix = |ts: &str| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| dt.timestamp())
+                .unwrap_or_else(|_| chrono::Utc::now().timestamp())
+        };
 
         let node_id = self
             .our_addr_strings()
@@ -3956,11 +5065,17 @@ impl IrohNetwork {
             .unwrap_or_default();
         let recipients = [requester_key];
         for (post_id, content) in posts {
+            // Rebuild blob references from the persisted attachment bytes -
+            // the original refs aren't persisted, and resending with empty
+            // refs dropped the post's media entirely. Failures are logged by
+            // the helper; backfill is best-effort. No quota tracking: these
+            // bytes were accounted for at original publish time.
+            let (blob_refs, _failures) = self.build_blob_refs_for_post(post_id, false).await;
             let payload = super::crypto::ContentPayload::Post {
                 post_id: post_id.to_string(),
                 content,
                 node_id: node_id.clone(),
-                blob_refs: vec![],
+                blob_refs,
                 sent_at: chrono::Utc::now().timestamp(),
                 is_backfill: true,
             };
@@ -3968,21 +5083,175 @@ impl IrohNetwork {
                 println!("[BACKFILL] Failed to re-send post {}: {}", post_id, e);
             }
         }
+        for (comment_id, post_id, content, parent_comment_id, created_at) in comments {
+            // Same payload the live comment publish path builds; the payload
+            // has no backfill flag, and the receiver dedups by comment id
+            let payload = super::crypto::ContentPayload::PostComment {
+                comment_id: comment_id.to_string(),
+                post_id: post_id.to_string(),
+                content,
+                parent_comment_id: parent_comment_id.map(|id| id.to_string()),
+                sent_at: rfc3339_to_unix(&created_at),
+            };
+            if let Err(e) = self.publish_sealed(&payload, &recipients).await {
+                println!("[BACKFILL] Failed to re-send comment {}: {}", comment_id, e);
+            }
+        }
+        for (post_id, emoji, created_at) in reactions {
+            // Only reactions that still exist are stored, so backfill is
+            // always an "add"; removals were broadcast live
+            let payload = super::crypto::ContentPayload::PostReaction {
+                post_id: post_id.to_string(),
+                emoji,
+                action: "add".to_string(),
+                sent_at: rfc3339_to_unix(&created_at),
+            };
+            if let Err(e) = self.publish_sealed(&payload, &recipients).await {
+                println!(
+                    "[BACKFILL] Failed to re-send reaction on post {}: {}",
+                    post_id, e
+                );
+            }
+        }
+    }
+
+    /// Build blob references for a post's persisted attachments so the sent
+    /// post carries fetchable media. This is the SINGLE path attachments take
+    /// into the blob store - live post publish, community post publish and
+    /// backfill re-sends all use it. Blob refs from the ORIGINAL publish
+    /// aren't persisted, so re-sends re-encrypt the persisted attachment
+    /// BYTES (media_attachments) with a fresh key and re-store them.
+    ///
+    /// `track_quota`: check the storage quota and record storage used (live
+    /// publish paths). Backfill re-sends pass false - their bytes were
+    /// already accounted for at original publish time.
+    ///
+    /// Returns the refs for successfully stored attachments plus a
+    /// description of each attachment that had to be dropped.
+    pub(crate) async fn build_blob_refs_for_post(
+        &self,
+        post_id: super::types::SqliteUuid,
+        track_quota: bool,
+    ) -> (Vec<super::types::BlobReference>, Vec<String>) {
+        use base64::Engine as _;
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+        use rand::Rng;
+
+        let mut failures = Vec::new();
+
+        let attachments = match self.db.get_post_media(post_id) {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[BLOBS] Failed to load media for post {}: {}", post_id, e);
+                failures.push(format!("failed to load media for post {}: {}", post_id, e));
+                return (vec![], failures);
+            }
+        };
+
+        let mut blob_refs = Vec::new();
+        for attachment in attachments {
+            let data = match base64::engine::general_purpose::STANDARD.decode(&attachment.data) {
+                Ok(d) => d,
+                Err(e) => {
+                    println!(
+                        "[BLOBS] Failed to decode attachment {}: {}",
+                        attachment.id, e
+                    );
+                    failures.push(format!(
+                        "attachment {}: base64 decode failed: {}",
+                        attachment.id, e
+                    ));
+                    continue;
+                }
+            };
+
+            // Check storage quota before storing (live publish paths only)
+            let data_size = data.len() as i64;
+            if track_quota {
+                if let Ok(false) = self.db.can_store(data_size) {
+                    println!(
+                        "[BLOBS] Storage quota exceeded, skipping attachment {}",
+                        attachment.id
+                    );
+                    failures.push(format!(
+                        "attachment {}: storage quota exceeded",
+                        attachment.id
+                    ));
+                    continue;
+                }
+            }
+
+            // Encrypt blob data before storing (Signal/WhatsApp style wire
+            // format: fresh random key, 24-byte nonce prepended)
+            let (encrypted_data, key_bytes) = {
+                let mut rng = rand::thread_rng();
+                let mut key_bytes = [0u8; 32];
+                rng.fill(&mut key_bytes);
+                let mut nonce_bytes = [0u8; 24];
+                rng.fill(&mut nonce_bytes);
+
+                let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+                match cipher.encrypt(XNonce::from_slice(&nonce_bytes), data.as_slice()) {
+                    Ok(ciphertext) => {
+                        let mut encrypted = nonce_bytes.to_vec();
+                        encrypted.extend(ciphertext);
+                        (encrypted, key_bytes)
+                    }
+                    Err(e) => {
+                        println!(
+                            "[BLOBS] Failed to encrypt attachment {}: {:?}",
+                            attachment.id, e
+                        );
+                        failures.push(format!(
+                            "attachment {}: encryption failed: {:?}",
+                            attachment.id, e
+                        ));
+                        continue;
+                    }
+                }
+            };
+
+            match self.store_blob(encrypted_data).await {
+                Ok(hash) => {
+                    if track_quota {
+                        // Track storage used - a failed update drifts quota
+                        // accounting, so at least make it loud
+                        if let Err(e) = self.db.add_storage_used(data_size) {
+                            eprintln!(
+                                "[BLOBS] WARNING: failed to record {} bytes of storage used for attachment {}: {}",
+                                data_size, attachment.id, e
+                            );
+                        }
+                    }
+                    blob_refs.push(super::types::BlobReference {
+                        id: attachment.id,
+                        file_type: attachment.file_type.clone(),
+                        file_size: attachment.file_size,
+                        blob_hash: hex::encode(hash.as_bytes()),
+                        downloaded: true, // we're the sender, blob is local
+                        encryption_key: Some(
+                            base64::engine::general_purpose::STANDARD.encode(key_bytes),
+                        ),
+                    });
+                }
+                Err(e) => {
+                    println!(
+                        "[BLOBS] Failed to store attachment {} as blob: {}",
+                        attachment.id, e
+                    );
+                    failures.push(format!(
+                        "attachment {}: blob store failed: {}",
+                        attachment.id, e
+                    ));
+                }
+            }
+        }
+        (blob_refs, failures)
     }
 
     fn get_user_encryption_private_key(&self) -> Option<String> {
-        // Use try_lock to avoid blocking if network handler holds the lock
-        let conn = match self.db.conn.try_lock() {
-            Ok(c) => c,
-            Err(_) => {
-                println!("[DB] get_user_encryption_private_key: lock busy, retrying...");
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                match self.db.conn.try_lock() {
-                    Ok(c) => c,
-                    Err(_) => return None,
-                }
-            }
-        };
+        let conn = self.lock_db_conn_blocking();
         conn.query_row(
             "SELECT encryption_private_key FROM users WHERE id = ?1",
             rusqlite::params![self.user_id],
@@ -3994,21 +5263,7 @@ impl IrohNetwork {
 
     /// Get friend encryption public keys for creating sealed envelopes
     pub fn get_friend_encryption_public_keys(&self) -> Vec<String> {
-        // Use try_lock to avoid blocking if network handler holds the lock
-        let conn = match self.db.conn.try_lock() {
-            Ok(c) => c,
-            Err(_) => {
-                println!("[DB] get_friend_encryption_public_keys: lock busy, retrying...");
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                match self.db.conn.try_lock() {
-                    Ok(c) => c,
-                    Err(_) => {
-                        println!("[DB] get_friend_encryption_public_keys: lock still busy, returning empty");
-                        return vec![];
-                    }
-                }
-            }
-        };
+        let conn = self.lock_db_conn_blocking();
 
         // DEBUG: Log all p2p_connections for this user
         println!(
@@ -4287,10 +5542,8 @@ impl IrohNetwork {
         let has_gossip = gossip_guard.is_some();
         drop(gossip_guard);
 
-        // Check topic subscription
-        let topics_guard = self.topics.lock().await;
-        let has_content_topic = topics_guard.contains_key(CONTENT_TOPIC);
-        drop(topics_guard);
+        // Check topic subscription (a dead stream handler counts as unsubscribed)
+        let has_content_topic = self.is_topic_subscribed(CONTENT_TOPIC).await;
 
         // Check last successful presence
         let presence_guard = self.last_presence_success.lock().await;
@@ -4356,6 +5609,21 @@ impl IrohNetwork {
         (is_healthy, needs_reconnect, status)
     }
 
+    /// True if the database knows of another device belonging to THIS user
+    /// (same public key, different device id). Cheap gate for device sync:
+    /// single-device users have nobody to sync with, so broadcasting periodic
+    /// DeviceSyncRequests mesh-wide is pure noise for them.
+    fn has_other_own_devices(&self) -> bool {
+        let Some(device_id) = &self.device_id else {
+            return false;
+        };
+        match self.db.get_peer_node_ids(&self.public_key, device_id) {
+            Ok(ids) => !ids.is_empty(),
+            // Fail open: a broken query shouldn't silently disable device sync
+            Err(_) => true,
+        }
+    }
+
     /// Request device sync from other devices with the same user account
     /// Called after recovery to catch up on any content missed while disconnected
     async fn request_device_sync(&self) {
@@ -4413,13 +5681,15 @@ impl IrohNetwork {
         self.peer_heartbeats.lock().await.clear();
         self.peer_retry_counts.lock().await.clear();
 
-        // Check if we need to re-subscribe to the content topic
-        let topics_guard = self.topics.lock().await;
-        let has_content_topic = topics_guard.contains_key(CONTENT_TOPIC);
-        drop(topics_guard);
+        // Check if we need to re-subscribe to the content topic.
+        // is_topic_subscribed() treats an entry whose broadcast channel is
+        // closed (stream handler died/panicked) as NOT subscribed and removes
+        // it - previously such a zombie entry made recover() skip the
+        // re-subscribe while publish_message kept failing forever.
+        let has_content_topic = self.is_topic_subscribed(CONTENT_TOPIC).await;
 
         if !has_content_topic {
-            println!("[IROH-RECOVER] Content topic missing, re-subscribing...");
+            println!("[IROH-RECOVER] Content topic missing or handler dead, re-subscribing...");
             self.subscribe_topic(CONTENT_TOPIC).await?;
         }
 
@@ -4472,6 +5742,15 @@ impl IrohNetwork {
             drop(gossip);
         }
 
+        // Shut down the blob store so the fs-backed database flushes and
+        // releases its lock - a following re-init loads the same directory
+        self.downloader.lock().await.take();
+        if let Some(store) = self.store.lock().await.take() {
+            if let Err(e) = store.shutdown().await {
+                println!("[IROH] Warning: blob store shutdown failed: {}", e);
+            }
+        }
+
         // Close endpoint
         if let Some(endpoint) = self.endpoint.lock().await.take() {
             let _ = endpoint.close().await;
@@ -4479,5 +5758,39 @@ impl IrohNetwork {
 
         println!("[IROH] Shutdown complete");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{is_supported_media_type, is_supported_reaction_emoji};
+
+    #[test]
+    fn reaction_emoji_allowlist() {
+        // The set the UI actually offers
+        for emoji in ["👍", "❤️", "😂", "😮", "😢", "😡"] {
+            assert!(
+                is_supported_reaction_emoji(emoji),
+                "{} should be allowed",
+                emoji
+            );
+        }
+        // Anything else - including markup a peer might hope the UI renders
+        assert!(!is_supported_reaction_emoji("<img src=x onerror=alert(1)>"));
+        assert!(!is_supported_reaction_emoji("👍👍"));
+        assert!(!is_supported_reaction_emoji(""));
+        assert!(!is_supported_reaction_emoji("🚀"));
+    }
+
+    #[test]
+    fn media_type_allowlist() {
+        assert!(is_supported_media_type("image/png"));
+        assert!(is_supported_media_type("IMAGE/PNG"));
+        assert!(is_supported_media_type("video/webm; codecs=vp9"));
+        // SVG is an active document - never accepted as an image
+        assert!(!is_supported_media_type("image/svg+xml"));
+        assert!(!is_supported_media_type("text/html"));
+        assert!(!is_supported_media_type("\"><script>alert(1)</script>"));
+        assert!(!is_supported_media_type(""));
     }
 }

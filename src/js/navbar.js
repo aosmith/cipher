@@ -261,18 +261,52 @@ const Navbar = {
             const timeAgo = this.formatTimeAgo(notification.createdAt);
             const unreadClass = notification.read ? '' : 'unread';
 
+            // Notification fields are derived from peer activity. The old inline
+            // onclick only escaped single quotes in `data` (and nothing at all in
+            // id/type), so a backslash or a double quote broke out of the handler.
+            // Everything now lives in data-* attributes read back via dataset.
             return `
-                <div class="notification-item ${unreadClass}" data-notification-id="${notification.id}" onclick="Navbar.handleNotificationClick('${notification.id}', '${notification.notificationType}', ${notification.data ? "'" + notification.data.replace(/'/g, "\\'") + "'" : 'null'})">
-                    <div class="notification-icon">${icon}</div>
+                <div class="notification-item ${unreadClass}"
+                     data-notification-id="${Utils.escapeHtml(notification.id)}"
+                     data-notification-type="${Utils.escapeHtml(notification.notificationType)}"
+                     data-notification-payload="${Utils.escapeHtml(notification.data == null ? '' : notification.data)}">
+                    <div class="notification-icon">${Utils.escapeHtml(icon)}</div>
                     <div class="notification-content">
                         <div class="notification-title">${Utils.escapeHtml(notification.title)}</div>
                         <div class="notification-message">${Utils.escapeHtml(notification.message)}</div>
-                        <div class="notification-time">${timeAgo}</div>
+                        <div class="notification-time">${Utils.escapeHtml(timeAgo)}</div>
                     </div>
-                    <button class="notification-dismiss" onclick="event.stopPropagation(); Navbar.dismissNotification('${notification.id}')" title="Dismiss">×</button>
+                    <button class="notification-dismiss" data-notification-dismiss="${Utils.escapeHtml(notification.id)}" title="Dismiss">×</button>
                 </div>
             `;
         }).join('');
+
+        this.bindNotificationDelegation();
+    },
+
+    // Delegated handlers for the notification list (installed once).
+    bindNotificationDelegation: function() {
+        const list = document.getElementById('notificationsList');
+        if (!list || list.dataset.delegationBound === '1') return;
+        list.dataset.delegationBound = '1';
+
+        list.addEventListener('click', (event) => {
+            const dismissBtn = event.target.closest('[data-notification-dismiss]');
+            if (dismissBtn) {
+                event.stopPropagation();
+                Navbar.dismissNotification(dismissBtn.dataset.notificationDismiss);
+                return;
+            }
+
+            const item = event.target.closest('[data-notification-id]');
+            if (item) {
+                Navbar.handleNotificationClick(
+                    item.dataset.notificationId,
+                    item.dataset.notificationType,
+                    item.dataset.notificationPayload || null
+                );
+            }
+        });
     },
 
     // Get icon for notification type

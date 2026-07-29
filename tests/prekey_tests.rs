@@ -37,7 +37,10 @@ fn test_prekey_signature_verifies_against_identity() {
 
     let published = db.ensure_current_prekey(user.id, &signing_key).unwrap();
 
-    let ctx = app::crypto::sealed_box::prekey_signing_context(&published.public_key);
+    let ctx = app::crypto::sealed_box::prekey_signing_context(
+        &published.public_key,
+        published.created_at,
+    );
     assert!(Database::verify_signature(
         &ctx,
         &published.signature,
@@ -92,7 +95,10 @@ fn test_set_and_read_friend_prekey() {
     let _ = alice;
 
     let bob_prekey = "Ym9iX3ByZWtleV9wdWJsaWNfa2V5X3BsYWNlaG9sZGVyXzk4";
-    db.set_friend_prekey(bob_pub, bob_prekey).unwrap();
+    let created_at = chrono::Utc::now().timestamp();
+    assert!(db
+        .set_friend_prekey(bob_pub, bob_prekey, created_at)
+        .unwrap());
 
     let (stored_prekey, updated_at): (Option<String>, Option<i64>) = {
         let conn = db.conn.lock().unwrap();
@@ -104,7 +110,59 @@ fn test_set_and_read_friend_prekey() {
         .unwrap()
     };
     assert_eq!(stored_prekey.as_deref(), Some(bob_prekey));
-    assert!(updated_at.is_some());
+    assert_eq!(updated_at, Some(created_at));
+}
+
+#[test]
+fn test_friend_prekey_rejects_rollback() {
+    // A replayed OLDER rotation must not roll a friend's pre-key backward:
+    // set_friend_prekey only accepts announcements whose signed created_at
+    // advances past the one we already hold.
+    let (db, _alice) = db_with_user("Alice");
+    let bob_pub = "kQgclgotvTIvtTDkdwmvI/YSdGppOmSNvoI3HtBAABs=";
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO users (id, display_name, public_key, encryption_public_key, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                app::SqliteUuid::from_public_key(bob_pub),
+                "Bob",
+                bob_pub,
+                "Ym9iX2VuY3J5cHRpb25fa2V5X3BsYWNlaG9sZGVyXzEyMzQ1",
+                "2024-01-01T00:00:00+00:00",
+                "2024-01-01T00:00:00+00:00",
+            ],
+        )
+        .unwrap();
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let current = "Y3VycmVudF9wcmVrZXlfcHVibGljX2tleV9wbGFjZWhvbGRlcg==";
+    let old = "b2xkX3ByZWtleV9wdWJsaWNfa2V5X3BsYWNlaG9sZGVyXzAwMQ==";
+
+    assert!(db.set_friend_prekey(bob_pub, current, now).unwrap());
+
+    // Replay of an older rotation is refused and leaves the stored key alone
+    assert!(!db
+        .set_friend_prekey(bob_pub, old, now - 7 * 24 * 3600)
+        .unwrap());
+    // A different key claiming the SAME instant is refused too
+    assert!(!db.set_friend_prekey(bob_pub, old, now).unwrap());
+
+    let stored: Option<String> = {
+        let conn = db.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT prekey_public FROM users WHERE public_key = ?1",
+            rusqlite::params![bob_pub],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(stored.as_deref(), Some(current));
+
+    // A genuinely newer rotation still goes through
+    assert!(db.set_friend_prekey(bob_pub, old, now + 60).unwrap());
 }
 
 #[test]

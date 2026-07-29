@@ -13,6 +13,85 @@ pub struct SyncData {
     pub reactions: Vec<ReactionSync>,
 }
 
+impl SyncData {
+    fn empty() -> Self {
+        SyncData {
+            posts: Vec::new(),
+            messages: Vec::new(),
+            friends: Vec::new(),
+            comments: Vec::new(),
+            reactions: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.posts.is_empty()
+            && self.messages.is_empty()
+            && self.friends.is_empty()
+            && self.comments.is_empty()
+            && self.reactions.is_empty()
+    }
+
+    /// Partition this delta into independent, self-contained SyncData chunks
+    /// whose serialized-JSON size stays under `budget_bytes`. A single sealed
+    /// envelope carrying the whole delta silently exceeded the gossip message
+    /// cap and became undeliverable; apply_sync_data is idempotent and
+    /// order-independent, so each chunk can be sent (and applied) on its own.
+    /// A single row larger than the budget is still sent in its own chunk,
+    /// with a loud log - the publish-path size check gives it a distinct error
+    /// if it really is undeliverable.
+    pub fn into_chunks(self, budget_bytes: usize) -> Vec<SyncData> {
+        let SyncData {
+            posts,
+            messages,
+            friends,
+            comments,
+            reactions,
+        } = self;
+
+        let mut chunks: Vec<SyncData> = Vec::new();
+        let mut current = SyncData::empty();
+        let mut current_size = 0usize;
+
+        macro_rules! pack {
+            ($rows:expr, $field:ident) => {
+                for row in $rows {
+                    // Serialization of a plain data row can't realistically
+                    // fail; treat a failure as oversized so it's logged.
+                    let row_size = serde_json::to_string(&row)
+                        .map(|s| s.len())
+                        .unwrap_or(budget_bytes + 1);
+                    if row_size > budget_bytes {
+                        eprintln!(
+                            "[SYNC] Oversized {} row: {} bytes exceeds the {}-byte chunk budget - sending it in its own chunk (it may exceed the gossip size cap)",
+                            stringify!($field),
+                            row_size,
+                            budget_bytes
+                        );
+                    }
+                    if current_size + row_size > budget_bytes && !current.is_empty() {
+                        chunks.push(std::mem::replace(&mut current, SyncData::empty()));
+                        current_size = 0;
+                    }
+                    current.$field.push(row);
+                    current_size += row_size;
+                }
+            };
+        }
+
+        pack!(posts, posts);
+        pack!(messages, messages);
+        pack!(friends, friends);
+        pack!(comments, comments);
+        pack!(reactions, reactions);
+
+        if !current.is_empty() {
+            chunks.push(current);
+        }
+        chunks
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommentSync {
     pub id: SqliteUuid,
@@ -45,18 +124,25 @@ pub struct FriendSync {
 }
 
 impl Database {
-    /// Get data that needs to be synced to other devices (data created/updated since last sync)
-    pub fn get_sync_data(&self, device_id: &str, user_id: SqliteUuid) -> SqliteResult<SyncData> {
+    /// Get data created/updated after `since_rfc3339`, for syncing to another
+    /// of the user's devices. STATELESS RESPONDER: the cutoff comes from the
+    /// REQUESTER (its own watermark, minus an overlap window) - the responder
+    /// keeps no per-device cursor. The old design gated this on the
+    /// responder's own sync_state cursors, which the responder then advanced
+    /// whenever it APPLIED an incoming sync - so after device A applied B's
+    /// data, A's pre-existing rows were never sent to B.
+    pub fn get_sync_data(
+        &self,
+        user_id: SqliteUuid,
+        since_rfc3339: &str,
+    ) -> SqliteResult<SyncData> {
         let conn = self.conn.lock().unwrap();
 
-        // Get last sync timestamps for each table (use _with_conn to avoid deadlock)
-        let last_post_sync = Self::get_last_sync_timestamp_with_conn(&conn, device_id, "posts")?;
-        let last_message_sync =
-            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "messages")?;
-        let last_friend_sync =
-            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "p2p_connections")?;
+        let last_post_sync = since_rfc3339;
+        let last_message_sync = since_rfc3339;
+        let last_friend_sync = since_rfc3339;
 
-        // Get posts created/updated since last sync
+        // Get posts created/updated since the requester's watermark
         let mut post_stmt = conn.prepare(
             "SELECT p.id, p.user_id, u.display_name, p.content, p.encrypted, p.pinned, p.shared_post_id, p.share_comment, p.created_at, p.updated_at
              FROM posts p
@@ -133,8 +219,7 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Get comments created/updated since last sync (on user's posts or by user)
-        let last_comment_sync =
-            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_comments")?;
+        let last_comment_sync = since_rfc3339;
         let mut comment_stmt = conn.prepare(
             "SELECT c.id, c.post_id, c.user_id, c.content, c.parent_comment_id, c.created_at, c.updated_at
              FROM post_comments c
@@ -158,8 +243,7 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Get reactions created since last sync (on user's posts or by user)
-        let last_reaction_sync =
-            Self::get_last_sync_timestamp_with_conn(&conn, device_id, "post_reactions")?;
+        let last_reaction_sync = since_rfc3339;
         let mut reaction_stmt = conn.prepare(
             "SELECT r.id, r.post_id, r.user_id, r.emoji, r.created_at
              FROM post_reactions r
@@ -189,14 +273,17 @@ impl Database {
         })
     }
 
-    /// Apply synced data from another device with timestamp-based conflict resolution
+    /// Apply synced data from another device with timestamp-based conflict resolution.
+    /// Runs as a single transaction (BEGIN IMMEDIATE): a mid-loop error rolls
+    /// everything back instead of committing a partial, visible sync.
     pub fn apply_sync_data(&self, sync_data: &SyncData) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         // Insert or update posts - only if incoming data is newer or doesn't exist
         for post in &sync_data.posts {
             // Check if post exists and get its updated_at timestamp
-            let existing_updated_at: Option<String> = conn
+            let existing_updated_at: Option<String> = tx
                 .query_row(
                     "SELECT updated_at FROM posts WHERE id = ?1",
                     params![post.id],
@@ -208,7 +295,7 @@ impl Database {
             if existing_updated_at.is_none()
                 || existing_updated_at.as_ref().unwrap() < &post.updated_at
             {
-                conn.execute(
+                tx.execute(
                     "INSERT OR REPLACE INTO posts (id, user_id, content, encrypted, pinned, shared_post_id, share_comment, created_at, updated_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
@@ -228,7 +315,7 @@ impl Database {
 
         // Insert or update messages - only if incoming data is newer or doesn't exist
         for message in &sync_data.messages {
-            let existing_updated_at: Option<String> = conn
+            let existing_updated_at: Option<String> = tx
                 .query_row(
                     "SELECT updated_at FROM messages WHERE id = ?1",
                     params![message.id],
@@ -239,7 +326,7 @@ impl Database {
             if existing_updated_at.is_none()
                 || existing_updated_at.as_ref().unwrap() < &message.updated_at
             {
-                conn.execute(
+                tx.execute(
                     "INSERT OR REPLACE INTO messages
                      (id, sender_id, recipient_id, content, encrypted, signature, thread_id,
                       disappear_after_seconds, disappears_at, created_at, updated_at)
@@ -263,7 +350,7 @@ impl Database {
 
         // Insert or update friend connections - only if incoming data is newer or doesn't exist
         for friend in &sync_data.friends {
-            let existing_updated_at: Option<String> = conn
+            let existing_updated_at: Option<String> = tx
                 .query_row(
                     "SELECT updated_at FROM p2p_connections WHERE id = ?1",
                     params![friend.id],
@@ -274,7 +361,7 @@ impl Database {
             if existing_updated_at.is_none()
                 || existing_updated_at.as_ref().unwrap() < &friend.updated_at
             {
-                conn.execute(
+                tx.execute(
                     "INSERT OR REPLACE INTO p2p_connections
                      (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -293,7 +380,7 @@ impl Database {
 
         // Insert or update comments - only if incoming data is newer or doesn't exist
         for comment in &sync_data.comments {
-            let existing_updated_at: Option<String> = conn
+            let existing_updated_at: Option<String> = tx
                 .query_row(
                     "SELECT updated_at FROM post_comments WHERE id = ?1",
                     params![comment.id],
@@ -304,7 +391,7 @@ impl Database {
             if existing_updated_at.is_none()
                 || existing_updated_at.as_ref().unwrap() < &comment.updated_at
             {
-                conn.execute(
+                tx.execute(
                     "INSERT OR REPLACE INTO post_comments
                      (id, post_id, user_id, content, parent_comment_id, created_at, updated_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -323,7 +410,7 @@ impl Database {
 
         // Insert reactions - use INSERT OR IGNORE since reactions don't have updated_at
         for reaction in &sync_data.reactions {
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO post_reactions
                  (id, post_id, user_id, emoji, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -337,26 +424,44 @@ impl Database {
             )?;
         }
 
+        tx.commit()?;
         Ok(())
     }
 
-    /// Get the last sync timestamp for a specific table and device (internal helper with connection)
-    fn get_last_sync_timestamp_with_conn(
-        conn: &rusqlite::Connection,
-        device_id: &str,
-        table_name: &str,
-    ) -> SqliteResult<String> {
-        let mut stmt = conn.prepare(
-            "SELECT last_sync_timestamp FROM sync_state
-             WHERE device_id = ?1 AND table_name = ?2",
-        )?;
+    /// The newest row timestamp this device holds across the device-synced
+    /// tables, as unix seconds (0 if we hold nothing). The REQUESTER computes
+    /// this and puts it (minus an overlap window for clock skew) in its
+    /// DeviceSyncRequest, so responders only send what we might be missing.
+    /// This replaces the per-device sync_state cursors, which corrupted the
+    /// protocol: applying an incoming sync advanced the cursor that gated
+    /// what we SENT.
+    pub fn get_local_sync_watermark(&self, user_id: SqliteUuid) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
 
-        let result: Result<String, _> = stmt.query_row(params![device_id, table_name], |row| {
-            row.get("last_sync_timestamp")
-        });
+        let queries: [&str; 5] = [
+            "SELECT MAX(MAX(created_at), MAX(updated_at)) FROM posts WHERE user_id = ?1",
+            "SELECT MAX(MAX(created_at), MAX(updated_at)) FROM messages
+             WHERE sender_id = ?1 OR recipient_id = ?1",
+            "SELECT MAX(MAX(created_at), MAX(updated_at)) FROM p2p_connections WHERE user_id = ?1",
+            "SELECT MAX(MAX(c.created_at), MAX(c.updated_at)) FROM post_comments c
+             INNER JOIN posts p ON c.post_id = p.id
+             WHERE c.user_id = ?1 OR p.user_id = ?1",
+            "SELECT MAX(r.created_at) FROM post_reactions r
+             INNER JOIN posts p ON r.post_id = p.id
+             WHERE r.user_id = ?1 OR p.user_id = ?1",
+        ];
 
-        // If no sync state exists, return a very old timestamp
-        Ok(result.unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()))
+        let mut newest: i64 = 0;
+        for sql in queries {
+            let ts: Option<String> = conn.query_row(sql, params![user_id], |row| row.get(0))?;
+            if let Some(ts) = ts {
+                // Timestamps are written as RFC3339 throughout the codebase
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&ts) {
+                    newest = newest.max(dt.timestamp());
+                }
+            }
+        }
+        Ok(newest)
     }
 
     /// Update the last sync timestamp for a specific table and device
@@ -383,13 +488,13 @@ impl Database {
         Ok(())
     }
 
-    /// Get sync status - returns count of items that need syncing
+    /// Get sync status - returns count of items newer than `since_rfc3339`
     pub fn get_sync_status(
         &self,
-        device_id: &str,
         user_id: SqliteUuid,
+        since_rfc3339: &str,
     ) -> SqliteResult<(usize, usize, usize, usize, usize)> {
-        let sync_data = self.get_sync_data(device_id, user_id)?;
+        let sync_data = self.get_sync_data(user_id, since_rfc3339)?;
         Ok((
             sync_data.posts.len(),
             sync_data.messages.len(),
@@ -401,6 +506,23 @@ impl Database {
 }
 
 impl Database {
+    /// Read-only replay check: has this sealed-envelope message_id already
+    /// been recorded as processed? Unlike mark_envelope_seen this NEVER
+    /// inserts - envelopes are only marked seen after their handler succeeds
+    /// (or when they aren't addressed to us), so a transient handler failure
+    /// doesn't permanently discard the envelope.
+    pub fn is_envelope_seen(&self, message_id: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let seen = conn
+            .query_row(
+                "SELECT 1 FROM seen_envelopes WHERE message_id = ?1",
+                params![message_id],
+                |_| Ok(()),
+            )
+            .is_ok();
+        Ok(seen)
+    }
+
     /// Record a sealed-envelope message_id for replay protection.
     /// Returns Ok(true) the first time an id is seen, Ok(false) on a replay.
     pub fn mark_envelope_seen(&self, message_id: &str) -> SqliteResult<bool> {

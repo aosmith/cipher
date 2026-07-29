@@ -109,13 +109,13 @@ pub async fn create_community_invite(
         .ok_or("P2P network not initialized")?
         .clone();
 
-    let node_id = {
-        let endpoint_guard = network.endpoint.blocking_lock();
-        if let Some(endpoint) = endpoint_guard.as_ref() {
-            endpoint.id().to_string()
-        } else {
-            return Err("Endpoint not initialized".to_string());
-        }
+    // Clone endpoint to avoid holding lock during await - blocking_lock()
+    // panics on a runtime thread (same pattern as iroh_generate_invite)
+    let endpoint_clone = network.endpoint.lock().await.clone();
+    let node_id = if let Some(endpoint) = endpoint_clone.as_ref() {
+        endpoint.id().to_string()
+    } else {
+        return Err("Endpoint not initialized".to_string());
     };
 
     // Build binary payload
@@ -441,8 +441,36 @@ pub async fn publish_community_post(
         .unwrap_or(false)
     };
 
-    // Get post attachments
-    let attachments = db.get_post_media(post_id).ok().filter(|v| !v.is_empty());
+    // Get network - clone Arc to release lock before await
+    let network = IROH_NETWORK
+        .lock()
+        .map_err(|_| "Failed to lock network")?
+        .as_ref()
+        .ok_or("P2P network not initialized")?
+        .clone();
+
+    // Attachments travel as encrypted blob refs (same mechanism as regular
+    // posts in iroh_publish_post) - embedding base64 bytes in the envelope
+    // blew past the gossip message size cap for any real image
+    let (blob_refs, dropped_attachments) = network.build_blob_refs_for_post(post_id, true).await;
+    if blob_refs.is_empty() && !dropped_attachments.is_empty() {
+        return Err(format!(
+            "All {} attachment(s) failed to store: {}",
+            dropped_attachments.len(),
+            dropped_attachments.join("; ")
+        ));
+    }
+    if !dropped_attachments.is_empty() {
+        eprintln!(
+            "[COMMUNITY] WARNING: publishing post {} without {} failed attachment(s): {}",
+            post_id,
+            dropped_attachments.len(),
+            dropped_attachments.join("; ")
+        );
+    }
+
+    // Our NodeId so members can fetch the blobs from us
+    let node_id = network.get_node_id().await;
 
     // Create sealed envelope for all members
     let envelope = GossipEnvelope::new_community_post(
@@ -450,7 +478,8 @@ pub async fn publish_community_post(
         &community_id.to_string(),
         &community.name,
         &post.content,
-        attachments,
+        &node_id,
+        &blob_refs,
         show_in_main_feed,
         &member_keys,
         &sender_priv_key,
@@ -460,25 +489,16 @@ pub async fn publish_community_post(
     let envelope_json = serde_json::to_string(&envelope)
         .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
 
-    // Broadcast via Iroh - clone Arc to release lock before await
-    let network_opt = IROH_NETWORK
-        .lock()
-        .map_err(|_| "Failed to lock network")?
-        .clone();
-
-    if let Some(network) = network_opt {
-        let message = P2PMessage::SealedEnvelope { envelope_json };
-        network
-            .publish_message(CONTENT_TOPIC, message)
-            .await
-            .map_err(|e| format!("Failed to broadcast: {}", e))?;
-        println!(
-            "[COMMUNITY] Post published to {} members",
-            member_keys.len()
-        );
-    } else {
-        return Err("P2P network not initialized".to_string());
-    }
+    let message = P2PMessage::SealedEnvelope { envelope_json };
+    network
+        .publish_message(CONTENT_TOPIC, message)
+        .await
+        .map_err(|e| format!("Failed to broadcast: {}", e))?;
+    println!(
+        "[COMMUNITY] Post published to {} members ({} blob refs)",
+        member_keys.len(),
+        blob_refs.len()
+    );
 
     Ok(())
 }

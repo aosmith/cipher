@@ -2,12 +2,7 @@
 // Global mesh architecture: all nodes on cipher/content/v1
 
 use base64::{engine::general_purpose, Engine as _};
-use chacha20poly1305::{
-    aead::{Aead, KeyInit},
-    Key, XChaCha20Poly1305, XNonce,
-};
 use lazy_static::lazy_static;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -265,8 +260,14 @@ pub async fn iroh_send_message(
     // DMs are sealed to the recipient's encryption key. The old plaintext
     // DirectMessage broadcast the sender/recipient pair and timing to the
     // whole mesh even though the content was encrypted.
+    // Seal to the recipient's CURRENT rotating pre-key when we have a fresh
+    // one (falling back to their identity key inside best_recipient_key_for_user
+    // when we don't) - the same selection posts/comments/reactions use. Sealing
+    // DMs straight to the static identity key meant a later identity-key
+    // compromise decrypted every recorded DM; the pre-key path gives DMs the
+    // same forward secrecy as the rest of the content types.
     let recipient_encryption_key = db
-        .get_user_encryption_public_key(to_user_id)
+        .best_recipient_key_for_user(to_user_id)
         .map_err(|e| format!("Failed to look up recipient key: {}", e))?
         .filter(|k| !k.is_empty())
         .ok_or("Recipient's encryption key is unknown - wait for their presence or re-add them")?;
@@ -313,14 +314,6 @@ pub async fn iroh_publish_post(
         .clone();
     println!("[PUBLISH-POST] Step 1: DONE - Got network");
 
-    // Get post attachments from database
-    println!("[PUBLISH-POST] Step 2: Getting post attachments from DB...");
-    let attachments = db.get_post_media(post_id).ok();
-    println!(
-        "[PUBLISH-POST] Step 2: DONE - Got {} attachments",
-        attachments.as_ref().map(|a| a.len()).unwrap_or(0)
-    );
-
     // Get our encryption keys (public key fetched for future use with multi-device sync)
     println!("[PUBLISH-POST] Step 3: Getting encryption public key from DB...");
     let _our_encryption_public_key = db
@@ -352,119 +345,34 @@ pub async fn iroh_publish_post(
         &node_id[..8.min(node_id.len())]
     );
 
-    // Store attachments as blobs (same path for both encrypted and unencrypted)
-    let mut blob_refs = Vec::new();
-    if let Some(ref atts) = attachments {
-        println!(
-            "[IROH] Post has {} attachments, storing as blobs via iroh",
-            atts.len()
-        );
-
-        for attachment in atts {
-            // Decode base64 data
-            let data = match base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                &attachment.data,
-            ) {
-                Ok(d) => d,
-                Err(e) => {
-                    println!(
-                        "[IROH] Failed to decode attachment {}: {}",
-                        attachment.id, e
-                    );
-                    continue;
-                }
-            };
-
-            println!(
-                "[IROH] Storing attachment {} ({} bytes) as blob...",
-                attachment.id,
-                data.len()
-            );
-
-            // Check storage quota before storing
-            let data_size = data.len() as i64;
-            if let Ok(can_store) = db.can_store(data_size) {
-                if !can_store {
-                    println!(
-                        "[IROH] Storage quota exceeded, skipping attachment {}",
-                        attachment.id
-                    );
-                    continue;
-                }
-            }
-
-            // Encrypt blob data before storing (Signal/WhatsApp style)
-            // Scope the encryption to avoid rng crossing await boundary
-            let (encrypted_data, key_bytes) = {
-                // Generate random 32-byte key for this blob
-                let mut rng = rand::thread_rng();
-                let mut key_bytes = [0u8; 32];
-                rng.fill(&mut key_bytes);
-
-                // Generate random 24-byte nonce
-                let mut nonce_bytes = [0u8; 24];
-                rng.fill(&mut nonce_bytes);
-
-                // Encrypt with XChaCha20Poly1305
-                let key = Key::from_slice(&key_bytes);
-                let cipher = XChaCha20Poly1305::new(key);
-                let nonce = XNonce::from_slice(&nonce_bytes);
-
-                match cipher.encrypt(nonce, data.as_slice()) {
-                    Ok(ciphertext) => {
-                        // Prepend nonce to ciphertext (nonce is not secret)
-                        let mut encrypted = nonce_bytes.to_vec();
-                        encrypted.extend(ciphertext);
-                        (encrypted, key_bytes)
-                    }
-                    Err(e) => {
-                        println!(
-                            "[IROH] Failed to encrypt attachment {}: {:?}",
-                            attachment.id, e
-                        );
-                        continue;
-                    }
-                }
-            };
-
-            println!(
-                "[IROH] Encrypted attachment {} ({} bytes -> {} bytes)",
-                attachment.id,
-                data.len(),
-                encrypted_data.len()
-            );
-
-            // Store encrypted blob
-            match network.store_blob(encrypted_data).await {
-                Ok(hash) => {
-                    // Track storage used
-                    let _ = db.add_storage_used(data_size);
-
-                    let blob_ref = crate::app::types::BlobReference {
-                        id: attachment.id,
-                        file_type: attachment.file_type.clone(),
-                        file_size: attachment.file_size,
-                        blob_hash: hex::encode(hash.as_bytes()),
-                        downloaded: true, // We're the sender, blob is local
-                        encryption_key: Some(general_purpose::STANDARD.encode(&key_bytes)),
-                    };
-                    blob_refs.push(blob_ref);
-                    println!(
-                        "[IROH] [OK] Stored encrypted attachment {} as blob {}",
-                        attachment.id,
-                        hex::encode(hash.as_bytes())
-                    );
-                }
-                Err(e) => {
-                    println!(
-                        "[IROH] Failed to store attachment {} as blob: {}",
-                        attachment.id, e
-                    );
-                }
-            }
-        }
+    // Store attachments as encrypted blobs via the shared helper (same path
+    // the backfill re-send and community posts use). Quota checking and
+    // storage accounting happen inside the helper.
+    println!("[PUBLISH-POST] Step 7: Storing attachments as encrypted blobs...");
+    let (blob_refs, dropped_attachments) = network.build_blob_refs_for_post(post_id, true).await;
+    if blob_refs.is_empty() && !dropped_attachments.is_empty() {
+        // Every requested attachment failed - surface it instead of silently
+        // publishing a text-only post and reporting full success
+        println!("[PUBLISH-POST] === END iroh_publish_post FAILED (all attachments dropped) ===");
+        return Err(format!(
+            "All {} attachment(s) failed to store: {}",
+            dropped_attachments.len(),
+            dropped_attachments.join("; ")
+        ));
     }
+    if !dropped_attachments.is_empty() {
+        eprintln!(
+            "[PUBLISH-POST] WARNING: {} attachment(s) dropped from post {}: {}",
+            dropped_attachments.len(),
+            post_id,
+            dropped_attachments.join("; ")
+        );
+    }
+    println!(
+        "[PUBLISH-POST] Step 7: DONE - {} blob ref(s), {} dropped",
+        blob_refs.len(),
+        dropped_attachments.len()
+    );
 
     if friend_encryption_keys.is_empty() {
         // No friends with encryption keys - skip P2P broadcast (post is saved locally)
@@ -512,7 +420,14 @@ pub async fn iroh_publish_post(
     println!("[PUBLISH-POST] Step 8 (PHASE 2): DONE - Message published");
 
     println!("[PUBLISH-POST] === END iroh_publish_post SUCCESS (sealed) ===");
-    Ok("Post published (sealed)".to_string())
+    if dropped_attachments.is_empty() {
+        Ok("Post published (sealed)".to_string())
+    } else {
+        Ok(format!(
+            "Post published (sealed) - {} attachment(s) dropped",
+            dropped_attachments.len()
+        ))
+    }
 }
 
 /// Publish a post comment to the global mesh (encrypted for friends)
@@ -1134,12 +1049,14 @@ pub async fn iroh_add_friend_by_public_key(
                     .unwrap_or("DHT discovery")
             );
 
-            // CRITICAL: Join the gossip mesh with the new friend as bootstrap
-            // This is the INITIATING device (scanning QR code), so we need to actively
-            // join the peer's gossip mesh via subscribe_and_join().
-            // Simply calling endpoint.connect() doesn't establish gossip neighbor relationship!
-            println!("[IROH] Joining gossip mesh with new friend as bootstrap...");
-            match network.join_gossip_mesh_with_peer(peer_node_id).await {
+            // CRITICAL: Join the new friend into the EXISTING content-topic
+            // mesh via join_peers() on the current subscription. Simply calling
+            // endpoint.connect() doesn't establish the gossip neighbor
+            // relationship! (The old join_gossip_mesh_with_peer() re-subscribed
+            // the global topic, leaving a stale stream handler racing the new
+            // one - duplicate handlers and NeighborDown loops.)
+            println!("[IROH] Joining new friend into the gossip mesh...");
+            match network.add_peer_to_content_topic(peer_node_id).await {
                 Ok(_) => {
                     println!("[IROH] ✓ Successfully joined gossip mesh with friend!");
                 }
@@ -1226,65 +1143,67 @@ pub async fn iroh_read_blob(
         .parse::<iroh::EndpointId>()
         .map_err(|e| format!("Invalid node_id: {}", e))?;
 
-    // First, try to download the blob from the remote peer (ignore errors - it may
-    // already be cached locally). The downloader resolves the peer via address lookups.
-    if let Some(downloader) = network.downloader.lock().await.clone() {
-        println!("[BLOB-READ] Attempting to download blob from peer...");
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            downloader.download(hash, vec![sender_node_id]),
-        )
-        .await
-        {
-            Ok(Ok(_)) => println!("[BLOB-READ] Blob downloaded successfully"),
-            Ok(Err(e)) => println!("[BLOB-READ] Download failed: {} - will try local store", e),
-            Err(_) => println!("[BLOB-READ] Download timed out - will try local store"),
+    // Download from the remote peer and read from the local store, with up to
+    // 3 attempts and short exponential backoff (500ms/1s/2s) - a single failed
+    // attempt from a peer that was still connecting dropped the attachment.
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut encrypted_data: Option<Vec<u8>> = None;
+    let mut last_error = String::new();
+    for attempt in 1..=MAX_ATTEMPTS {
+        // First, try to download the blob from the remote peer (ignore errors - it may
+        // already be cached locally). The downloader resolves the peer via address lookups.
+        if let Some(downloader) = network.downloader.lock().await.clone() {
+            println!(
+                "[BLOB-READ] Attempt {}/{}: downloading blob from peer...",
+                attempt, MAX_ATTEMPTS
+            );
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                downloader.download(hash, vec![sender_node_id]),
+            )
+            .await
+            {
+                Ok(Ok(_)) => println!("[BLOB-READ] Blob downloaded successfully"),
+                Ok(Err(e)) => println!("[BLOB-READ] Download failed: {} - will try local store", e),
+                Err(_) => println!("[BLOB-READ] Download timed out - will try local store"),
+            }
+        }
+
+        // Read the blob from the local store. The new iroh-blobs read path is Send-safe,
+        // so the previous spawn_blocking/LocalSet workaround is no longer needed.
+        let read_result = {
+            let store_guard = network.store.lock().await;
+            let store = store_guard
+                .as_ref()
+                .ok_or_else(|| "Blob store not initialized".to_string())?;
+            store.blobs().get_bytes(hash).await
+        };
+        match read_result {
+            Ok(bytes) => {
+                encrypted_data = Some(bytes.to_vec());
+                break;
+            }
+            Err(e) => {
+                last_error = format!("Failed to read blob: {}", e);
+                println!(
+                    "[BLOB-READ] Attempt {}/{} failed: {}",
+                    attempt, MAX_ATTEMPTS, last_error
+                );
+                if attempt < MAX_ATTEMPTS {
+                    let backoff = std::time::Duration::from_millis(500 * 2u64.pow(attempt - 1));
+                    tokio::time::sleep(backoff).await;
+                }
+            }
         }
     }
-
-    // Read the blob from the local store. The new iroh-blobs read path is Send-safe,
-    // so the previous spawn_blocking/LocalSet workaround is no longer needed.
-    let encrypted_data = {
-        let store_guard = network.store.lock().await;
-        let store = store_guard
-            .as_ref()
-            .ok_or_else(|| "Blob store not initialized".to_string())?;
-        store
-            .blobs()
-            .get_bytes(hash)
-            .await
-            .map_err(|e| format!("Failed to read blob: {}", e))?
-            .to_vec()
-    };
+    let encrypted_data = encrypted_data
+        .ok_or_else(|| format!("{} (after {} attempts)", last_error, MAX_ATTEMPTS))?;
 
     // Decrypt if encryption key provided
     let final_data = if let Some(key_b64) = encryption_key {
         println!("[BLOB-READ] Decrypting blob with provided key...");
 
-        // Decode key
-        let key_bytes = general_purpose::STANDARD
-            .decode(&key_b64)
-            .map_err(|e| format!("Invalid encryption key: {}", e))?;
-
-        if key_bytes.len() != 32 {
-            return Err("Encryption key must be 32 bytes".to_string());
-        }
-
-        // Extract nonce (first 24 bytes) and ciphertext
-        if encrypted_data.len() < 24 {
-            return Err("Encrypted blob too short (missing nonce)".to_string());
-        }
-
-        let (nonce_bytes, ciphertext) = encrypted_data.split_at(24);
-
-        // Decrypt
-        let key = Key::from_slice(&key_bytes);
-        let cipher = XChaCha20Poly1305::new(key);
-        let nonce = XNonce::from_slice(nonce_bytes);
-
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| "Blob decryption failed - invalid key or corrupted data")?;
+        let plaintext = IrohNetwork::decrypt_blob_data(&encrypted_data, &key_b64)?;
 
         println!(
             "[BLOB-READ] Decrypted {} bytes -> {} bytes",

@@ -117,6 +117,7 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
             disappears_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            edited_at TEXT,
             FOREIGN KEY (sender_id) REFERENCES users (id),
             FOREIGN KEY (recipient_id) REFERENCES users (id),
             FOREIGN KEY (thread_id) REFERENCES messages (id)
@@ -438,57 +439,151 @@ pub fn create_tables(conn: &Connection) -> SqliteResult<()> {
         [&device_id],
     )?;
 
+    // Indexes for the hot query paths. Created here so fresh databases get them,
+    // and IF NOT EXISTS so existing databases pick them up on the next launch.
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts(user_id, created_at);
+         CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+         CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id);
+         CREATE INDEX IF NOT EXISTS idx_post_comments_post ON post_comments(post_id);
+         CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions(post_id);
+         CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
+         CREATE INDEX IF NOT EXISTS idx_p2p_connections_friend ON p2p_connections(friend_user_id);",
+    )?;
+
     Ok(())
 }
 
+/// Column-adding migration that tolerates the column already existing but
+/// surfaces every other failure (I/O error, locked database, ...). Ignoring all
+/// errors - as this used to - lets the app run on a half-migrated schema.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> SqliteResult<()> {
+    if column_exists(conn, table, column)? {
+        return Ok(());
+    }
+    match conn.execute(
+        &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, definition),
+        [],
+    ) {
+        Ok(_) => Ok(()),
+        // Racing another connection that just added it
+        Err(e) if is_duplicate_column(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> SqliteResult<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name.eq_ignore_ascii_case(column) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_duplicate_column(err: &rusqlite::Error) -> bool {
+    err.to_string().contains("duplicate column name")
+}
+
 pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
+    // Rename migrations from the pre-BLOB-id era. These only apply to databases
+    // that still have a `username` column; guarded on the old column existing so
+    // a genuine failure isn't swallowed.
+    if column_exists(conn, "users", "username")? && !column_exists(conn, "users", "display_name")? {
+        conn.execute(
+            "ALTER TABLE users RENAME COLUMN username TO display_name",
+            [],
+        )?;
+    }
+    if column_exists(conn, "friend_invites", "username")?
+        && !column_exists(conn, "friend_invites", "display_name")?
+    {
+        conn.execute(
+            "ALTER TABLE friend_invites RENAME COLUMN username TO display_name",
+            [],
+        )?;
+    }
+
     // Migration: Add P2P columns to devices table
-    let _ = conn.execute("ALTER TABLE devices ADD COLUMN iroh_node_id TEXT", []);
-    let _ = conn.execute("ALTER TABLE devices ADD COLUMN relay_url TEXT", []);
+    add_column_if_missing(conn, "devices", "iroh_node_id", "TEXT")?;
+    add_column_if_missing(conn, "devices", "relay_url", "TEXT")?;
 
     // Migration: Add P2P columns to p2p_connections table
-    let _ = conn.execute(
-        "ALTER TABLE p2p_connections ADD COLUMN iroh_node_id TEXT",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE p2p_connections ADD COLUMN friend_relay_url TEXT",
-        [],
-    );
-
-    // Migration: Rename username to display_name in users table
-    let _ = conn.execute(
-        "ALTER TABLE users RENAME COLUMN username TO display_name",
-        [],
-    );
-
-    // Migration: Rename username to display_name in friend_invites table
-    let _ = conn.execute(
-        "ALTER TABLE friend_invites RENAME COLUMN username TO display_name",
-        [],
-    );
+    add_column_if_missing(conn, "p2p_connections", "iroh_node_id", "TEXT")?;
+    add_column_if_missing(conn, "p2p_connections", "friend_relay_url", "TEXT")?;
 
     // Migration: Add profile_signature column to users table
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN profile_signature TEXT", []);
+    add_column_if_missing(conn, "users", "profile_signature", "TEXT")?;
 
     // Migration: Add known_display_name to p2p_connections for tracking friend name changes
-    let _ = conn.execute(
-        "ALTER TABLE p2p_connections ADD COLUMN known_display_name TEXT",
-        [],
-    );
+    add_column_if_missing(conn, "p2p_connections", "known_display_name", "TEXT")?;
 
     // Migration: Add friend_profile_signature to p2p_connections for signature verification
-    let _ = conn.execute(
-        "ALTER TABLE p2p_connections ADD COLUMN friend_profile_signature TEXT",
-        [],
-    );
+    add_column_if_missing(conn, "p2p_connections", "friend_profile_signature", "TEXT")?;
 
     // Migration: Add a friend's current rotating pre-key (forward secrecy).
     // prekey_public is the friend's current X25519 pre-key we seal to;
     // prekey_updated_at gates freshness so we fall back to their identity key
     // if we've missed too many rotations.
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN prekey_public TEXT", []);
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN prekey_updated_at INTEGER", []);
+    add_column_if_missing(conn, "users", "prekey_public", "TEXT")?;
+    add_column_if_missing(conn, "users", "prekey_updated_at", "INTEGER")?;
+
+    // Migration: messages.edited_at - previously queried by get_message_thread but
+    // never created, so that query always failed with "no such column".
+    add_column_if_missing(conn, "messages", "edited_at", "TEXT")?;
+
+    Ok(())
+}
+
+/// Delete rows that were stranded while foreign key enforcement was off.
+/// Without `PRAGMA foreign_keys=ON` every ON DELETE CASCADE was a no-op, so
+/// deleting a post left its media BLOBs, reactions and comments behind - a
+/// privacy problem for image data in particular. Runs on every startup; it is a
+/// no-op once the database is clean.
+pub fn cleanup_orphans(conn: &Connection) -> SqliteResult<()> {
+    // Foreign keys are enforced by this point, so the deletes below cascade
+    // (e.g. removing an orphaned comment removes its replies).
+    let statements = [
+        "DELETE FROM media_attachments WHERE post_id IS NOT NULL
+            AND post_id NOT IN (SELECT id FROM posts)",
+        "DELETE FROM post_reactions WHERE post_id NOT IN (SELECT id FROM posts)",
+        "DELETE FROM post_comments WHERE post_id NOT IN (SELECT id FROM posts)",
+        "DELETE FROM post_comments WHERE parent_comment_id IS NOT NULL
+            AND parent_comment_id NOT IN (SELECT id FROM post_comments)",
+        "DELETE FROM message_reactions WHERE message_id NOT IN (SELECT id FROM messages)",
+        "DELETE FROM community_members
+            WHERE community_id NOT IN (SELECT id FROM communities)",
+        "DELETE FROM community_posts
+            WHERE community_id NOT IN (SELECT id FROM communities)
+               OR post_id NOT IN (SELECT id FROM posts)",
+        "DELETE FROM community_invites
+            WHERE community_id NOT IN (SELECT id FROM communities)",
+    ];
+
+    let mut removed = 0usize;
+    for sql in statements {
+        removed += conn.execute(sql, [])?;
+    }
+
+    if removed > 0 {
+        println!(
+            "[DB] Removed {} orphaned row(s) stranded by missing FK enforcement",
+            removed
+        );
+    }
+
+    // Reclaim space from deleted media BLOBs so the bytes actually leave the file
+    if removed > 0 {
+        let _ = conn.execute_batch("VACUUM;");
+    }
 
     Ok(())
 }

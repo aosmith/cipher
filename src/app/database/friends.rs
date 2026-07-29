@@ -524,6 +524,54 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// True if there is a PENDING friend request between the two users that WE
+    /// initiated (`user_id` is `initiated_by`).
+    ///
+    /// SECURITY: a FriendAccepted is only meaningful as the second half of a
+    /// handshake we started. Without this check any peer holding our published
+    /// X25519 invite key could seal us an unsolicited FriendAccepted and be
+    /// promoted straight to an accepted friend - which is friend-level read
+    /// access to posts, comments, reactions and DMs. Incoming pending requests
+    /// (initiated by THEM) also must not be self-accepted this way: only the
+    /// local user tapping "accept" may do that.
+    pub fn has_locally_initiated_pending_request(
+        &self,
+        user_id: SqliteUuid,
+        friend_user_id: SqliteUuid,
+    ) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM p2p_connections
+             WHERE ((user_id = ?1 AND friend_user_id = ?2) OR (user_id = ?2 AND friend_user_id = ?1))
+             AND status = 'pending' AND initiated_by = ?1",
+            params![user_id, friend_user_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// The key a message to `friend_user_id` should be sealed to: their fresh
+    /// rotating pre-key when we have one, else their static identity key.
+    /// Same selection the post/comment/reaction fan-out uses, so DMs get the
+    /// same forward secrecy instead of always hitting the long-term key.
+    pub fn best_recipient_key_for_user(
+        &self,
+        friend_user_id: SqliteUuid,
+    ) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(Option<String>, Option<String>, Option<i64>)> = conn
+            .query_row(
+                "SELECT encryption_public_key, prekey_public, prekey_updated_at
+                 FROM users WHERE id = ?1",
+                params![friend_user_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(identity, prekey, updated)| {
+            crate::app::database::prekeys::best_recipient_key(identity, prekey, updated)
+        }))
+    }
+
     /// Get friends of friends (2-degree connections)
     /// Returns users who are friends with your friends but not direct friends with you
     pub fn get_friends_of_friends(&self, user_id: SqliteUuid) -> SqliteResult<Vec<User>> {

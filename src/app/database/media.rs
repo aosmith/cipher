@@ -11,7 +11,6 @@ impl Database {
     /// mime_type: MIME type (e.g., "image/png")
     /// data: Binary data of the file
     /// file_size: Size of the file in bytes
-    #[allow(dead_code)]
     pub fn upload_media(
         &self,
         _user_id: SqliteUuid,

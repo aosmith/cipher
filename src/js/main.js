@@ -63,10 +63,36 @@ const Utils = {
         return new Promise(resolve => setTimeout(resolve, ms));
     },
 
+    // Entity-encode a value for interpolation into HTML. Unlike the old
+    // textContent->innerHTML trick this also escapes quotes and slashes, so the
+    // result is safe inside attribute values, not just in element text.
+    // Peer-controlled data (display names, content, emoji, MIME types) MUST go
+    // through this before it is concatenated into any HTML string.
     escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        if (text === null || text === undefined) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/`/g, '&#96;')
+            .replace(/\//g, '&#47;');
+    },
+
+    // Sanitize a MIME type before it is embedded in a data: URL. Peers control
+    // this string; anything that is not a plain type/subtype is rejected.
+    safeMimeType(fileType, fallback = 'application/octet-stream') {
+        if (typeof fileType !== 'string') return fallback;
+        return /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/.test(fileType)
+            ? fileType
+            : fallback;
+    },
+
+    // Only allow data: URLs we generated ourselves to be reflected back into
+    // src attributes / save handlers.
+    isSafeImageSrc(src) {
+        return typeof src === 'string' && /^data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]*$/.test(src);
     },
 
     async fileToBase64(file) {
@@ -342,18 +368,32 @@ const UI = {
         const viewer = document.createElement('div');
         viewer.className = 'image-viewer';
         viewer.id = 'imageViewer';
+        // Static markup only - the (peer-controlled) src is assigned as a DOM
+        // property and the save handler closes over it, so it is never parsed
+        // as HTML or as a JS string literal.
         viewer.innerHTML = `
-            <div class="image-viewer-backdrop" onclick="UI.closeImageViewer()"></div>
-            <img src="${src}" class="image-viewer-img" onclick="UI.closeImageViewer()">
+            <div class="image-viewer-backdrop"></div>
+            <img class="image-viewer-img" alt="">
             <div class="image-viewer-controls">
-                <button class="image-viewer-save" onclick="UI.saveImage('${src}')" title="Save image">
+                <button class="image-viewer-save" title="Save image">
                     <span>💾</span> Save
                 </button>
-                <button class="image-viewer-close-btn" onclick="UI.closeImageViewer()" title="Close">
+                <button class="image-viewer-close-btn" title="Close">
                     &times;
                 </button>
             </div>
         `;
+
+        const img = viewer.querySelector('.image-viewer-img');
+        if (Utils.isSafeImageSrc(src)) {
+            img.src = src;
+        }
+
+        viewer.querySelector('.image-viewer-backdrop').addEventListener('click', () => UI.closeImageViewer());
+        img.addEventListener('click', () => UI.closeImageViewer());
+        viewer.querySelector('.image-viewer-close-btn').addEventListener('click', () => UI.closeImageViewer());
+        viewer.querySelector('.image-viewer-save').addEventListener('click', () => UI.saveImage(src));
+
         document.body.appendChild(viewer);
 
         // Prevent body scroll
@@ -870,19 +910,19 @@ async function handleCreateAccount() {
             displayName: displayName
         });
 
-        console.log('[CREATE_ACCOUNT] Raw result:', result);
-        console.log('[CREATE_ACCOUNT] Result type:', typeof result);
-        console.log('[CREATE_ACCOUNT] Result keys:', Object.keys(result || {}));
-
+        // NEVER log `result`, `result.user` or `result.recoveryPhrase` - the
+        // recovery phrase is the BIP39 mnemonic that derives every private key,
+        // and on Android console output lands in logcat where any app with
+        // READ_LOGS (or anyone with adb) can read it. The phrase is displayed in
+        // the recovery-phrase modal for the user to save; that is the only place
+        // it should ever appear.
         const user = result.user;
         const recoveryPhrase = result.recoveryPhrase;
 
-        console.log('[CREATE_ACCOUNT] User:', user);
-        console.log('[CREATE_ACCOUNT] RecoveryPhrase:', recoveryPhrase);
+        console.log('[CREATE_ACCOUNT] Account created:', !!user, 'phrase returned:', !!recoveryPhrase);
 
         if (user && recoveryPhrase) {
             UI.showSuccess('loginSuccess', 'Account created successfully!');
-            console.log('IMPORTANT: Save your recovery phrase:', recoveryPhrase);
 
             // Keep button disabled after success
             if (createBtn) createBtn.textContent = 'Account Created ✓';
@@ -893,7 +933,7 @@ async function handleCreateAccount() {
             // Show recovery phrase modal
             showRecoveryPhraseModal(recoveryPhrase);
         } else {
-            console.error('[CREATE_ACCOUNT] Missing user or recoveryPhrase!', {user, recoveryPhrase});
+            console.error('[CREATE_ACCOUNT] Missing user or recoveryPhrase! hasUser:', !!user, 'hasPhrase:', !!recoveryPhrase);
             UI.showError('loginError', 'Failed to create account - invalid response from server');
             // Re-enable button on error
             if (createBtn) {
@@ -913,18 +953,24 @@ async function handleCreateAccount() {
     }
 }
 
+// Recovery phrase held only while the onboarding modal is open. This used to be
+// window.currentRecoveryPhrase, i.e. readable by any injected script for the
+// lifetime of the page; it is now module-scoped and cleared as soon as the modal
+// is dismissed, so the mnemonic is not reachable from the global object.
+let pendingRecoveryPhrase = null;
+
 // Show recovery phrase modal
 function showRecoveryPhraseModal(recoveryPhrase) {
     document.getElementById('recoveryPhraseText').textContent = recoveryPhrase;
     document.getElementById('recoveryPhraseModal').classList.remove('hidden');
 
-    // Store phrase for copying
-    window.currentRecoveryPhrase = recoveryPhrase;
+    pendingRecoveryPhrase = recoveryPhrase;
 }
 
 // Copy recovery phrase to clipboard
 async function copyRecoveryPhrase() {
-    const phrase = window.currentRecoveryPhrase;
+    // Prefer the live modal text so the phrase does not need to outlive it.
+    const phrase = document.getElementById('recoveryPhraseText')?.textContent || pendingRecoveryPhrase;
     if (!phrase) return;
 
     try {
@@ -953,7 +999,10 @@ async function copyRecoveryPhrase() {
 // Confirm recovery phrase saved and proceed to dashboard
 async function confirmRecoveryPhraseSaved() {
     document.getElementById('recoveryPhraseModal').classList.add('hidden');
-    window.currentRecoveryPhrase = null;
+    // Drop every in-memory/DOM copy of the mnemonic.
+    pendingRecoveryPhrase = null;
+    const phraseEl = document.getElementById('recoveryPhraseText');
+    if (phraseEl) phraseEl.textContent = '';
 
     if (pendingAuthUser) {
         await completeAuthentication(pendingAuthUser);
@@ -1025,11 +1074,10 @@ async function handleRestoreAccount() {
 
 // Complete authentication and transition to dashboard
 async function completeAuthentication(user) {
-    console.log('[AUTH] Full user object received from backend:', user);
-    console.log('[AUTH] user.id:', user.id);
-    console.log('[AUTH] user.publicKey:', user.publicKey);
-    console.log('[AUTH] user.deviceId:', user.deviceId);
-    console.log('[AUTH] All keys in user object:', Object.keys(user));
+    // Log identifiers only, and truncated - dumping the whole user object put
+    // the full public key (and anything else the backend adds to the struct)
+    // into logcat on Android.
+    console.log('[AUTH] Authenticated user:', user.id, 'key:', (user.publicKey || '').substring(0, 8));
 
     currentUser = user;
     Session.save(user);
@@ -1143,16 +1191,14 @@ const PostManager = {
                 console.log('[POST] ====> NO attachments to upload (attachments:', attachments, ')');
             }
 
-            // Publish post to P2P network
-            if (P2P.initialized) {
-                try {
-                    await P2P.publishPost(content, post.id);
-                    console.log('Post published to P2P network');
-                } catch (error) {
-                    console.error('Failed to publish post to P2P:', error);
-                    // Don't throw - post is still created locally
-                }
-            }
+            // Publish post to P2P network. Failures never throw - the post is
+            // already created locally; publishToP2POrQueue toasts the outcome
+            // and queues a retry when the send genuinely failed.
+            await publishToP2POrQueue(
+                `post-${post.id}`,
+                'Post',
+                () => P2P.publishPost(content, post.id)
+            );
 
             return post;
         } catch (error) {
@@ -1243,10 +1289,14 @@ const PostManager = {
                     </div>`;
                 }
 
-                const dataUrl = `data:${media.fileType};base64,${media.data}`;
+                // fileType is peer-controlled: normalize it to a real MIME type
+                // so it cannot terminate the src attribute, then escape on the
+                // way into the HTML string.
+                const mimeType = Utils.safeMimeType(media.fileType, 'image/png');
+                const dataUrl = `data:${mimeType};base64,${media.data}`;
                 console.log('createMediaPreview - Base64 validation passed [OK]');
                 console.log('createMediaPreview - Creating image with data URL (length:', dataUrl.length, ')');
-                return `<img src="${dataUrl}" alt="Image" class="post-image" onclick="UI.showImageViewer(this.src)">`;
+                return `<img src="${Utils.escapeHtml(dataUrl)}" alt="Image" class="post-image" data-image-viewer="1">`;
             } else {
                 console.warn('Image has no data - showing placeholder');
                 return `<div class="media-placeholder">
@@ -1261,7 +1311,7 @@ const PostManager = {
         }
         // For other file types, show icon
         console.log('Creating file icon for non-image media');
-        return `<div class="media-icon ${Utils.getMediaIconClass(media.fileType)}">${Utils.getMediaIcon(media.fileType)}</div>`;
+        return `<div class="media-icon ${Utils.escapeHtml(Utils.getMediaIconClass(media.fileType))}">${Utils.escapeHtml(Utils.getMediaIcon(media.fileType))}</div>`;
     },
 
     async viewMedia(mediaId) {
@@ -1269,7 +1319,7 @@ const PostManager = {
             const mediaData = await TauriAPI.invoke('get_media_file_data', { mediaId: mediaId });
 
             if (mediaData && mediaData.data) {
-                const mimeType = mediaData.fileType || 'application/octet-stream';
+                const mimeType = Utils.safeMimeType(mediaData.fileType);
                 const dataUrl = `data:${mimeType};base64,${mediaData.data}`;
                 window.open(dataUrl, '_blank');
             }
@@ -1278,6 +1328,38 @@ const PostManager = {
         }
     }
 };
+
+// Publish content to the P2P network, or queue it for retry when P2P is down
+// or the publish fails. A backend rejection containing "queued for retry" means
+// the message reached the Rust persistent outbox and will sync automatically -
+// treat that as a soft success. Everything else goes into P2P.pendingPublishes
+// (deduped by id) and is flushed when connectivity recovers.
+async function publishToP2POrQueue(id, description, publishFn) {
+    if (!P2P.initialized) {
+        P2P.queuePublish(id, publishFn, description);
+        if (typeof UI !== 'undefined' && UI.showToast) {
+            UI.showToast(`${description} saved - will sync when connection recovers`, 'info', 4000);
+        }
+        return;
+    }
+
+    try {
+        await publishFn();
+    } catch (error) {
+        console.warn(`Failed to publish ${description} to P2P:`, error);
+        if (String(error).includes('queued for retry')) {
+            // Backend outbox has it - it will retry on its own
+            if (typeof UI !== 'undefined' && UI.showToast) {
+                UI.showToast(`${description} saved - will sync when connection recovers`, 'info', 4000);
+            }
+        } else {
+            P2P.queuePublish(id, publishFn, description);
+            if (typeof UI !== 'undefined' && UI.showToast) {
+                UI.showToast(`${description} saved - delivery failed, will retry automatically`, 'warning', 4000);
+            }
+        }
+    }
+}
 
 // Profile Management
 const ProfileManager = {
@@ -1347,7 +1429,7 @@ const ProfileManager = {
             currentPictureDiv.innerHTML = `
                 <div style="text-align: center;">
                     <p style="margin-bottom: var(--spacing-sm);">Current Profile Picture:</p>
-                    <img src="${currentUser.profilePicture}" alt="Profile Picture" style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid var(--color-border);">
+                    <img src="${Utils.escapeHtml(currentUser.profilePicture)}" alt="Profile Picture" style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid var(--color-border);">
                 </div>
             `;
         }
@@ -1377,7 +1459,7 @@ const ProfileManager = {
             currentPictureDiv.innerHTML = `
                 <div style="text-align: center;">
                     <p style="margin-bottom: var(--spacing-sm);">Current Profile Picture:</p>
-                    <img src="${profilePicture}" alt="Profile Picture" style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid var(--color-border);">
+                    <img src="${Utils.escapeHtml(profilePicture)}" alt="Profile Picture" style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid var(--color-border);">
                 </div>
             `;
         }
@@ -1407,6 +1489,9 @@ const ProfileManager = {
 // Post Interactions - Reactions, Comments, Sharing, Edit
 const PostInteractions = {
     EMOJIS: ['👍', '❤️', '😂', '😮', '😢', '😡'],
+
+    // postId -> original .post-content markup while an inline edit is open
+    editOriginals: new Map(),
 
     // Get reaction summary for a post (emoji -> count)
     async getReactionSummary(postId) {
@@ -1446,12 +1531,15 @@ const PostInteractions = {
         if (!summary || summary.length === 0) {
             return '<span class="no-reactions">Be first to react</span>';
         }
+        // The emoji is peer-controlled - it is escaped everywhere it is
+        // interpolated, and the click handler is delegated off data-emoji
+        // (read back through dataset, so no JS-string injection is possible).
         return summary.map(([emoji, count]) => `
             <button class="reaction-chip ${userReaction === emoji ? 'user-reacted' : ''}"
-                    onclick="PostInteractions.toggleReaction(this, '${emoji}')"
-                    data-emoji="${emoji}">
-                <span class="reaction-emoji">${emoji}</span>
-                <span class="reaction-count">${count}</span>
+                    data-reaction-toggle="1"
+                    data-emoji="${Utils.escapeHtml(emoji)}">
+                <span class="reaction-emoji">${Utils.escapeHtml(emoji)}</span>
+                <span class="reaction-count">${Utils.escapeHtml(count)}</span>
             </button>
         `).join('');
     },
@@ -1467,12 +1555,12 @@ const PostInteractions = {
         try {
             if (wasSelected) {
                 await TauriAPI.invoke('remove_post_reaction', { postId, userId: currentUser.id, emoji });
-                // Publish to P2P network
-                if (P2P.initialized) {
-                    try {
-                        await P2P.publishReaction(postId, emoji, 'remove');
-                    } catch (e) { console.warn('Failed to publish reaction removal:', e); }
-                }
+                // Publish to P2P network (queued for retry if P2P is down)
+                await publishToP2POrQueue(
+                    `reaction-${postId}-${emoji}`,
+                    'Reaction',
+                    () => P2P.publishReaction(postId, emoji, 'remove')
+                );
             } else {
                 // Remove any existing reaction first (get current reaction if any)
                 const currentReaction = await this.getUserReaction(postId);
@@ -1482,17 +1570,21 @@ const PostInteractions = {
                     } catch (e) { /* ignore if no existing reaction */ }
                 }
                 await TauriAPI.invoke('add_post_reaction', { postId, userId: currentUser.id, emoji });
-                // Publish to P2P network
-                if (P2P.initialized) {
-                    try {
-                        await P2P.publishReaction(postId, emoji, 'add');
-                    } catch (e) { console.warn('Failed to publish reaction:', e); }
-                }
+                // Publish to P2P network (queued for retry if P2P is down)
+                await publishToP2POrQueue(
+                    `reaction-${postId}-${emoji}`,
+                    'Reaction',
+                    () => P2P.publishReaction(postId, emoji, 'add')
+                );
             }
-            // Refresh the reactions display
-            await this.refreshReactions(postId);
         } catch (error) {
             console.error('Failed to toggle reaction:', error);
+            if (typeof UI !== 'undefined' && UI.showToast) {
+                UI.showToast('Failed to update reaction', 'error', 4000);
+            }
+        } finally {
+            // Re-render the chips from the DB either way so the UI never goes stale
+            await this.refreshReactions(postId);
         }
     },
 
@@ -1506,7 +1598,7 @@ const PostInteractions = {
         picker.className = 'reaction-picker';
         picker.id = 'reactionPicker';
         picker.innerHTML = this.EMOJIS.map(emoji =>
-            `<button class="picker-emoji" onclick="PostInteractions.addReaction('${postId}', '${emoji}')">${emoji}</button>`
+            `<button class="picker-emoji" data-reaction-add="${Utils.escapeHtml(postId)}" data-emoji="${Utils.escapeHtml(emoji)}">${Utils.escapeHtml(emoji)}</button>`
         ).join('');
 
         // Position near the button, but ensure it stays on screen
@@ -1553,15 +1645,20 @@ const PostInteractions = {
                 } catch (e) { /* ignore */ }
             }
             await TauriAPI.invoke('add_post_reaction', { postId, userId: currentUser.id, emoji });
-            // Publish to P2P network
-            if (P2P.initialized) {
-                try {
-                    await P2P.publishReaction(postId, emoji, 'add');
-                } catch (e) { console.warn('Failed to publish reaction:', e); }
-            }
-            await this.refreshReactions(postId);
+            // Publish to P2P network (queued for retry if P2P is down)
+            await publishToP2POrQueue(
+                `reaction-${postId}-${emoji}`,
+                'Reaction',
+                () => P2P.publishReaction(postId, emoji, 'add')
+            );
         } catch (error) {
             console.error('Failed to add reaction:', error);
+            if (typeof UI !== 'undefined' && UI.showToast) {
+                UI.showToast('Failed to update reaction', 'error', 4000);
+            }
+        } finally {
+            // Re-render the chips from the DB either way so the UI never goes stale
+            await this.refreshReactions(postId);
         }
     },
 
@@ -1612,21 +1709,23 @@ const PostInteractions = {
         const isOwn = currentUser && comment.userId === currentUser.id;
         const timeAgo = this.formatTimeAgo(new Date(comment.createdAt));
         const displayName = getDisplayName(comment.userId, comment.publicKey);
+        const safeCommentId = Utils.escapeHtml(comment.id);
+        const safePostId = Utils.escapeHtml(postId);
 
         return `
-            <div class="comment" data-comment-id="${comment.id}" style="margin-left: ${(comment.depth || 0) * 20}px">
+            <div class="comment" data-comment-id="${safeCommentId}" style="margin-left: ${Number(comment.depth || 0) * 20}px">
                 <div class="comment-header">
                     <span class="comment-author">${Utils.escapeHtml(displayName)}</span>
-                    <span class="comment-time">${timeAgo}</span>
+                    <span class="comment-time">${Utils.escapeHtml(timeAgo)}</span>
                 </div>
                 <div class="comment-content">${Utils.escapeHtml(comment.content)}</div>
                 <div class="comment-actions">
-                    <button class="comment-action" onclick="PostInteractions.showReplyInput('${postId}', '${comment.id}')">Reply</button>
-                    ${isOwn ? `<button class="comment-action comment-delete" onclick="PostInteractions.deleteComment('${postId}', '${comment.id}')">Delete</button>` : ''}
+                    <button class="comment-action" data-comment-reply="${safeCommentId}" data-comment-post-id="${safePostId}">Reply</button>
+                    ${isOwn ? `<button class="comment-action comment-delete" data-comment-delete="${safeCommentId}" data-comment-post-id="${safePostId}">Delete</button>` : ''}
                 </div>
-                <div class="reply-input-wrapper hidden" id="reply-input-${comment.id}">
-                    <input type="text" class="comment-input" placeholder="Write a reply..." onkeypress="if(event.key==='Enter') PostInteractions.submitReply('${postId}', '${comment.id}')">
-                    <button class="comment-submit-btn" onclick="PostInteractions.submitReply('${postId}', '${comment.id}')">Reply</button>
+                <div class="reply-input-wrapper hidden" id="reply-input-${safeCommentId}">
+                    <input type="text" class="comment-input" placeholder="Write a reply..." data-comment-reply-input="${safeCommentId}" data-comment-post-id="${safePostId}">
+                    <button class="comment-submit-btn" data-comment-reply-submit="${safeCommentId}" data-comment-post-id="${safePostId}">Reply</button>
                 </div>
             </div>
         `;
@@ -1660,7 +1759,7 @@ const PostInteractions = {
             return;
         }
 
-        console.log('[SUBMIT-COMMENT] Content:', content.substring(0, 50));
+        console.log('[SUBMIT-COMMENT] Content length:', content.length);
 
         try {
             console.log('[SUBMIT-COMMENT] Calling add_post_comment...');
@@ -1673,19 +1772,14 @@ const PostInteractions = {
             console.log('[SUBMIT-COMMENT] Comment created:', comment?.id);
             input.value = '';
 
-            // Publish to P2P network (encrypted for friends)
+            // Publish to P2P network (encrypted for friends).
+            // Queued for retry if P2P is down or the publish fails.
             console.log('[SUBMIT-COMMENT] P2P.initialized =', P2P?.initialized, 'P2P exists =', typeof P2P);
-            if (P2P.initialized) {
-                console.log('[SUBMIT-COMMENT] Calling P2P.publishComment...');
-                try {
-                    await P2P.publishComment(comment.id, postId, content, null);
-                    console.log('[SUBMIT-COMMENT] P2P.publishComment succeeded');
-                } catch (e) {
-                    console.warn('[SUBMIT-COMMENT] Failed to publish comment to P2P:', e);
-                }
-            } else {
-                console.log('[SUBMIT-COMMENT] P2P not initialized, skipping publish');
-            }
+            await publishToP2POrQueue(
+                `comment-${comment.id}`,
+                'Comment',
+                () => P2P.publishComment(comment.id, postId, content, null)
+            );
 
             await this.loadComments(postId);
 
@@ -1732,14 +1826,13 @@ const PostInteractions = {
             input.value = '';
             wrapper.classList.add('hidden');
 
-            // Publish to P2P network (encrypted for friends)
-            if (P2P.initialized) {
-                try {
-                    await P2P.publishComment(comment.id, postId, content, parentId);
-                } catch (e) {
-                    console.warn('Failed to publish reply to P2P:', e);
-                }
-            }
+            // Publish to P2P network (encrypted for friends).
+            // Queued for retry if P2P is down or the publish fails.
+            await publishToP2POrQueue(
+                `comment-${comment.id}`,
+                'Reply',
+                () => P2P.publishComment(comment.id, postId, content, parentId)
+            );
 
             await this.loadComments(postId);
 
@@ -1872,10 +1965,10 @@ const PostInteractions = {
         menu.className = 'post-menu';
         menu.id = 'postMenu';
         menu.innerHTML = `
-            <button class="post-menu-item" onclick="PostInteractions.editPost('${postId}')">
+            <button class="post-menu-item" data-post-edit="${Utils.escapeHtml(postId)}">
                 ✏️ Edit Post
             </button>
-            <button class="post-menu-item post-menu-danger" onclick="PostInteractions.deletePost('${postId}')">
+            <button class="post-menu-item post-menu-danger" data-post-delete="${Utils.escapeHtml(postId)}">
                 🗑️ Delete Post
             </button>
         `;
@@ -1907,14 +2000,18 @@ const PostInteractions = {
         const contentEl = postEl.querySelector('.post-content');
         const currentContent = contentEl?.textContent || '';
 
-        // Replace content with edit form
-        const originalContent = contentEl.innerHTML;
+        // Stash the original markup in memory instead of round-tripping it
+        // through an inline onclick attribute - encodeURIComponent does not
+        // escape apostrophes, so the old version re-injected attacker markup.
+        this.editOriginals.set(postId, contentEl.innerHTML);
+
+        const safePostId = Utils.escapeHtml(postId);
         contentEl.innerHTML = `
             <div class="edit-post-wrapper">
-                <textarea class="textarea edit-post-textarea" id="edit-content-${postId}">${Utils.escapeHtml(currentContent)}</textarea>
+                <textarea class="textarea edit-post-textarea" id="edit-content-${safePostId}">${Utils.escapeHtml(currentContent)}</textarea>
                 <div class="edit-post-actions">
-                    <button class="btn btn-sm btn-primary" onclick="PostInteractions.saveEdit('${postId}')">Save</button>
-                    <button class="btn btn-sm btn-secondary" onclick="PostInteractions.cancelEdit('${postId}', '${encodeURIComponent(originalContent)}')">Cancel</button>
+                    <button class="btn btn-sm btn-primary" data-post-edit-save="${safePostId}">Save</button>
+                    <button class="btn btn-sm btn-secondary" data-post-edit-cancel="${safePostId}">Cancel</button>
                 </div>
             </div>
         `;
@@ -1937,6 +2034,7 @@ const PostInteractions = {
                 userId: currentUser.id,
                 content: newContent
             });
+            this.editOriginals.delete(postId);
             await loadPosts();
         } catch (error) {
             console.error('Failed to edit post:', error);
@@ -1944,12 +2042,13 @@ const PostInteractions = {
         }
     },
 
-    cancelEdit(postId, encodedOriginal) {
+    cancelEdit(postId) {
         const postEl = document.querySelector(`[data-post-id="${postId}"]`);
         const contentEl = postEl?.querySelector('.post-content');
-        if (contentEl) {
-            contentEl.innerHTML = decodeURIComponent(encodedOriginal);
+        if (contentEl && this.editOriginals.has(postId)) {
+            contentEl.innerHTML = this.editOriginals.get(postId);
         }
+        this.editOriginals.delete(postId);
     },
 
     // Delete a post
@@ -2046,7 +2145,7 @@ const SafetyManager = {
                 container.innerHTML = blocked.map(user => `
                     <div class="safety-item">
                         <span class="safety-item-name">${Utils.escapeHtml(getDisplayName(user.blockedId))}</span>
-                        <button class="btn btn-sm btn-secondary" onclick="SafetyManager.unblockUser('${user.blockedId}')">Unblock</button>
+                        <button class="btn btn-sm btn-secondary" data-unblock-user="${Utils.escapeHtml(user.blockedId)}">Unblock</button>
                     </div>
                 `).join('');
             }
@@ -2147,9 +2246,9 @@ const SafetyManager = {
                         <div class="safety-item">
                             <div class="safety-item-info">
                                 <span class="safety-item-name">${Utils.escapeHtml(getDisplayName(user.mutedId))}</span>
-                                <span class="safety-item-details">${flags.join(' ')} · ${expiry}</span>
+                                <span class="safety-item-details">${flags.join(' ')} · ${Utils.escapeHtml(expiry)}</span>
                             </div>
-                            <button class="btn btn-sm btn-secondary" onclick="SafetyManager.unmuteUser('${user.mutedId}')">Unmute</button>
+                            <button class="btn btn-sm btn-secondary" data-unmute-user="${Utils.escapeHtml(user.mutedId)}">Unmute</button>
                         </div>
                     `;
                 }).join('');
@@ -2194,12 +2293,12 @@ const DeviceManager = {
                                 <span class="device-icon">${deviceIcon}</span>
                                 <div class="device-details">
                                     <span class="device-name">${Utils.escapeHtml(device.deviceName || 'Unknown Device')} ${isCurrentDevice ? '(This device)' : ''}</span>
-                                    <span class="device-sync">Last active: ${isCurrentDevice ? 'Now' : lastSync}</span>
+                                    <span class="device-sync">Last active: ${Utils.escapeHtml(isCurrentDevice ? 'Now' : lastSync)}</span>
                                 </div>
                             </div>
                             <div class="device-actions">
-                                <button class="btn btn-sm btn-secondary" onclick="DeviceManager.renameDevice('${device.id}')">Rename</button>
-                                ${!isCurrentDevice ? `<button class="btn btn-sm btn-danger" onclick="DeviceManager.removeDevice('${device.id}')">Remove</button>` : ''}
+                                <button class="btn btn-sm btn-secondary" data-device-rename="${Utils.escapeHtml(device.id)}">Rename</button>
+                                ${!isCurrentDevice ? `<button class="btn btn-sm btn-danger" data-device-remove="${Utils.escapeHtml(device.id)}">Remove</button>` : ''}
                             </div>
                         </div>
                     `;
@@ -2286,8 +2385,8 @@ const RecentContacts = {
             const validContacts = contacts.filter(c => c);
 
             container.innerHTML = validContacts.map(contact => `
-                <button class="recent-contact-chip" onclick="RecentContacts.select('${contact.id}')" title="${Utils.escapeHtml(contact.displayName)}">
-                    <span class="recent-contact-avatar">${this.getInitials(contact.displayName)}</span>
+                <button class="recent-contact-chip" data-recent-contact="${Utils.escapeHtml(contact.id)}" title="${Utils.escapeHtml(contact.displayName)}">
+                    <span class="recent-contact-avatar">${Utils.escapeHtml(this.getInitials(contact.displayName))}</span>
                     <span class="recent-contact-name">${Utils.escapeHtml(contact.displayName)}</span>
                 </button>
             `).join('');
@@ -2361,14 +2460,17 @@ async function loadPosts() {
                 return { ...post, mediaAttachments, reactionSummary, commentCount, userReaction };
             }));
 
-            postsContainer.innerHTML = postsWithData.map(post => `
-                <div class="post glass-card hover-lift-md" data-post-id="${post.id}">
+            postsContainer.innerHTML = postsWithData.map(post => {
+                // post.displayName and post.id both originate from peers.
+                const safePostId = Utils.escapeHtml(post.id);
+                return `
+                <div class="post glass-card hover-lift-md" data-post-id="${safePostId}">
                     <div class="post-header">
                         <div class="post-meta">
-                            ${post.displayName || 'Unknown User'} • ${new Date(post.createdAt).toLocaleDateString()}
+                            ${Utils.escapeHtml(post.displayName || 'Unknown User')} • ${Utils.escapeHtml(new Date(post.createdAt).toLocaleDateString())}
                         </div>
                         ${post.userId === currentUser?.id ? `
-                            <button class="post-menu-btn" onclick="PostInteractions.showPostMenu(event, '${post.id}')" title="More options">⋯</button>
+                            <button class="post-menu-btn" data-post-menu="${safePostId}" title="More options">⋯</button>
                         ` : ''}
                     </div>
                     ${post.mediaAttachments && post.mediaAttachments.length > 0 ? `
@@ -2381,19 +2483,19 @@ async function loadPosts() {
                     <!-- Post Footer: Reactions + Actions -->
                     <div class="post-footer">
                         <div class="post-reactions-bar">
-                            <div class="reactions-summary" id="reactions-${post.id}">
+                            <div class="reactions-summary" id="reactions-${safePostId}">
                                 ${PostInteractions.renderReactionSummary(post.reactionSummary, post.userReaction)}
                             </div>
-                            <button class="reaction-add-btn" onclick="PostInteractions.showReactionPicker(event, '${post.id}')" title="Add reaction">
+                            <button class="reaction-add-btn" data-reaction-picker="${safePostId}" title="Add reaction">
                                 <span class="reaction-icon">+</span>
                             </button>
                         </div>
                         <div class="post-actions">
-                            <button class="post-action-btn" onclick="PostInteractions.toggleComments('${post.id}')">
+                            <button class="post-action-btn" data-toggle-comments="${safePostId}">
                                 <span class="action-icon">💬</span>
-                                <span class="action-count">${post.commentCount || 0}</span>
+                                <span class="action-count">${Utils.escapeHtml(post.commentCount || 0)}</span>
                             </button>
-                            <button class="post-action-btn" onclick="PostInteractions.showShareModal('${post.id}')">
+                            <button class="post-action-btn" data-share-post="${safePostId}">
                                 <span class="action-icon">↗️</span>
                                 <span class="action-text">Share</span>
                             </button>
@@ -2401,17 +2503,18 @@ async function loadPosts() {
                     </div>
 
                     <!-- Comments Section (hidden by default) -->
-                    <div class="post-comments-section hidden" id="comments-section-${post.id}">
-                        <div class="comments-list" id="comments-list-${post.id}">
+                    <div class="post-comments-section hidden" id="comments-section-${safePostId}">
+                        <div class="comments-list" id="comments-list-${safePostId}">
                             <!-- Comments loaded dynamically -->
                         </div>
                         <div class="comment-input-wrapper">
-                            <input type="text" class="comment-input" id="comment-input-${post.id}" placeholder="Write a comment..." onkeypress="if(event.key==='Enter') PostInteractions.submitComment('${post.id}')">
-                            <button class="comment-submit-btn" onclick="PostInteractions.submitComment('${post.id}')">Post</button>
+                            <input type="text" class="comment-input" id="comment-input-${safePostId}" placeholder="Write a comment..." data-comment-input="${safePostId}">
+                            <button class="comment-submit-btn" data-comment-submit="${safePostId}">Post</button>
                         </div>
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
         }
 
         setTimeout(() => UI.updateModalLayout(document.getElementById('postsContent')), 100);
@@ -2439,10 +2542,10 @@ async function loadMessages() {
             try {
                 await TauriAPI.invoke('mark_conversation_as_read', {
                     userId: currentUser.id,
-                    otherUserId: friend.friendUserId
+                    otherUserId: friend.id
                 });
             } catch (error) {
-                console.warn('Failed to mark conversation as read for friend', friend.friendUserId, error);
+                console.warn('Failed to mark conversation as read for friend', friend.id, error);
             }
         }
         const messagesContainer = document.getElementById('messages');
@@ -2490,21 +2593,27 @@ async function loadMessages() {
                 const timeStr = new Date(message.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                 const otherPerson = isSent ? getDisplayName(message.recipientId) : getDisplayName(message.senderId);
 
+                // otherPerson is a peer-supplied display name and message.id is a
+                // peer-supplied UUID string; both are escaped, and the action
+                // buttons use delegated data-* handlers rather than inline JS
+                // (the old `addReaction(${message.id}, ...)` interpolated an
+                // unquoted UUID straight into an onclick body).
+                const safeMessageId = Utils.escapeHtml(message.id);
                 return `
-                    <div class="chat-bubble ${bubbleClass} ${disappearInfo ? 'disappearing' : ''}" data-message-id="${message.id}">
-                        <div class="bubble-sender">${isSent ? 'To: ' : ''}${otherPerson}</div>
+                    <div class="chat-bubble ${bubbleClass} ${disappearInfo ? 'disappearing' : ''}" data-message-id="${safeMessageId}">
+                        <div class="bubble-sender">${isSent ? 'To: ' : ''}${Utils.escapeHtml(otherPerson)}</div>
                         <div class="bubble-content">
                             ${message.encrypted ? '[Encrypted]' : Utils.escapeHtml(message.content)}
                         </div>
                         <div class="bubble-meta">
-                            <span>${timeStr}${message.encrypted ? ' 🔒' : ''}${disappearInfo ? ' ⏱️' + disappearInfo : ''}${isSent && message.isRead ? ' ✓✓' : ''}</span>
+                            <span>${Utils.escapeHtml(timeStr)}${message.encrypted ? ' 🔒' : ''}${disappearInfo ? ' ⏱️' + Utils.escapeHtml(disappearInfo) : ''}${isSent && message.isRead ? ' ✓✓' : ''}</span>
                         </div>
                         <div class="bubble-actions">
                             ${renderMessageReactions(message.reactions)}
-                            <button onclick="addReaction(${message.id}, '❤️')">❤️</button>
-                            <button onclick="addReaction(${message.id}, '👍')">👍</button>
-                            <button onclick="replyToMessage(${message.id})">↩️</button>
-                            ${isSent ? `<button onclick="deleteMessage(${message.id})">🗑️</button>` : ''}
+                            <button data-message-react="${safeMessageId}" data-emoji="❤️">❤️</button>
+                            <button data-message-react="${safeMessageId}" data-emoji="👍">👍</button>
+                            <button data-message-reply="${safeMessageId}">↩️</button>
+                            ${isSent ? `<button data-message-delete="${safeMessageId}">🗑️</button>` : ''}
                         </div>
                     </div>
                 `;
@@ -2537,7 +2646,9 @@ function renderMessageReactions(reactions) {
         const count = reactionList.length;
         const userIds = reactionList.map(r => r.userId);
         const hasCurrentUser = userIds.includes(currentUser?.id);
-        return `<span class="reaction-badge ${hasCurrentUser ? 'user-reacted' : ''}" title="Reacted by ${userIds.join(', ')}">${emoji} ${count}</span>`;
+        // emoji and userIds are peer-controlled.
+        const names = userIds.map(id => getDisplayName(id)).join(', ');
+        return `<span class="reaction-badge ${hasCurrentUser ? 'user-reacted' : ''}" title="Reacted by ${Utils.escapeHtml(names)}">${Utils.escapeHtml(emoji)} ${Utils.escapeHtml(count)}</span>`;
     }).join(' ');
 }
 
@@ -2597,8 +2708,8 @@ async function viewThread(threadId) {
         const threadHtml = threadMessages.map(message => `
             <div class="thread-message">
                 <div class="post-meta">
-                    ${getDisplayName(message.senderId)}
-                    • ${new Date(message.createdAt).toLocaleDateString()}
+                    ${Utils.escapeHtml(getDisplayName(message.senderId))}
+                    • ${Utils.escapeHtml(new Date(message.createdAt).toLocaleDateString())}
                     ${message.encrypted ? ' • 🔒 Encrypted' : ''}
                 </div>
                 <div class="post-content">
@@ -2648,20 +2759,19 @@ async function loadFriends() {
 
         // Show pending incoming friend requests first (with Accept/Decline)
         if (pendingRequests && pendingRequests.length > 0) {
-            console.log('[FRIEND-REQUESTS] Raw pending requests:', JSON.stringify(pendingRequests, null, 2));
+            // Count only - the raw payload carries public keys and display names.
+            console.log('[FRIEND-REQUESTS] Pending requests:', pendingRequests.length);
             html += '<div class="friend-requests-section">';
             html += `<h3>Pending Friend Requests (${pendingRequests.length})</h3>`;
             html += pendingRequests.map(request => {
-                console.log('[FRIEND-REQUESTS] Request object:', request);
-                console.log('[FRIEND-REQUESTS] Request ID:', request.id, 'type:', typeof request.id);
                 return `
                 <div class="friend-request-card">
                     <div class="friend-request-badge">Friend Request</div>
                     <div class="friend-request-username">${Utils.escapeHtml(formatNameWithFingerprint(request.displayName, request.publicKey))}</div>
                     <div class="friend-request-message">wants to connect with you</div>
                     <div class="friend-request-actions">
-                        <button class="btn btn-accept" data-accept-friend="${request.id}">Accept</button>
-                        <button class="btn btn-reject" data-reject-friend="${request.id}">Decline</button>
+                        <button class="btn btn-accept" data-accept-friend="${Utils.escapeHtml(request.id)}">Accept</button>
+                        <button class="btn btn-reject" data-reject-friend="${Utils.escapeHtml(request.id)}">Decline</button>
                     </div>
                 </div>
             `;
@@ -2671,7 +2781,7 @@ async function loadFriends() {
 
         // Show outgoing friend requests (with Cancel button)
         if (outgoingRequests && outgoingRequests.length > 0) {
-            console.log('[FRIEND-REQUESTS] Outgoing requests:', JSON.stringify(outgoingRequests, null, 2));
+            console.log('[FRIEND-REQUESTS] Outgoing requests:', outgoingRequests.length);
             html += '<div class="friend-requests-section outgoing-requests">';
             html += `<h3>Sent Requests (${outgoingRequests.length})</h3>`;
             html += outgoingRequests.map(request => {
@@ -2681,7 +2791,7 @@ async function loadFriends() {
                     <div class="friend-request-username">${Utils.escapeHtml(formatNameWithFingerprint(request.displayName, request.publicKey))}</div>
                     <div class="friend-request-message">waiting for response</div>
                     <div class="friend-request-actions">
-                        <button class="btn btn-reject" data-cancel-friend="${request.id}">Cancel</button>
+                        <button class="btn btn-reject" data-cancel-friend="${Utils.escapeHtml(request.id)}">Cancel</button>
                     </div>
                 </div>
             `;
@@ -2706,10 +2816,10 @@ async function loadFriends() {
                 const initial = (friend.displayName || 'U').charAt(0).toUpperCase();
                 return `
                 <div class="friend-card">
-                    <div class="friend-avatar">${initial}</div>
+                    <div class="friend-avatar">${Utils.escapeHtml(initial)}</div>
                     <div class="friend-info">
                         <div class="friend-name">${Utils.escapeHtml(displayName)}</div>
-                        <div class="friend-meta">Added ${friend.createdAt ? new Date(friend.createdAt).toLocaleDateString() : 'Unknown'}</div>
+                        <div class="friend-meta">Added ${Utils.escapeHtml(friend.createdAt ? new Date(friend.createdAt).toLocaleDateString() : 'Unknown')}</div>
                     </div>
                 </div>`;
             }).join('');
@@ -2730,7 +2840,6 @@ async function loadFriends() {
 
 async function acceptFriendRequest(friendUserId) {
     console.log('[ACCEPT-FRIEND] acceptFriendRequest called with friendUserId:', friendUserId);
-    console.log('[ACCEPT-FRIEND] currentUser:', currentUser);
 
     if (!currentUser) {
         console.error('[ACCEPT-FRIEND] No current user!');
@@ -2846,6 +2955,197 @@ document.addEventListener('click', function(event) {
 });
 console.log('[MAIN.JS] Event delegation for friend request buttons initialized');
 
+// Event delegation for every control that carries peer-controlled data.
+// Rendering these as inline onclick="fn('${value}')" meant a display name,
+// emoji or id containing a quote could break out of the JS string literal and
+// run arbitrary code with full window.__TAURI__ access. Values now travel in
+// data-* attributes and are read back through dataset, which is never parsed.
+document.addEventListener('click', function(event) {
+    const match = (selector) => event.target.closest(selector);
+    const stop = () => { event.preventDefault(); event.stopPropagation(); };
+
+    const imageEl = match('[data-image-viewer]');
+    if (imageEl) { stop(); UI.showImageViewer(imageEl.src); return; }
+
+    const reactionChip = match('[data-reaction-toggle]');
+    if (reactionChip) { stop(); PostInteractions.toggleReaction(reactionChip, reactionChip.dataset.emoji); return; }
+
+    const pickerEmoji = match('[data-reaction-add]');
+    if (pickerEmoji) { stop(); PostInteractions.addReaction(pickerEmoji.dataset.reactionAdd, pickerEmoji.dataset.emoji); return; }
+
+    const reactionPickerBtn = match('[data-reaction-picker]');
+    if (reactionPickerBtn) { stop(); PostInteractions.showReactionPicker(event, reactionPickerBtn.dataset.reactionPicker); return; }
+
+    const postMenuBtn = match('[data-post-menu]');
+    if (postMenuBtn) { stop(); PostInteractions.showPostMenu(event, postMenuBtn.dataset.postMenu); return; }
+
+    const postEditBtn = match('[data-post-edit]');
+    if (postEditBtn) { stop(); PostInteractions.editPost(postEditBtn.dataset.postEdit); return; }
+
+    const postDeleteBtn = match('[data-post-delete]');
+    if (postDeleteBtn) { stop(); PostInteractions.deletePost(postDeleteBtn.dataset.postDelete); return; }
+
+    const postEditSave = match('[data-post-edit-save]');
+    if (postEditSave) { stop(); PostInteractions.saveEdit(postEditSave.dataset.postEditSave); return; }
+
+    const postEditCancel = match('[data-post-edit-cancel]');
+    if (postEditCancel) { stop(); PostInteractions.cancelEdit(postEditCancel.dataset.postEditCancel); return; }
+
+    const toggleCommentsBtn = match('[data-toggle-comments]');
+    if (toggleCommentsBtn) { stop(); PostInteractions.toggleComments(toggleCommentsBtn.dataset.toggleComments); return; }
+
+    const sharePostBtn = match('[data-share-post]');
+    if (sharePostBtn) { stop(); PostInteractions.showShareModal(sharePostBtn.dataset.sharePost); return; }
+
+    const commentSubmitBtn = match('[data-comment-submit]');
+    if (commentSubmitBtn) { stop(); PostInteractions.submitComment(commentSubmitBtn.dataset.commentSubmit); return; }
+
+    const commentReplyBtn = match('[data-comment-reply]');
+    if (commentReplyBtn) { stop(); PostInteractions.showReplyInput(commentReplyBtn.dataset.commentPostId, commentReplyBtn.dataset.commentReply); return; }
+
+    const commentDeleteBtn = match('[data-comment-delete]');
+    if (commentDeleteBtn) { stop(); PostInteractions.deleteComment(commentDeleteBtn.dataset.commentPostId, commentDeleteBtn.dataset.commentDelete); return; }
+
+    const replySubmitBtn = match('[data-comment-reply-submit]');
+    if (replySubmitBtn) { stop(); PostInteractions.submitReply(replySubmitBtn.dataset.commentPostId, replySubmitBtn.dataset.commentReplySubmit); return; }
+
+    const messageReactBtn = match('[data-message-react]');
+    if (messageReactBtn) { stop(); addReaction(messageReactBtn.dataset.messageReact, messageReactBtn.dataset.emoji); return; }
+
+    const messageReplyBtn = match('[data-message-reply]');
+    if (messageReplyBtn) { stop(); replyToMessage(messageReplyBtn.dataset.messageReply); return; }
+
+    const messageDeleteBtn = match('[data-message-delete]');
+    if (messageDeleteBtn) { stop(); deleteMessage(messageDeleteBtn.dataset.messageDelete); return; }
+
+    const messageEditSave = match('[data-message-edit-save]');
+    if (messageEditSave) { stop(); saveEditMessage(messageEditSave.dataset.messageEditSave); return; }
+
+    const messageEditCancel = match('[data-message-edit-cancel]');
+    if (messageEditCancel) { stop(); cancelEditMessage(messageEditCancel.dataset.messageEditCancel); return; }
+
+    const legacyPostSave = match('[data-legacy-post-edit-save]');
+    if (legacyPostSave) { stop(); saveEditPost(legacyPostSave.dataset.legacyPostEditSave); return; }
+
+    const legacyPostCancel = match('[data-legacy-post-edit-cancel]');
+    if (legacyPostCancel) { stop(); cancelEditPost(legacyPostCancel.dataset.legacyPostEditCancel); return; }
+
+    const friendSelectItem = match('[data-friend-select]');
+    if (friendSelectItem) { stop(); toggleFriendSelection(friendSelectItem.dataset.friendSelect, friendSelectItem.dataset.friendName); return; }
+
+    const removeRecipientBtn = match('[data-remove-recipient]');
+    if (removeRecipientBtn) { stop(); removeRecipient(removeRecipientBtn.dataset.removeRecipient); return; }
+
+    const recentContactBtn = match('[data-recent-contact]');
+    if (recentContactBtn) { stop(); RecentContacts.select(recentContactBtn.dataset.recentContact); return; }
+
+    const unblockBtn = match('[data-unblock-user]');
+    if (unblockBtn) { stop(); SafetyManager.unblockUser(unblockBtn.dataset.unblockUser); return; }
+
+    const unmuteBtn = match('[data-unmute-user]');
+    if (unmuteBtn) { stop(); SafetyManager.unmuteUser(unmuteBtn.dataset.unmuteUser); return; }
+
+    const deviceRenameBtn = match('[data-device-rename]');
+    if (deviceRenameBtn) { stop(); DeviceManager.renameDevice(deviceRenameBtn.dataset.deviceRename); return; }
+
+    const deviceRemoveBtn = match('[data-device-remove]');
+    if (deviceRemoveBtn) { stop(); DeviceManager.removeDevice(deviceRemoveBtn.dataset.deviceRemove); return; }
+
+    const communityItem = match('[data-community-open]');
+    if (communityItem) { stop(); showCommunityDetail(communityItem.dataset.communityOpen); return; }
+});
+
+// Enter-to-submit for comment and reply inputs (previously inline onkeypress).
+document.addEventListener('keypress', function(event) {
+    if (event.key !== 'Enter') return;
+    const target = event.target;
+    if (!target || !target.dataset) return;
+
+    if (target.dataset.commentInput) {
+        event.preventDefault();
+        PostInteractions.submitComment(target.dataset.commentInput);
+    } else if (target.dataset.commentReplyInput) {
+        event.preventDefault();
+        PostInteractions.submitReply(target.dataset.commentPostId, target.dataset.commentReplyInput);
+    }
+});
+console.log('[MAIN.JS] Event delegation for peer-controlled UI initialized');
+
+// Blob refs that could not be downloaded when their post arrived. The post is
+// saved anyway (text is better than nothing) and the duplicate-post-id guard
+// blocks re-delivery from restoring media, so we keep the refs here and retry
+// on peer-connected / health recovery (p2p.js calls window.retryMissingBlobs).
+const missingBlobRetries = [];
+let missingBlobRetryInFlight = false;
+
+async function downloadPostBlob(nodeId, blobRef) {
+    const blobData = await TauriAPI.invoke('iroh_read_blob', {
+        nodeId: nodeId,
+        blobHash: blobRef.blobHash,
+        encryptionKey: blobRef.encryptionKey || null
+    });
+    if (!blobData) {
+        throw new Error('Blob download returned no data');
+    }
+    return blobData;
+}
+
+async function savePostBlobAsAttachment(postId, blobRef, blobData) {
+    await TauriAPI.invoke('upload_media_file', {
+        fileData: blobData,
+        filename: 'synced_file',
+        fileType: blobRef.fileType,
+        fileSize: blobRef.fileSize,
+        postId: postId
+    });
+}
+
+function queueMissingBlob(postId, nodeId, blobRef) {
+    // Dedup by post + blob hash so a re-delivered post doesn't double-queue
+    const exists = missingBlobRetries.some(item =>
+        item.postId === postId && item.blobRef.blobHash === blobRef.blobHash);
+    if (!exists) {
+        missingBlobRetries.push({ postId, nodeId, blobRef, attempts: 0 });
+        console.warn(`[EVENT] Blob ${blobRef.blobHash} for post ${postId} queued for retry on reconnect`);
+    }
+}
+
+async function retryMissingBlobs() {
+    if (missingBlobRetryInFlight || missingBlobRetries.length === 0) {
+        return;
+    }
+    missingBlobRetryInFlight = true;
+    try {
+        const pending = missingBlobRetries.splice(0);
+        console.log(`[EVENT] Retrying ${pending.length} missing blob download(s)...`);
+        let restored = 0;
+        for (const item of pending) {
+            try {
+                const blobData = await downloadPostBlob(item.nodeId, item.blobRef);
+                await savePostBlobAsAttachment(item.postId, item.blobRef, blobData);
+                restored++;
+                console.log(`[EVENT] Restored missing blob ${item.blobRef.blobHash} for post ${item.postId}`);
+            } catch (error) {
+                item.attempts++;
+                if (item.attempts >= 10) {
+                    console.warn(`[EVENT] Giving up on blob ${item.blobRef.blobHash} for post ${item.postId} after ${item.attempts} retry rounds`);
+                } else {
+                    missingBlobRetries.push(item);
+                }
+            }
+        }
+        if (restored > 0) {
+            await loadPosts();
+        }
+    } catch (error) {
+        console.error('[EVENT] Missing-blob retry pass failed:', error);
+    } finally {
+        missingBlobRetryInFlight = false;
+    }
+}
+// Called by p2p.js on peer-connected / health recovery
+window.retryMissingBlobs = retryMissingBlobs;
+
 // Set up Tauri event listeners for P2P notifications
 function setupTauriEventListeners() {
     if (!window.__TAURI__ || !window.__TAURI__.event) {
@@ -2861,7 +3161,7 @@ function setupTauriEventListeners() {
     // whatever tab you're on. Gating on tab visibility was why incoming
     // requests/posts only appeared after manually navigating.
     listen('friend-request-received', (event) => {
-        console.log('[EVENT] Friend request received:', event.payload);
+        console.log('[EVENT] Friend request received');
         loadFriends();
         if (typeof UI !== 'undefined' && UI.showToast) {
             UI.showToast('New friend request received', 'info', 4000);
@@ -2870,7 +3170,7 @@ function setupTauriEventListeners() {
 
     // Listen for friend request acceptances
     listen('friend-accepted', (event) => {
-        console.log('[EVENT] Friend request accepted:', event.payload);
+        console.log('[EVENT] Friend request accepted');
         loadFriends();
         loadPosts(); // we can now see their posts
         if (typeof UI !== 'undefined' && UI.showToast) {
@@ -2880,7 +3180,7 @@ function setupTauriEventListeners() {
 
     // Listen for friend name changes (security feature)
     listen('friend-name-changed', (event) => {
-        console.log('[EVENT] Friend name changed:', event.payload);
+        console.log('[EVENT] Friend name changed');
         const { oldName, newName, signatureValid, warning, message } = event.payload;
 
         if (warning) {
@@ -2899,33 +3199,43 @@ function setupTauriEventListeners() {
     // All posts use encrypted SealedEnvelope - handles posts with attachments via blobs
     // Downloads ALL blobs BEFORE saving post - ensures post only shows when complete
     listen('sealed-post-received', async (event) => {
-        console.log('[EVENT] Sealed post received:', event.payload);
+        console.log('[EVENT] Sealed post received');
         const { post_id, user_id, public_key, node_id, content, timestamp, blob_refs, is_backfill } = event.payload;
 
         try {
-            // Step 1: Download ALL blobs first (before saving post)
+            // Step 1: Download ALL blobs first (before saving post), retrying
+            // each up to 3 times with short backoff. Blobs still missing after
+            // that are queued for retry on reconnect - the duplicate-post-id
+            // guard means a future re-delivery can't restore them otherwise.
             const downloadedBlobs = [];
+            const failedBlobRefs = [];
             if (blob_refs && blob_refs.length > 0) {
                 console.log(`[EVENT] Downloading ${blob_refs.length} blobs before saving post...`);
                 for (const blobRef of blob_refs) {
-                    try {
-                        const blobData = await TauriAPI.invoke('iroh_read_blob', {
-                            nodeId: node_id,
-                            blobHash: blobRef.blobHash,
-                            encryptionKey: blobRef.encryptionKey || null
-                        });
-                        if (blobData) {
-                            downloadedBlobs.push({ blobRef, blobData });
-                            console.log(`[EVENT] Downloaded blob ${blobRef.blobHash} (encrypted: ${!!blobRef.encryptionKey})`);
+                    let blobData = null;
+                    const maxAttempts = 3;
+                    for (let attempt = 1; attempt <= maxAttempts && !blobData; attempt++) {
+                        try {
+                            blobData = await downloadPostBlob(node_id, blobRef);
+                        } catch (blobErr) {
+                            console.error(`[EVENT] Blob download attempt ${attempt}/${maxAttempts} failed for ${blobRef.blobHash}:`, blobErr);
+                            if (attempt < maxAttempts) {
+                                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                            }
                         }
-                    } catch (blobErr) {
-                        console.error(`[EVENT] Failed to download blob ${blobRef.blobHash}:`, blobErr);
+                    }
+                    if (blobData) {
+                        downloadedBlobs.push({ blobRef, blobData });
+                        console.log(`[EVENT] Downloaded blob ${blobRef.blobHash} (encrypted: ${!!blobRef.encryptionKey})`);
+                    } else {
+                        failedBlobRefs.push(blobRef);
                     }
                 }
                 console.log(`[EVENT] Downloaded ${downloadedBlobs.length}/${blob_refs.length} blobs`);
             }
 
-            // Step 2: Save the post to database
+            // Step 2: Save the post to database (even with missing blobs -
+            // text is better than nothing; media is retried on reconnect)
             const savedPost = await TauriAPI.invoke('create_post_with_id', {
                 postId: post_id,
                 userId: user_id,
@@ -2936,14 +3246,13 @@ function setupTauriEventListeners() {
 
             // Step 3: Save all downloaded blobs as attachments
             for (const { blobRef, blobData } of downloadedBlobs) {
-                await TauriAPI.invoke('upload_media_file', {
-                    fileData: blobData,
-                    filename: 'synced_file',
-                    fileType: blobRef.fileType,
-                    fileSize: blobRef.fileSize,
-                    postId: savedPost.id
-                });
+                await savePostBlobAsAttachment(savedPost.id, blobRef, blobData);
                 console.log(`[EVENT] Saved blob ${blobRef.blobHash} as attachment`);
+            }
+
+            // Step 3b: Record still-missing blobs for retry on reconnect
+            for (const blobRef of failedBlobRefs) {
+                queueMissingBlob(savedPost.id, node_id, blobRef);
             }
 
             // Step 4: Refresh the feed. Unconditional - loadPosts() renders into
@@ -3037,7 +3346,7 @@ async function createPostFromPage() {
     console.log('[CREATE_POST_PAGE] fileInput:', fileInput);
     console.log('[CREATE_POST_PAGE] fileInput.files:', fileInput ? fileInput.files : 'N/A');
     console.log('[CREATE_POST_PAGE] hasFiles:', hasFiles);
-    console.log('[CREATE_POST_PAGE] content:', content);
+    console.log('[CREATE_POST_PAGE] content length:', content.length);
 
     // Require either text content OR attachments (or both)
     if (!content && !hasFiles) {
@@ -3145,9 +3454,11 @@ function renderFriendsList(filter = '') {
         const name = friend.displayName || 'Unknown';
         const initial = name.charAt(0).toUpperCase();
         const isSelected = selectedRecipients.some(r => r.id === friend.id);
+        // Peer-controlled id and name go into data-* attributes and are read
+        // back through dataset, so neither is ever parsed as JS.
         return `
-            <div class="friend-select-item ${isSelected ? 'selected' : ''}" onclick="toggleFriendSelection('${friend.id}', '${Utils.escapeHtml(name)}')">
-                <div class="friend-avatar">${initial}</div>
+            <div class="friend-select-item ${isSelected ? 'selected' : ''}" data-friend-select="${Utils.escapeHtml(friend.id)}" data-friend-name="${Utils.escapeHtml(name)}">
+                <div class="friend-avatar">${Utils.escapeHtml(initial)}</div>
                 <span class="friend-name">${Utils.escapeHtml(name)}</span>
                 ${isSelected ? '<span class="friend-check">✓</span>' : ''}
             </div>
@@ -3201,7 +3512,7 @@ function updateSelectedRecipientsUI() {
     selectedContainer.innerHTML = selectedRecipients.map(recipient => `
         <div class="recipient-chip">
             <span class="recipient-name">${Utils.escapeHtml(recipient.displayName)}</span>
-            <button class="recipient-remove" onclick="removeRecipient('${recipient.id}')" title="Remove">×</button>
+            <button class="recipient-remove" data-remove-recipient="${Utils.escapeHtml(recipient.id)}" title="Remove">×</button>
         </div>
     `).join('');
 }
@@ -3223,7 +3534,7 @@ async function sendMessage() {
     const disappearAfterSeconds = timerSelect ? parseInt(timerSelect.value) || null : null;
 
     console.log('[SEND_MESSAGE] selectedRecipients:', selectedRecipients);
-    console.log('[SEND_MESSAGE] content:', content);
+    console.log('[SEND_MESSAGE] content length:', content.length);
     console.log('[SEND_MESSAGE] currentUser.id:', currentUser.id);
     console.log('[SEND_MESSAGE] disappearAfterSeconds:', disappearAfterSeconds);
 
@@ -3233,12 +3544,18 @@ async function sendMessage() {
     }
 
     try {
-        // Send to all selected recipients
-        const sendPromises = selectedRecipients.map(async (recipient) => {
+        // Send to all selected recipients. allSettled (not all): one failed
+        // recipient must not mask the others' results, and a blanket retry
+        // used to re-send duplicates to recipients that already succeeded.
+        const recipients = [...selectedRecipients];
+        const results = await Promise.allSettled(recipients.map(async (recipient) => {
             console.log('[SEND_MESSAGE] Sending to recipient:', recipient);
+
+            // Step 1: Save locally (encrypted DB write)
+            let savedMessage = null;
             if (replyToId) {
                 // Send as a reply using the reply_to_message command
-                await TauriAPI.invoke('reply_to_message', {
+                savedMessage = await TauriAPI.invoke('reply_to_message', {
                     originalMessageId: parseInt(replyToId),
                     senderId: currentUser.id,
                     recipientId: recipient.id,
@@ -3246,34 +3563,88 @@ async function sendMessage() {
                 });
             } else {
                 // Send as a regular message with optional disappearing timer
-                await TauriAPI.invoke('send_encrypted_message', {
+                savedMessage = await TauriAPI.invoke('send_encrypted_message', {
                     senderId: currentUser.id,
                     recipientId: recipient.id,
                     content: content,
                     disappearAfterSeconds: disappearAfterSeconds
                 });
             }
+
+            // Step 2: Deliver over the P2P transport. The sealed envelope does
+            // its own E2E encryption, so it takes the plaintext content.
+            const friend = allFriends.find(f => f.id === recipient.id);
+            const deliver = () => P2P.sendMessage(recipient.id, friend?.publicKey || '', content);
+            try {
+                await deliver();
+                return { delivered: true };
+            } catch (transportError) {
+                console.warn('[SEND_MESSAGE] P2P delivery failed for', recipient.displayName, transportError);
+                if (String(transportError).includes('queued for retry')) {
+                    // Backend outbox owns delivery now
+                    return { delivered: true };
+                }
+                // Saved locally but not delivered - queue a transport retry
+                // for this session (flushed when connectivity recovers)
+                P2P.queuePublish(
+                    `dm-${savedMessage?.id ?? Date.now()}-${recipient.id}`,
+                    deliver,
+                    `DM to ${recipient.displayName}`
+                );
+                return { delivered: false };
+            }
+        }));
+
+        const failedSaves = [];
+        const pendingDelivery = [];
+        results.forEach((result, i) => {
+            if (result.status === 'rejected') {
+                console.error('[SEND_MESSAGE] Failed to save message for', recipients[i].displayName, result.reason);
+                failedSaves.push(recipients[i]);
+            } else if (!result.value.delivered) {
+                pendingDelivery.push(recipients[i]);
+            }
         });
 
-        await Promise.all(sendPromises);
+        const sentCount = recipients.length - failedSaves.length;
 
-        const recipientCount = selectedRecipients.length;
-        messageContentInput.value = '';
-        messageContentInput.placeholder = 'Enter your message';
-        messageContentInput.removeAttribute('data-reply-to');
+        if (failedSaves.length === 0) {
+            // Every message was saved - safe to clear the composer
+            messageContentInput.value = '';
+            messageContentInput.placeholder = 'Enter your message';
+            messageContentInput.removeAttribute('data-reply-to');
 
-        // Reset timer to Off after sending
-        if (timerSelect) timerSelect.value = '0';
+            // Reset timer to Off after sending
+            if (timerSelect) timerSelect.value = '0';
 
-        clearSelectedRecipients();
+            clearSelectedRecipients();
 
-        let successMsg = replyToId
-            ? 'Reply sent successfully!'
-            : `Message sent to ${recipientCount} recipient${recipientCount > 1 ? 's' : ''}!`;
-        if (disappearAfterSeconds) {
-            successMsg += ' (disappears after ' + formatDisappearTime(disappearAfterSeconds) + ')';
+            if (pendingDelivery.length > 0) {
+                const pendingNames = pendingDelivery.map(r => r.displayName).join(', ');
+                UI.showToast(`Message saved - delivery pending for ${pendingNames}, will retry when connection recovers`, 'warning', 5000);
+            } else {
+                let successMsg = replyToId
+                    ? 'Reply sent successfully!'
+                    : `Message sent to ${sentCount} recipient${sentCount > 1 ? 's' : ''}!`;
+                if (disappearAfterSeconds) {
+                    successMsg += ' (disappears after ' + formatDisappearTime(disappearAfterSeconds) + ')';
+                }
+                UI.showSuccess('dashboardError', successMsg);
+            }
+        } else {
+            // Keep ONLY the failed recipients selected (and the input populated)
+            // so pressing send again retries just them - no duplicate sends to
+            // recipients that already succeeded
+            selectedRecipients = failedSaves;
+            updateSelectedRecipientsUI();
+            renderFriendsList(document.getElementById('friendSearch')?.value?.toLowerCase().trim() || '');
+
+            const failedNames = failedSaves.map(r => r.displayName).join(', ');
+            UI.showError('dashboardError',
+                `Sent to ${sentCount} of ${recipients.length} - failed: ${failedNames}. ` +
+                'Only failed recipients are still selected; press send to retry them.');
         }
-        UI.showSuccess('dashboardError', successMsg);
+
         loadMessages();
     } catch (error) {
         UI.showError('dashboardError', 'Failed to send message: ' + error);
@@ -3419,7 +3790,7 @@ async function generateQRCode(containerId, options = {}) {
         console.log('═══════════════════════════════════════════════════════════════');
 
         if (qrContainer) {
-            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="QR" style="max-width:${maxWidth};max-height:${maxWidth};border-radius:var(--border-radius-md)"><p style="margin-top:8px;font-weight:600">${currentUser.displayName}</p>`;
+            qrContainer.innerHTML = `<img src="${Utils.escapeHtml(qrCodeDataUrl)}" alt="QR" style="max-width:${Utils.escapeHtml(maxWidth)};max-height:${Utils.escapeHtml(maxWidth)};border-radius:var(--border-radius-md)"><p style="margin-top:8px;font-weight:600">${Utils.escapeHtml(currentUser.displayName)}</p>`;
         }
 
         if (showSuccess) {
@@ -3477,7 +3848,7 @@ async function generateMyQRCode() {
         const qrContainer = document.getElementById('myQrCode');
         if (qrContainer) {
             // Image only - the display name is rendered below on the dark card
-            qrContainer.innerHTML = `<img src="${qrCodeDataUrl}" alt="QR" style="display:block;width:240px;max-width:100%;height:auto;border-radius:var(--border-radius-md)">`;
+            qrContainer.innerHTML = `<img src="${Utils.escapeHtml(qrCodeDataUrl)}" alt="QR" style="display:block;width:240px;max-width:100%;height:auto;border-radius:var(--border-radius-md)">`;
             console.log('[QR-GEN] QR code displayed successfully');
         }
         const qrNameEl = document.getElementById('myQrName');
@@ -3581,7 +3952,7 @@ async function scanQRCode() {
             console.log('[QR] Scan result:', result);
 
             if (result && result.content) {
-                console.log('[QR] QR code scanned, content:', result.content);
+                console.log('[QR] QR code scanned, length:', result.content?.length);
 
                 // Parse invite code (supports both old and new compressed formats)
                 if (!result.content.startsWith('cipher://')) {
@@ -4042,10 +4413,10 @@ function editMessage(messageId) {
     const editForm = document.createElement('div');
     editForm.className = 'message-edit-form';
     editForm.innerHTML = `
-        <textarea class="message-edit-textarea" id="edit-textarea-${messageId}">${Utils.escapeHtml(currentContent)}</textarea>
+        <textarea class="message-edit-textarea" id="edit-textarea-${Utils.escapeHtml(messageId)}">${Utils.escapeHtml(currentContent)}</textarea>
         <div class="message-edit-actions">
-            <button class="btn btn-secondary" onclick="cancelEditMessage(${messageId})">Cancel</button>
-            <button class="btn btn-primary" onclick="saveEditMessage(${messageId})">Save</button>
+            <button class="btn btn-secondary" data-message-edit-cancel="${Utils.escapeHtml(messageId)}">Cancel</button>
+            <button class="btn btn-primary" data-message-edit-save="${Utils.escapeHtml(messageId)}">Save</button>
         </div>
     `;
 
@@ -4158,10 +4529,10 @@ async function editPost(postId) {
     const editForm = document.createElement('div');
     editForm.className = 'post-edit-form';
     editForm.innerHTML = `
-        <textarea class="message-edit-textarea" id="edit-post-textarea-${postId}" style="min-height: 100px;">${Utils.escapeHtml(currentContent)}</textarea>
+        <textarea class="message-edit-textarea" id="edit-post-textarea-${Utils.escapeHtml(postId)}" style="min-height: 100px;">${Utils.escapeHtml(currentContent)}</textarea>
         <div class="message-edit-actions" style="margin-top: var(--spacing-md); display: flex; gap: var(--spacing-sm); justify-content: flex-end;">
-            <button class="btn-secondary btn-small" onclick="cancelEditPost(${postId})">Cancel</button>
-            <button class="btn btn-small" onclick="saveEditPost(${postId})">Save</button>
+            <button class="btn-secondary btn-small" data-legacy-post-edit-cancel="${Utils.escapeHtml(postId)}">Cancel</button>
+            <button class="btn btn-small" data-legacy-post-edit-save="${Utils.escapeHtml(postId)}">Save</button>
         </div>
     `;
 
@@ -4277,7 +4648,7 @@ async function openCameraToScanQR() {
                 });
 
                 if (result && result.content) {
-                    console.log('[QR] Native scan result:', result.content);
+                    console.log('[QR] Native scan result received, length:', result.content?.length);
                     await handleScannedQRCode(result.content);
                 }
                 return;
@@ -4285,7 +4656,7 @@ async function openCameraToScanQR() {
 
             const result = await scan({ windowed: false, formats: ['QR_CODE'] });
             if (result && result.content) {
-                console.log('[QR] Native scan result:', result.content);
+                console.log('[QR] Native scan result received, length:', result.content?.length);
                 await handleScannedQRCode(result.content);
             }
         } catch (error) {
@@ -4486,7 +4857,7 @@ async function showMyQRCode() {
             <div style="text-align: center;">
                 <h2 style="color: white; margin-bottom: var(--spacing-lg);">Scan to Connect</h2>
                 <div style="background: white; padding: var(--spacing-lg); border-radius: var(--border-radius-md);">
-                    <img src="${qrCodeDataUrl}" alt="My QR Code" style="max-width: 300px; max-height: 300px;">
+                    <img src="${Utils.escapeHtml(qrCodeDataUrl)}" alt="My QR Code" style="max-width: 300px; max-height: 300px;">
                 </div>
                 <p style="color: rgba(255, 255, 255, 0.8); margin-top: var(--spacing-lg); max-width: 400px;">
                     Have your friend scan this code to connect instantly via P2P
@@ -4680,20 +5051,20 @@ async function refreshConnectionStatus(showLoading = false) {
                 <div class="status-row">
                     <span class="status-label">Status</span>
                     <span class="status-value ${statusClass}">
-                        ${statusText}
+                        ${Utils.escapeHtml(statusText)}
                     </span>
                 </div>
                 <div class="status-row">
                     <span class="status-label">Connected Peers</span>
-                    <span class="status-value">${status.connected_peers || 0}</span>
+                    <span class="status-value">${Utils.escapeHtml(status.connected_peers || 0)}</span>
                 </div>
                 <div class="status-row">
                     <span class="status-label">Active Peers</span>
-                    <span class="status-value">${status.active_peers?.length || 0}</span>
+                    <span class="status-value">${Utils.escapeHtml(status.active_peers?.length || 0)}</span>
                 </div>
                 <div class="status-row">
                     <span class="status-label">Subscribed Topics</span>
-                    <span class="status-value">${status.topic_count || 0}</span>
+                    <span class="status-value">${Utils.escapeHtml(status.topic_count || 0)}</span>
                 </div>
             </div>
 
@@ -4701,15 +5072,15 @@ async function refreshConnectionStatus(showLoading = false) {
                 <div class="status-section-title">Identity</div>
                 <div class="status-row">
                     <span class="status-label">Node ID</span>
-                    <span class="status-value" title="${status.node_id || ''}">${truncateId(status.node_id, 12)}</span>
+                    <span class="status-value" title="${Utils.escapeHtml(status.node_id || '')}">${Utils.escapeHtml(truncateId(status.node_id, 12))}</span>
                 </div>
                 <div class="status-row">
                     <span class="status-label">Public Key</span>
-                    <span class="status-value" title="${status.public_key || ''}">${truncateId(status.public_key, 12)}</span>
+                    <span class="status-value" title="${Utils.escapeHtml(status.public_key || '')}">${Utils.escapeHtml(truncateId(status.public_key, 12))}</span>
                 </div>
                 <div class="status-row">
                     <span class="status-label">Device ID</span>
-                    <span class="status-value">${status.device_id || 'N/A'}</span>
+                    <span class="status-value">${Utils.escapeHtml(status.device_id || 'N/A')}</span>
                 </div>
             </div>
 
@@ -4717,7 +5088,7 @@ async function refreshConnectionStatus(showLoading = false) {
                 <div class="status-section-title">Relay</div>
                 <div class="status-row">
                     <span class="status-label">Relay URL</span>
-                    <span class="status-value">${status.relay_url ? status.relay_url.replace('https://', '').replace(/\/$/, '') : 'N/A'}</span>
+                    <span class="status-value">${Utils.escapeHtml(status.relay_url ? status.relay_url.replace('https://', '').replace(/\/$/, '') : 'N/A')}</span>
                 </div>
             </div>
         `;
@@ -4726,9 +5097,9 @@ async function refreshConnectionStatus(showLoading = false) {
         if (status.peer_ids && status.peer_ids.length > 0) {
             html += `
                 <div class="status-section">
-                    <div class="status-section-title">Connected Peers (${status.peer_ids.length})</div>
+                    <div class="status-section-title">Connected Peers (${Utils.escapeHtml(status.peer_ids.length)})</div>
                     <div class="status-list">
-                        ${status.peer_ids.map(id => `<div class="status-list-item">${truncateId(id, 16)}</div>`).join('')}
+                        ${status.peer_ids.map(id => `<div class="status-list-item">${Utils.escapeHtml(truncateId(id, 16))}</div>`).join('')}
                     </div>
                 </div>
             `;
@@ -4738,9 +5109,9 @@ async function refreshConnectionStatus(showLoading = false) {
         if (status.subscribed_topics && status.subscribed_topics.length > 0) {
             html += `
                 <div class="status-section">
-                    <div class="status-section-title">Subscribed Topics (${status.subscribed_topics.length})</div>
+                    <div class="status-section-title">Subscribed Topics (${Utils.escapeHtml(status.subscribed_topics.length)})</div>
                     <div class="status-list">
-                        ${status.subscribed_topics.map(topic => `<div class="status-list-item">${topic}</div>`).join('')}
+                        ${status.subscribed_topics.map(topic => `<div class="status-list-item">${Utils.escapeHtml(topic)}</div>`).join('')}
                     </div>
                 </div>
             `;
@@ -4791,11 +5162,11 @@ async function loadCommunities() {
         }
 
         container.innerHTML = communities.map(c => `
-            <div class="friend-item" style="cursor: pointer;" onclick="showCommunityDetail('${c.id}')">
+            <div class="friend-item" style="cursor: pointer;" data-community-open="${Utils.escapeHtml(c.id)}">
                 <div class="friend-info">
                     <div class="friend-name" style="font-weight: 600;">${Utils.escapeHtml(c.name)}</div>
                     <div class="friend-username" style="font-size: var(--font-size-sm); color: var(--color-text-secondary);">
-                        ${c.memberCount} member${c.memberCount !== 1 ? 's' : ''}
+                        ${Utils.escapeHtml(c.memberCount)} member${c.memberCount !== 1 ? 's' : ''}
                     </div>
                 </div>
                 <span style="color: var(--color-text-muted);">→</span>
@@ -4914,7 +5285,7 @@ async function loadCommunityFeed(communityId) {
             <div class="post" style="max-width: 600px; margin: 0 auto var(--spacing-md) auto;">
                 <div class="post-header">
                     <span class="post-author">${Utils.escapeHtml(post.displayName || 'Unknown')}</span>
-                    <span class="post-time">${PostInteractions.formatTimeAgo(new Date(post.createdAt))}</span>
+                    <span class="post-time">${Utils.escapeHtml(PostInteractions.formatTimeAgo(new Date(post.createdAt)))}</span>
                 </div>
                 ${post.mediaAttachments && post.mediaAttachments.length > 0 ? `
                     <div class="post-media" style="margin: var(--spacing-sm) 0;">
@@ -4926,7 +5297,7 @@ async function loadCommunityFeed(communityId) {
         `).join('');
     } catch (error) {
         console.error('Failed to load community feed:', error);
-        container.innerHTML = `<p style="text-align: center; color: var(--color-error);">Failed to load posts: ${error}</p>`;
+        container.innerHTML = `<p style="text-align: center; color: var(--color-error);">Failed to load posts: ${Utils.escapeHtml(error)}</p>`;
     }
 }
 
@@ -5040,7 +5411,7 @@ async function createCommunityPost() {
 // Join community by invite code
 async function joinCommunityByInvite() {
     const inviteCode = document.getElementById('communityInviteCode').value.trim();
-    console.log('[COMMUNITY] Joining with invite code:', inviteCode);
+    console.log('[COMMUNITY] Joining with invite code, length:', inviteCode?.length);
     if (!inviteCode) {
         console.log('[COMMUNITY] No invite code provided');
         return;
@@ -5168,17 +5539,17 @@ async function leaveCommunity() {
 // Listen for community-related P2P events
 if (typeof window.__TAURI__ !== 'undefined') {
     window.__TAURI__.event.listen('community-post-received', (event) => {
-        console.log('Received community post:', event.payload);
-        // Refresh feed if viewing the relevant community
-        if (currentCommunityId && event.payload.communityId === currentCommunityId) {
+        console.log('Received community post');
+        // Refresh feed if viewing the relevant community (Rust emits snake_case)
+        if (currentCommunityId && event.payload.community_id === currentCommunityId) {
             loadCommunityFeed(currentCommunityId);
         }
     });
 
     window.__TAURI__.event.listen('community-member-added', (event) => {
-        console.log('New community member:', event.payload);
-        // Refresh member list if viewing settings
-        if (currentCommunityId && event.payload.communityId === currentCommunityId) {
+        console.log('New community member');
+        // Refresh member list if viewing settings (Rust emits snake_case)
+        if (currentCommunityId && event.payload.community_id === currentCommunityId) {
             if (!document.getElementById('communitySettingsModal').classList.contains('hidden')) {
                 showCommunitySettings();
             }
@@ -5187,7 +5558,7 @@ if (typeof window.__TAURI__ !== 'undefined') {
 
     // Listen for P2P post comments (backend already saved to DB)
     window.__TAURI__.event.listen('p2p-post-comment', async (event) => {
-        console.log('[P2P] Received post comment:', event.payload);
+        console.log('[P2P] Received post comment');
         const { postId } = event.payload;
 
         // Refresh comments if viewing this post
@@ -5209,7 +5580,7 @@ if (typeof window.__TAURI__ !== 'undefined') {
 
     // Listen for P2P post reactions (backend already saved to DB)
     window.__TAURI__.event.listen('p2p-post-reaction', async (event) => {
-        console.log('[P2P] Received post reaction:', event.payload);
+        console.log('[P2P] Received post reaction');
         const { postId } = event.payload;
 
         // Refresh reactions display for this post

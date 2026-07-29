@@ -817,11 +817,19 @@ pub async fn upload_profile_picture(
     filename: String,
     _file_type: String,
     db: State<'_, Database>,
+    app_handle: tauri::AppHandle,
 ) -> Result<User, String> {
-    // Create uploads directory if it doesn't exist
-    let uploads_dir = Path::new("uploads/profiles");
+    // Must be an absolute path in the app data dir: the process cwd is "/" for
+    // a macOS .app bundle, so the old cwd-relative "uploads/profiles" could
+    // never be created.
+    let uploads_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("uploads")
+        .join("profiles");
     if !uploads_dir.exists() {
-        fs::create_dir_all(uploads_dir)
+        fs::create_dir_all(&uploads_dir)
             .map_err(|e| format!("Failed to create uploads directory: {}", e))?;
     }
 
@@ -862,46 +870,29 @@ pub async fn add_message_reaction(
     emoji: String,
     db: State<'_, Database>,
 ) -> Result<MessageReaction, String> {
-    let conn = db.conn.lock().unwrap();
-    let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
-    // Check if reaction already exists (toggle behavior)
-    let existing: Option<i64> = conn
-        .query_row(
+    // Toggle behaviour: an identical reaction that already exists is removed.
+    // The id column is a 16-byte BLOB - reading it as i64 made `.optional()`
+    // see a type error instead of QueryReturnedNoRows, so the toggle-off path
+    // always failed.
+    let existing: Option<SqliteUuid> = {
+        let conn = db.conn.lock().unwrap();
+        conn.query_row(
             "SELECT id FROM message_reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
-            params![message_id, user_id, emoji],
+            params![message_id, user_id, &emoji],
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    }; // drop the lock before calling into Database (its methods lock too)
 
-    if let Some(existing_id) = existing {
-        // Remove existing reaction (toggle off)
-        conn.execute(
-            "DELETE FROM message_reactions WHERE id = ?1",
-            params![existing_id],
-        )
-        .map_err(|e| e.to_string())?;
-
+    if existing.is_some() {
+        db.remove_message_reaction(message_id, user_id, &emoji)
+            .map_err(|e| e.to_string())?;
         return Err("Reaction removed".to_string());
     }
 
-    // Add new reaction
-    let reaction_id = SqliteUuid::new();
-
-    conn.execute(
-        "INSERT INTO message_reactions (id, message_id, user_id, emoji, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![reaction_id, message_id, user_id, emoji, now],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(MessageReaction {
-        id: reaction_id,
-        message_id,
-        user_id,
-        emoji,
-        created_at: now,
-    })
+    db.add_message_reaction(message_id, user_id, &emoji)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -909,29 +900,8 @@ pub async fn get_message_reactions(
     message_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<Vec<MessageReaction>, String> {
-    let conn = db.conn.lock().unwrap();
-    let mut stmt = conn
-        .prepare("SELECT id, message_id, user_id, emoji, created_at FROM message_reactions WHERE message_id = ?1 ORDER BY created_at ASC")
-        .map_err(|e| e.to_string())?;
-
-    let reaction_iter = stmt
-        .query_map(params![message_id], |row| {
-            Ok(MessageReaction {
-                id: row.get(0)?,
-                message_id: row.get(1)?,
-                user_id: row.get(2)?,
-                emoji: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut reactions = Vec::new();
-    for reaction in reaction_iter {
-        reactions.push(reaction.map_err(|e| e.to_string())?);
-    }
-
-    Ok(reactions)
+    db.get_message_reactions(message_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -942,32 +912,10 @@ pub async fn reply_to_message(
     thread_id: SqliteUuid, // ID of the message being replied to
     db: State<'_, Database>,
 ) -> Result<Message, String> {
-    let conn = db.conn.lock().unwrap();
-    let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
-    let message_id = SqliteUuid::new();
-
-    conn.execute(
-        "INSERT INTO messages (id, sender_id, recipient_id, content, encrypted, thread_id, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![message_id, sender_id, recipient_id, content, true, thread_id, now, now],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(Message {
-        id: message_id,
-        sender_id,
-        recipient_id,
-        content,
-        encrypted: true,
-        signature: None,
-        thread_id: Some(thread_id),
-        disappear_after_seconds: None,
-        disappears_at: None,
-        created_at: now.clone(),
-        updated_at: now,
-        edited_at: None,
-    })
+    // Delegate to the encrypting/signing implementation. The previous inline
+    // INSERT stored the raw plaintext while flagging it encrypted = true.
+    db.reply_to_message(sender_id, recipient_id, &content, thread_id, None)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -975,37 +923,9 @@ pub async fn get_message_thread(
     thread_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<Vec<Message>, String> {
-    let conn = db.conn.lock().unwrap();
-    let mut stmt = conn
-        .prepare("SELECT id, sender_id, recipient_id, content, encrypted, signature, thread_id, disappear_after_seconds, disappears_at, created_at, updated_at, edited_at
-                  FROM messages WHERE (id = ?1 OR thread_id = ?1) AND (disappears_at IS NULL OR disappears_at > datetime('now')) ORDER BY created_at ASC")
-        .map_err(|e| e.to_string())?;
-
-    let message_iter = stmt
-        .query_map(params![thread_id], |row| {
-            Ok(Message {
-                id: row.get(0)?,
-                sender_id: row.get(1)?,
-                recipient_id: row.get(2)?,
-                content: row.get(3)?,
-                encrypted: row.get(4)?,
-                signature: row.get(5)?,
-                thread_id: row.get(6)?,
-                disappear_after_seconds: row.get(7)?,
-                disappears_at: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-                edited_at: row.get(11)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut messages = Vec::new();
-    for message in message_iter {
-        messages.push(message.map_err(|e| e.to_string())?);
-    }
-
-    Ok(messages)
+    // The inline version compared disappears_at (RFC3339) against
+    // datetime('now') (space-separated), which never matches lexicographically.
+    db.get_message_thread(thread_id).map_err(|e| e.to_string())
 }
 
 // Enhanced Friend Management Commands for P2P Networks
@@ -1092,8 +1012,11 @@ pub async fn import_friends_list(
         let user_check = conn
             .prepare("SELECT id, display_name FROM users WHERE public_key = ?1")
             .unwrap()
+            // users.id is a 16-byte BLOB; reading it as i64 made every lookup
+            // fail with a FromSql type error, so import reported "user not
+            // found" for every friend.
             .query_row(params![friend.public_key], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                Ok((row.get::<_, SqliteUuid>(0)?, row.get::<_, String>(1)?))
             });
 
         match user_check {
@@ -1111,19 +1034,20 @@ pub async fn import_friends_list(
                         .skipped
                         .push(format!("{} (already friends)", existing_display_name));
                 } else {
-                    // Add friendship
+                    // Add friendship. id is the BLOB primary key - omitting it
+                    // inserted NULL primary keys.
                     let insert_result = conn.execute(
-                        "INSERT INTO p2p_connections (user_id, friend_user_id, status, initiated_by, created_at, updated_at)
-                         VALUES (?1, ?2, 'accepted', ?1, ?3, ?4)",
-                        params![user_id, friend_id, now, now],
+                        "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, 'accepted', ?2, ?4, ?5)",
+                        params![SqliteUuid::new(), user_id, friend_id, now, now],
                     );
 
                     if insert_result.is_ok() {
                         // Add reverse connection
                         let _ = conn.execute(
-                            "INSERT INTO p2p_connections (user_id, friend_user_id, status, initiated_by, created_at, updated_at)
-                             VALUES (?1, ?2, 'accepted', ?2, ?3, ?4)",
-                            params![friend_id, user_id, now, now],
+                            "INSERT INTO p2p_connections (id, user_id, friend_user_id, status, initiated_by, created_at, updated_at)
+                             VALUES (?1, ?2, ?3, 'accepted', ?3, ?4, ?5)",
+                            params![SqliteUuid::new(), friend_id, user_id, now, now],
                         );
                         result.added.push(existing_display_name);
                     } else {
@@ -1239,95 +1163,15 @@ pub async fn edit_message(
     new_content: String,
     db: State<'_, Database>,
 ) -> Result<Message, String> {
-    let conn = db.conn.lock().unwrap();
-    let now = Utc::now().to_rfc3339();
-
-    // Verify the user owns this message
-    let message_owner: SqliteUuid = conn
-        .query_row(
-            "SELECT sender_id FROM messages WHERE id = ?1",
-            [message_id],
-            |row| row.get(0),
-        )
-        .map_err(|_| "Message not found".to_string())?;
-
-    if message_owner != user_id {
-        return Err("You can only edit your own messages".to_string());
-    }
-
-    // Get the message details to check if it's encrypted
-    let mut stmt = conn
-        .prepare("SELECT recipient_id, encrypted FROM messages WHERE id = ?1")
-        .map_err(|e| e.to_string())?;
-
-    let (recipient_id, is_encrypted): (SqliteUuid, i64) = stmt
-        .query_row([message_id], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map_err(|e| e.to_string())?;
-
-    let final_content = if is_encrypted == 1 {
-        // Re-encrypt the new content
-        let sender_keys: (String, String) = conn
-            .query_row(
-                "SELECT private_key, encryption_private_key FROM users WHERE id = ?1",
-                [user_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|e| e.to_string())?;
-
-        let recipient_public_key: String = conn
-            .query_row(
-                "SELECT encryption_public_key FROM users WHERE id = ?1",
-                [recipient_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-
-        Database::encrypt_message(&new_content, &recipient_public_key, &sender_keys.1)
-            .map_err(|e| format!("Failed to encrypt message: {}", e))?
-    } else {
-        new_content.clone()
-    };
-
-    // Generate new signature for the original content
-    let new_signature = if is_encrypted == 1 {
-        let sender_private_key: String = conn
-            .query_row(
-                "SELECT private_key FROM users WHERE id = ?1",
-                [user_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-
-        Some(
-            Database::sign_message(&new_content, &sender_private_key)
-                .map_err(|e| format!("Failed to sign message: {}", e))?,
-        )
-    } else {
-        None
-    };
-
-    // Update the message
-    conn.execute(
-        "UPDATE messages SET content = ?1, signature = ?2, updated_at = ?3 WHERE id = ?4",
-        params![final_content, new_signature, now, message_id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    // Return updated message
-    Ok(Message {
-        id: message_id,
-        sender_id: user_id,
-        recipient_id,
-        content: final_content,
-        encrypted: is_encrypted == 1,
-        signature: new_signature,
-        thread_id: None, // We'll get this from DB if needed
-        disappear_after_seconds: None,
-        disappears_at: None,
-        created_at: "".to_string(), // We'll get this from DB if needed
-        updated_at: now.clone(),
-        edited_at: Some(now),
-    })
+    // Delegate to the single re-encrypting/re-signing implementation. The
+    // inline version fabricated created_at: "" and dropped thread_id; the
+    // shared one returns the row as stored.
+    db.edit_message(message_id, user_id, &new_content)
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => "Message not found".to_string(),
+            rusqlite::Error::InvalidQuery => "You can only edit your own messages".to_string(),
+            other => other.to_string(),
+        })
 }
 
 #[tauri::command]
@@ -1336,31 +1180,18 @@ pub async fn delete_message(
     user_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<String, String> {
-    let conn = db.conn.lock().unwrap();
-
-    // Verify the user owns this message
-    let message_owner: SqliteUuid = conn
-        .query_row(
-            "SELECT sender_id FROM messages WHERE id = ?1",
-            [message_id],
-            |row| row.get(0),
-        )
-        .map_err(|_| "Message not found".to_string())?;
-
-    if message_owner != user_id {
-        return Err("You can only delete your own messages".to_string());
-    }
-
-    // Delete the message
-    conn.execute("DELETE FROM messages WHERE id = ?1", [message_id])
-        .map_err(|e| e.to_string())?;
-
-    // Also delete any reactions to this message
-    conn.execute(
-        "DELETE FROM message_reactions WHERE message_id = ?1",
-        [message_id],
-    )
-    .map_err(|e| e.to_string())?;
+    // Sender OR recipient may delete: this only removes the row from THIS
+    // device's database (there is no P2P retraction), and a recipient must be
+    // able to remove a message they received. Reactions go with it via the
+    // ON DELETE CASCADE that is now actually enforced.
+    db.delete_message(message_id, user_id)
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => "Message not found".to_string(),
+            rusqlite::Error::InvalidQuery => {
+                "You can only delete messages you sent or received".to_string()
+            }
+            other => other.to_string(),
+        })?;
 
     Ok("Message deleted successfully".to_string())
 }
@@ -1803,7 +1634,11 @@ pub async fn get_sync_data(
     user_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<crate::app::database::sync::SyncData, String> {
-    db.get_sync_data(&device_id, user_id)
+    // Device sync is stateless now: responders are gated on the requester's
+    // watermark, not per-device sync_state cursors. This command returns the
+    // full dataset; device_id is kept for JS-API compatibility.
+    let _ = device_id;
+    db.get_sync_data(user_id, "1970-01-01T00:00:00+00:00")
         .map_err(|e| e.to_string())
 }
 
@@ -1832,7 +1667,10 @@ pub async fn get_sync_status(
     user_id: SqliteUuid,
     db: State<'_, Database>,
 ) -> Result<(usize, usize, usize, usize, usize), String> {
-    db.get_sync_status(&device_id, user_id)
+    // Stateless sync: counts everything syncable; device_id kept for JS-API
+    // compatibility.
+    let _ = device_id;
+    db.get_sync_status(user_id, "1970-01-01T00:00:00+00:00")
         .map_err(|e| e.to_string())
 }
 

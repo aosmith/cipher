@@ -124,9 +124,15 @@ pub enum ContentPayload {
     KeyRotation {
         /// New X25519 pre-key public (base64)
         prekey_public: String,
-        /// Ed25519 signature over prekey_signing_context(prekey_public) by the
+        /// Ed25519 signature over
+        /// prekey_signing_context(prekey_public, prekey_created_at) by the
         /// sender's identity key (base64)
         signature: String,
+        /// Unix seconds the pre-key was created. Signed alongside the key so a
+        /// replayed older rotation can be detected and rejected (monotonic
+        /// pre-keys). 0 / absent means a pre-v2 sender.
+        #[serde(default)]
+        prekey_created_at: i64,
         #[serde(default)]
         sent_at: i64,
     },
@@ -135,7 +141,16 @@ pub enum ContentPayload {
         community_id: String,
         community_name: String,
         content: String,
+        /// Legacy embedded attachments from older senders. Kept so old
+        /// envelopes still deserialize - new senders always send None and
+        /// use `blob_refs` instead (embedded bytes exceeded the gossip cap).
         attachments: Option<Vec<MediaAttachmentWithData>>,
+        /// Sender's NodeId for blob fetching (empty from older senders)
+        #[serde(default)]
+        node_id: String,
+        /// Attachments stored as encrypted blobs, same as Post
+        #[serde(default)]
+        blob_refs: Vec<BlobReference>,
         show_in_main_feed: bool,
         #[serde(default)]
         sent_at: i64,
@@ -203,11 +218,16 @@ pub enum ContentPayload {
         profile_signature: Option<String>,
         /// Current rotating pre-key (base64 X25519 public), piggybacked so
         /// friends catch up on rotations even if a KeyRotation envelope was
-        /// lost. Signature is over prekey_signing_context(prekey_public).
+        /// lost. Signature is over
+        /// prekey_signing_context(prekey_public, prekey_created_at).
         #[serde(default)]
         prekey_public: Option<String>,
         #[serde(default)]
         prekey_signature: Option<String>,
+        /// Creation time of the advertised pre-key (see KeyRotation). 0 /
+        /// absent means a pre-v2 sender.
+        #[serde(default)]
+        prekey_created_at: i64,
         #[serde(default)]
         sent_at: i64,
     },
@@ -215,7 +235,30 @@ pub enum ContentPayload {
 
 /// Canonical string an identity key signs to authenticate a rotating pre-key.
 /// Verified against the sender's authenticated identity key on receipt.
-pub fn prekey_signing_context(prekey_public: &str) -> String {
+///
+/// v2 binds the pre-key's creation time into the signature. Without it, a
+/// signature over the bare key bytes stays valid forever, so a recorded old
+/// rotation announcement could be replayed to roll a friend's pre-key BACKWARD
+/// onto a key whose private half they may already have deleted (or that the
+/// attacker recovered). Receivers refuse any advertised pre-key whose
+/// created_at does not advance past the one they already hold.
+pub fn prekey_signing_context(prekey_public: &str, created_at: i64) -> String {
+    format!("prekey_v2|{}|{}", created_at, prekey_public)
+}
+
+/// Pre-v2 signing context: signature over the key bytes alone, with no
+/// monotonic binding.
+///
+/// TRANSITION ONLY. Peers running older builds sign and advertise pre-keys
+/// without a creation timestamp; refusing them outright would break sealing to
+/// those peers once their advertised key ages out. We therefore still verify a
+/// v1 signature when the announcement carries no created_at, and mark such
+/// pre-keys with our local receipt time (which always advances, so v1 peers get
+/// no rollback protection). Envelope-level defences still apply to those
+/// announcements: message_ids are persistently deduped and envelopes older than
+/// 7 days are dropped, so a v1 replay must be both fresh and unseen.
+/// Remove this path once all peers are on v2.
+pub fn prekey_signing_context_v1(prekey_public: &str) -> String {
     format!("prekey_v1|{}", prekey_public)
 }
 
@@ -393,7 +436,8 @@ impl GossipEnvelope {
         community_id: &str,
         community_name: &str,
         content: &str,
-        attachments: Option<Vec<MediaAttachmentWithData>>,
+        node_id: &str,
+        blob_refs: &[BlobReference],
         show_in_main_feed: bool,
         member_public_keys: &[String],
         sender_signing_private_key: &str,
@@ -402,7 +446,9 @@ impl GossipEnvelope {
             community_id: community_id.to_string(),
             community_name: community_name.to_string(),
             content: content.to_string(),
-            attachments,
+            attachments: None,
+            node_id: node_id.to_string(),
+            blob_refs: blob_refs.to_vec(),
             show_in_main_feed,
             sent_at: chrono::Utc::now().timestamp(),
         };
@@ -893,7 +939,8 @@ mod tests {
         let (id_pub, id_priv) = ed25519_keypair();
         let (prekey_pub, _) = x25519_keypair();
 
-        let ctx = prekey_signing_context(&prekey_pub);
+        let created_at = 1_700_000_000i64;
+        let ctx = prekey_signing_context(&prekey_pub, created_at);
         let sig = Database::sign_message(&ctx, &id_priv).unwrap();
 
         // Verifies against the signer's identity key
@@ -904,7 +951,14 @@ mod tests {
         // Fails if the pre-key is swapped
         let (other_prekey, _) = x25519_keypair();
         assert!(!Database::verify_signature(
-            &prekey_signing_context(&other_prekey),
+            &prekey_signing_context(&other_prekey, created_at),
+            &sig,
+            &id_pub
+        ));
+        // Fails if the creation timestamp is swapped: this is what stops a
+        // recorded rotation from being replayed as a newer one
+        assert!(!Database::verify_signature(
+            &prekey_signing_context(&prekey_pub, created_at + 1),
             &sig,
             &id_pub
         ));
@@ -991,6 +1045,7 @@ mod tests {
             profile_signature: None,
             prekey_public: None,
             prekey_signature: None,
+            prekey_created_at: 0,
             sent_at: chrono::Utc::now().timestamp(),
         };
         let envelope =
