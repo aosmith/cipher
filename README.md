@@ -1,3 +1,5 @@
+
+
 # Cipher
 
 **End-to-End Encrypted Peer-to-Peer Social Network**
@@ -228,7 +230,7 @@ P2P Network (Iroh Gossip)
 
 ### P2P Networking (Iroh)
 
-Cipher uses [Iroh](https://iroh.computer/) v0.30 for peer-to-peer communication:
+Cipher uses [Iroh](https://iroh.computer/) v1.0 for peer-to-peer communication:
 
 **Discovery Methods:**
 1. **Mainline DHT** - BitTorrent DHT for global peer discovery
