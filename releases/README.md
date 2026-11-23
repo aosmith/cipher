@@ -1,6 +1,6 @@
 # Cipher Releases
 
-Pre-compiled binaries for all platforms. Current version: v0.3.1
+Pre-compiled binaries for all platforms. Current version: v0.3.2
 
 ## Directory Structure
 
